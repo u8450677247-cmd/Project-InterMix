@@ -45,4 +45,5 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             "$RUNNER_TEMP"/intermix-release/*.zip \
             "$RUNNER_TEMP"/intermix-release/*.sha256 \
+            docs/current/Project_Intermix_Trust_Speed_v1.4.1_Handoff.pdf \
             "${release_args[@]}"

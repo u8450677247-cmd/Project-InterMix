@@ -21,6 +21,6 @@ The repository's Markdown documentation, `VERSION`, and current source code rema
 - Use current Markdown guides for installation, compatibility, provider configuration, security, and rollback.
 - Never reuse a historical package checksum for a differently named or rebuilt archive.
 - Historical references to paths describe local architecture; model weights, private memory, credentials, caches, and generated audio are not included.
-- The Infinite Memory v1 cover retains the original public project attribution to Solkara.
+- Portable handoffs use project-level attribution and contain no private reference-build aliases.
 
 PDF checksums are recorded in [PDF_SHA256SUMS.txt](PDF_SHA256SUMS.txt).

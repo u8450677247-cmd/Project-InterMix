@@ -80,6 +80,8 @@ Provider: Wikipedia
         }
         empty = lambda query, limit: []
         with (
+            patch.object(web_search, "_configured_wave", new=lambda: []),
+            patch.object(web_search, "_specialized_wave", new=lambda query: []),
             patch.object(web_search, "_duckduckgo_html", new=lambda query, limit: [candidate]),
             patch.object(web_search, "_duckduckgo_lite", new=empty),
             patch.object(web_search, "_google_news", new=empty),
@@ -105,6 +107,8 @@ Provider: Wikipedia
         lite.__name__ = "_duckduckgo_lite"
         empty = lambda query, limit: []
         with (
+            patch.object(web_search, "_configured_wave", new=lambda: []),
+            patch.object(web_search, "_specialized_wave", new=lambda query: []),
             patch.object(web_search, "_google_news", new=empty),
             patch.object(web_search, "_bing_news", new=empty),
             patch.object(web_search, "_duckduckgo_html", new=blocked),
