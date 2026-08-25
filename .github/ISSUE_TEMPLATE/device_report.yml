@@ -1,0 +1,82 @@
+name: Device compatibility report
+description: Submit measured evidence for a new hardware/runtime profile.
+title: "[Device]: "
+labels: [device-report, needs-validation]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A passing probe creates a candidate profile, not an automatic support claim.
+        Do not include unique device identifiers or private runtime data.
+
+  - type: input
+    id: device
+    attributes:
+      label: Device and SoC
+      placeholder: Manufacturer Model / SoC / physical RAM
+    validations:
+      required: true
+
+  - type: input
+    id: runtime
+    attributes:
+      label: Android, shell, Python, and LiteRT-LM versions
+      placeholder: Android … / Termux … / Python … / LiteRT-LM …
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: Model label, size, physical context, and backend
+      placeholder: Gemma … / … GB / … tokens / GPU
+    validations:
+      required: true
+
+  - type: textarea
+    id: features
+    attributes:
+      label: Paths actually verified
+      description: Install, restart, memory, grounding, workspace, UI, voice, rollback, and so on.
+    validations:
+      required: true
+
+  - type: textarea
+    id: measurements
+    attributes:
+      label: Measurements
+      description: Cold init, cold/warm first token, total time, prompt tokens, MemAvailable before/hot/after, and thermal conditions.
+      placeholder: |
+        Cold init:
+        Cold first token:
+        Warm first token:
+        Total generation:
+        MemAvailable cold / hot / after:
+        Cooling and ambient:
+    validations:
+      required: true
+
+  - type: dropdown
+    id: signal9
+    attributes:
+      label: Signal 9 or Android process termination observed?
+      options: ["No", "Yes", "Not tested"]
+    validations:
+      required: true
+
+  - type: textarea
+    id: report
+    attributes:
+      label: Share-safe device report
+      description: Paste reviewed `intermix-doctor --json` output.
+      render: json
+
+  - type: checkboxes
+    id: declaration
+    attributes:
+      label: Declaration
+      options:
+        - label: These are measurements from hardware I actually tested, not inferred specifications.
+          required: true
+        - label: I removed all private data, credentials, paths, transcripts, model files, and unique identifiers.
+          required: true

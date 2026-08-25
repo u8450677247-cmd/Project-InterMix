@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -eu
+
+project_dir="${INTERMIX_PROJECT_DIR:-$HOME/project-intermix}"
+current_link="$project_dir/current"
+previous_link="$project_dir/previous"
+assume_yes=0
+
+case "${1:-}" in
+    --yes) assume_yes=1 ;;
+    --list)
+        printf 'Current:  %s\n' "$(readlink "$current_link" 2>/dev/null || printf unavailable)"
+        printf 'Previous: %s\n' "$(readlink "$previous_link" 2>/dev/null || printf unavailable)"
+        exit 0
+        ;;
+    "") ;;
+    *) printf 'Usage: intermix-rollback [--list|--yes]\n' >&2; exit 2 ;;
+esac
+
+[ -L "$current_link" ] || {
+    printf 'No versioned current release is active.\n' >&2
+    exit 1
+}
+[ -L "$previous_link" ] || {
+    printf 'No previous versioned release is available.\n' >&2
+    exit 1
+}
+
+current_target="$(readlink -f "$current_link")"
+previous_target="$(readlink -f "$previous_link")"
+case "$current_target" in
+    "$project_dir"/releases/*) ;;
+    *) printf 'Current target is outside the managed release directory.\n' >&2; exit 1 ;;
+esac
+case "$previous_target" in
+    "$project_dir"/releases/*) ;;
+    *) printf 'Previous target is outside the managed release directory.\n' >&2; exit 1 ;;
+esac
+
+printf 'Current:  %s\n' "$current_target"
+printf 'Restore:  %s\n' "$previous_target"
+printf 'Memory and provider data remain unchanged.\n'
+if [ "$assume_yes" -ne 1 ]; then
+    printf 'Type ROLLBACK to swap these code releases: '
+    IFS= read -r confirmation
+    [ "$confirmation" = "ROLLBACK" ] || {
+        printf 'Rollback cancelled.\n'
+        exit 0
+    }
+fi
+
+stamp="$(date +%Y%m%d_%H%M%S)"
+new_current="$project_dir/.current.rollback.$stamp"
+new_previous="$project_dir/.previous.rollback.$stamp"
+ln -s "$previous_target" "$new_current"
+ln -s "$current_target" "$new_previous"
+mv -f "$new_current" "$current_link"
+mv -f "$new_previous" "$previous_link"
+printf 'Active release restored to %s\n' "$previous_target"

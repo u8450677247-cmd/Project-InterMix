@@ -1,0 +1,57 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deterministic-suite:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install test-only dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-ci.txt
+
+      - name: Audit the source boundary
+        run: python tools/public_release_audit.py .
+
+      - name: Compile Python and validate shell
+        run: |
+          python -m compileall -q engine tools tests
+          bash -n install.sh bin/intermix bin/intermix-doctor bin/intermix-providers bin/intermix-rollback
+
+      - name: Run deterministic tests
+        env:
+          PYTHONPATH: engine
+        run: python -m unittest discover -s tests -v
+
+      - name: Report deterministic coverage
+        if: matrix.python-version == '3.13'
+        env:
+          PYTHONPATH: engine
+        run: |
+          coverage run --source=engine -m unittest discover -s tests
+          coverage report -m

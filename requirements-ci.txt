@@ -1,0 +1,3 @@
+# CI validates deterministic controller/UI behavior without model weights.
+textual==8.2.8
+coverage>=7.6,<8

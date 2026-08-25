@@ -1,0 +1,4 @@
+# Reproducible reference stack verified on the Pixel 10 Pro reference device.
+textual==8.2.8
+litert-lm-api==0.16.1
+litert-lm==0.16.1

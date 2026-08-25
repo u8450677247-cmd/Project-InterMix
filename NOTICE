@@ -1,0 +1,10 @@
+Project Intermix
+Copyright 2026 Project Intermix contributors
+
+This product includes software developed by Project Intermix contributors.
+
+Project Intermix integrates with, but does not redistribute, independently
+licensed software and services including Android, Termux, LiteRT-LM, Gemma,
+Textual, SQLite, and optional Kokoro components. Their names and trademarks
+belong to their respective owners. Model weights, voice packs, provider
+credentials, and third-party services are not covered by this source license.

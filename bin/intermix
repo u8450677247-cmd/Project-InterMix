@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -eu
+
+project_dir="${INTERMIX_PROJECT_DIR:-$HOME/project-intermix}"
+if [ -L "$project_dir/current" ] || [ -d "$project_dir/current" ]; then
+    engine_dir="$project_dir/current/engine"
+else
+    engine_dir="$project_dir/engine"
+fi
+
+if [ ! -f "$engine_dir/tui_app.py" ]; then
+    printf 'Project Intermix runtime was not found beneath %s\n' "$project_dir" >&2
+    printf 'Re-run the verified installer or set INTERMIX_PROJECT_DIR.\n' >&2
+    exit 1
+fi
+
+cd "$engine_dir"
+exec python tui_app.py "$@"

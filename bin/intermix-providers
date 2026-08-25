@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -eu
+
+project_dir="${INTERMIX_PROJECT_DIR:-$HOME/project-intermix}"
+if [ -L "$project_dir/current" ] || [ -d "$project_dir/current" ]; then
+    provider_tool="$project_dir/current/engine/provider_vault.py"
+else
+    provider_tool="$project_dir/engine/provider_vault.py"
+fi
+if [ ! -f "$provider_tool" ]; then
+    printf 'Project Intermix provider tool was not found at %s\n' "$provider_tool" >&2
+    exit 1
+fi
+exec python "$provider_tool" "$@"

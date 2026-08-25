@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -eu
+
+project_dir="${INTERMIX_PROJECT_DIR:-$HOME/project-intermix}"
+if [ -L "$project_dir/current" ] || [ -d "$project_dir/current" ]; then
+    release_dir="$project_dir/current"
+else
+    release_dir="$project_dir"
+fi
+
+probe="$release_dir/tools/device_probe.py"
+if [ ! -f "$probe" ]; then
+    printf 'The share-safe device probe was not found at %s\n' "$probe" >&2
+    exit 1
+fi
+
+exec python "$probe" "$@"

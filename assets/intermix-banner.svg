@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" role="img" aria-labelledby="title desc">
+  <title id="title">Project Intermix</title>
+  <desc id="desc">A cyan and violet Project Intermix developer preview banner.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#050914"/>
+      <stop offset="0.55" stop-color="#091322"/>
+      <stop offset="1" stop-color="#100a22"/>
+    </linearGradient>
+    <linearGradient id="signal" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#39d5ff"/>
+      <stop offset="0.52" stop-color="#67e8c2"/>
+      <stop offset="1" stop-color="#a970ff"/>
+    </linearGradient>
+    <pattern id="grid" width="30" height="30" patternUnits="userSpaceOnUse">
+      <path d="M30 0H0V30" fill="none" stroke="#6a7d9d" stroke-opacity="0.10" stroke-width="1"/>
+    </pattern>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="1200" height="300" rx="24" fill="url(#background)"/>
+  <rect width="1200" height="300" rx="24" fill="url(#grid)"/>
+  <path d="M44 42H1156M44 258H1156" stroke="url(#signal)" stroke-width="2" opacity="0.75"/>
+  <g transform="translate(92 150)" fill="none" stroke="url(#signal)" filter="url(#glow)">
+    <circle r="68" stroke-width="2" opacity="0.48"/>
+    <circle r="46" stroke-width="3" opacity="0.72"/>
+    <path d="M-78 0H78M0-78V78" stroke-width="1" opacity="0.34"/>
+    <path d="M-32-16L0-36l32 20v32L0 36l-32-20z" stroke-width="4"/>
+    <circle r="8" fill="#67e8c2" stroke="none"/>
+  </g>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+    <text x="208" y="122" fill="#e7edf5" font-size="52" font-weight="700" letter-spacing="4">PROJECT INTERMIX</text>
+    <text x="212" y="166" fill="#39d5ff" font-size="18" letter-spacing="4">LOCAL INTELLIGENCE · PRIVATE MEMORY · VERIFIED RECALL</text>
+    <text x="212" y="207" fill="#9eabbd" font-size="16" letter-spacing="2">PUBLIC ALPHA 1.4.1 · ANDROID / TERMUX REFERENCE BUILD</text>
+  </g>
+  <g transform="translate(1012 150)" fill="none" stroke-linecap="round">
+    <path d="M-64 0h26l14-28 20 56 18-38 14 10h36" stroke="url(#signal)" stroke-width="4" filter="url(#glow)"/>
+    <circle cx="-64" cy="0" r="4" fill="#39d5ff" stroke="none"/>
+    <circle cx="64" cy="0" r="4" fill="#a970ff" stroke="none"/>
+  </g>
+</svg>

@@ -1,0 +1,74 @@
+name: Bug report
+description: Report a reproducible controller, UI, memory, workspace, or installer defect.
+title: "[Bug]: "
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use synthetic data. Never upload provider keys, databases, model files,
+        raw transcripts, private workspaces, audio, or compiled shader caches.
+
+  - type: input
+    id: version
+    attributes:
+      label: Intermix version
+      placeholder: 1.4.1-alpha.1
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Installer or rollback
+        - Inference or latency
+        - Memory or recall
+        - Web grounding
+        - Workspace agent
+        - Textual interface
+        - Optional voice bridge
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Exact steps using synthetic prompts and files.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: Include visible guarded failures and exit codes; redact paths and identities.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Share-safe environment report
+      description: Paste output from `intermix-doctor --json` after reviewing it.
+      render: json
+
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy confirmation
+      options:
+        - label: I reviewed this report and removed credentials, personal data, transcripts, memory databases, model files, and private workspace content.
+          required: true
+        - label: I searched existing issues and can reproduce this on the latest public alpha.
+          required: true

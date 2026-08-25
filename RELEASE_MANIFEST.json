@@ -1,0 +1,436 @@
+{
+  "archive_root": "Project_Intermix_v1.4.1-alpha.1",
+  "files": [
+    {
+      "bytes": 191,
+      "mode": "0644",
+      "path": ".gitattributes",
+      "sha256": "687144d65e137e1680f052e1c0188242d42d18348a6ec62320ef44e34c0e9a1b"
+    },
+    {
+      "bytes": 1993,
+      "mode": "0644",
+      "path": ".github/ISSUE_TEMPLATE/bug_report.yml",
+      "sha256": "225befacadacaf1c82421afdeef7429e65bc63bbbc17e4bfbdc76903ce1e43c8"
+    },
+    {
+      "bytes": 46,
+      "mode": "0644",
+      "path": ".github/ISSUE_TEMPLATE/config.yml",
+      "sha256": "8b09e7df09fc7534371988062769ee427af2954a02c04c763e8a8005be0f2be4"
+    },
+    {
+      "bytes": 2389,
+      "mode": "0644",
+      "path": ".github/ISSUE_TEMPLATE/device_report.yml",
+      "sha256": "24d4c854776c57f76382d175609a6fbb0b07f16af9ec65b39ab1c70ed63016a0"
+    },
+    {
+      "bytes": 1678,
+      "mode": "0644",
+      "path": ".github/ISSUE_TEMPLATE/provider_adapter.yml",
+      "sha256": "e226f1e0a4553b201393426e1cf4c69e884ccfc2cbd6d291b65cdc2ef313d94a"
+    },
+    {
+      "bytes": 672,
+      "mode": "0644",
+      "path": ".github/pull_request_template.md",
+      "sha256": "28bdee52efd0d1720fc8c42c33cd8b91b6a61ece4be1e2116c8238ebfebc3c9b"
+    },
+    {
+      "bytes": 1343,
+      "mode": "0644",
+      "path": ".github/workflows/release.yml",
+      "sha256": "ebe7525d1d932bb579916c5ad7da7877f81a892d3340afb43340af85d5f01c8d"
+    },
+    {
+      "bytes": 1452,
+      "mode": "0644",
+      "path": ".github/workflows/tests.yml",
+      "sha256": "38a57dd221ff5a2ec7e886ad52cbd65de820c383f3a9dcde4706839afe019ffd"
+    },
+    {
+      "bytes": 801,
+      "mode": "0644",
+      "path": ".gitignore",
+      "sha256": "7ee4ace31aa1afadab94625441430cb5159f67036f6a05efd747ae18738151fb"
+    },
+    {
+      "bytes": 2029,
+      "mode": "0644",
+      "path": "CHANGELOG.md",
+      "sha256": "61a82d2636371509db8e1558a921209ace2c74801391f8bf8606a25b93030302"
+    },
+    {
+      "bytes": 2229,
+      "mode": "0644",
+      "path": "CODE_OF_CONDUCT.md",
+      "sha256": "bce055b23adbc8e5a72be6e5d529ca63e04b7ba9ca9a3e1780c8d7f13a50d1ea"
+    },
+    {
+      "bytes": 2937,
+      "mode": "0644",
+      "path": "CONTRIBUTING.md",
+      "sha256": "400dc802e9b158ba33c4b87b1d5bae0a1bb1ff86106c33e020925b086e7d592c"
+    },
+    {
+      "bytes": 11359,
+      "mode": "0644",
+      "path": "LICENSE",
+      "sha256": "a56417048a463e5916bf675ac40f0d63823f8434711fa1aabb93ed381559a488"
+    },
+    {
+      "bytes": 516,
+      "mode": "0644",
+      "path": "NOTICE",
+      "sha256": "486ed3dc136c1a67f6081a504e8f81b9f4e5c782f10ef292af27b16ae7beeea1"
+    },
+    {
+      "bytes": 12038,
+      "mode": "0644",
+      "path": "README.md",
+      "sha256": "c2957a9c2618fbbc22020556b027a934d38eaf4ac35899d20e0e2ff05f3b273e"
+    },
+    {
+      "bytes": 2314,
+      "mode": "0644",
+      "path": "SECURITY.md",
+      "sha256": "cb5d07001d2920e05f19d033b12f5d283719183d70804f51d86fa5bf7161589b"
+    },
+    {
+      "bytes": 14,
+      "mode": "0644",
+      "path": "VERSION",
+      "sha256": "8ad6d0813cfa00c663ef6d987720f8708d5cf3e5a96accafc4a320d6959f6c1d"
+    },
+    {
+      "bytes": 2553,
+      "mode": "0644",
+      "path": "assets/intermix-banner.svg",
+      "sha256": "d4bad9621e0ac7fc0ec656a4e282cf658c5d4cc86cf2281c3b6af943c0ebe339"
+    },
+    {
+      "bytes": 519,
+      "mode": "0755",
+      "path": "bin/intermix",
+      "sha256": "e0d5c3290e228823d58c6d35c72f657df4dd996fecbba81bd199215a6a610ef4"
+    },
+    {
+      "bytes": 429,
+      "mode": "0755",
+      "path": "bin/intermix-doctor",
+      "sha256": "2a3fd0de578b093cb8125b4211c29fe66ecb959668827bf0631d1643b17b6ec1"
+    },
+    {
+      "bytes": 465,
+      "mode": "0755",
+      "path": "bin/intermix-providers",
+      "sha256": "85a9c23e31b3521490c82fda268d0643d127085bd1a9e8451a49e70a91cdfee1"
+    },
+    {
+      "bytes": 1879,
+      "mode": "0755",
+      "path": "bin/intermix-rollback",
+      "sha256": "ed4d187ed431e6467197fa96144e3929083e7a9c8709922eba36c07da79b2348"
+    },
+    {
+      "bytes": 8481,
+      "mode": "0644",
+      "path": "docs/ARCHITECTURE.md",
+      "sha256": "5c0d41378f88ab0e0e0471a43e7be2ebab470b21848a5aaa0809ba76db3c317d"
+    },
+    {
+      "bytes": 5749,
+      "mode": "0644",
+      "path": "docs/DEVICE_MATRIX.md",
+      "sha256": "0d5f5313086c3c395b47c608796f417cd7ec215b7458de5ab66538611a4b82d7"
+    },
+    {
+      "bytes": 3365,
+      "mode": "0644",
+      "path": "docs/INSTALLATION.md",
+      "sha256": "3c45c669afbc4989277ae3e62d52403390608dc4a17f9c184b66937e38230059"
+    },
+    {
+      "bytes": 5322,
+      "mode": "0644",
+      "path": "docs/MEMORY.md",
+      "sha256": "b172e82150d2a209bbca92c15c37374d814762f5a85203b6870b4881aa7f7263"
+    },
+    {
+      "bytes": 5250,
+      "mode": "0644",
+      "path": "docs/NATIVE_ANDROID.md",
+      "sha256": "df121dee1b30b1f1af53af133856ba69c700793e3fdaaad625f038f08c8b0268"
+    },
+    {
+      "bytes": 2867,
+      "mode": "0644",
+      "path": "docs/PRIVACY.md",
+      "sha256": "e7b2930a062e25e605e6f1eba1b2a6c625e221698b5f5e2a122e67e57cf0ab79"
+    },
+    {
+      "bytes": 5266,
+      "mode": "0644",
+      "path": "docs/PROVIDERS.md",
+      "sha256": "5623096c0d5a899c17facf8d7a9540473a3642ebb76d7f425802e95e6e3b3af7"
+    },
+    {
+      "bytes": 4084,
+      "mode": "0644",
+      "path": "docs/ROADMAP.md",
+      "sha256": "9b8597e468d680649b0b4111714a806904343ad959f480122628fe7972777a07"
+    },
+    {
+      "bytes": 3844,
+      "mode": "0644",
+      "path": "docs/VOICE.md",
+      "sha256": "def309509ee0717c23905a8e50533879674d8696116ede7345beac1c25267b0a"
+    },
+    {
+      "bytes": 13969,
+      "mode": "0644",
+      "path": "engine/agent.py",
+      "sha256": "0220d9ddf7496f3d6140a94a2f5c36ddcf09aa601290c054ebc83e0ab6d6f92d"
+    },
+    {
+      "bytes": 16951,
+      "mode": "0644",
+      "path": "engine/audio_bridge.py",
+      "sha256": "8ec9c786aa2a71e8893cae5872fce608a7446f7c9ff092df515e5e45d68b1632"
+    },
+    {
+      "bytes": 9231,
+      "mode": "0644",
+      "path": "engine/claim_contracts.py",
+      "sha256": "dee333675cbcdfd4e8891a9cd7e10e16be35b9509f069b3f1503091f44a95bdc"
+    },
+    {
+      "bytes": 5076,
+      "mode": "0644",
+      "path": "engine/freshness_policy.py",
+      "sha256": "4c2fb8a831babc382700ada288e9d5fd12c3620edbc8e6e7ed607cf2a593da68"
+    },
+    {
+      "bytes": 5248,
+      "mode": "0644",
+      "path": "engine/idle_maintenance.py",
+      "sha256": "edeed592106503de93dec0b59cbbbe97876b6a2aad799d0bb9ee8aff6da758f9"
+    },
+    {
+      "bytes": 10906,
+      "mode": "0644",
+      "path": "engine/idle_reporter.py",
+      "sha256": "79271589a2f4f28a7a2674bea8d5bd01c7f65af2742c45ebbe6588b469923a66"
+    },
+    {
+      "bytes": 63311,
+      "mode": "0644",
+      "path": "engine/llm_controller.py",
+      "sha256": "934667ddcd8ee3192b79756a866db7f15acf1f05874659d413f37dc5e9c17c3a"
+    },
+    {
+      "bytes": 8914,
+      "mode": "0644",
+      "path": "engine/memory_migrate.py",
+      "sha256": "d69c6d0d8312a1a06407149b69ffe9e53dfeafedcc0ae26eba64d44436fd5222"
+    },
+    {
+      "bytes": 9818,
+      "mode": "0644",
+      "path": "engine/memory_protocol.py",
+      "sha256": "f0d81436c385254c2bff6603dd1f6d20389a878c2c2c0eb6249da976d78ecb18"
+    },
+    {
+      "bytes": 2982,
+      "mode": "0644",
+      "path": "engine/memory_retriever.py",
+      "sha256": "f47faeb17b5f8de5cd81cb3f1ee010959f8ae233479e49d85f67fb4262a310af"
+    },
+    {
+      "bytes": 50876,
+      "mode": "0644",
+      "path": "engine/memory_store.py",
+      "sha256": "e4040061aef800e7e091e5160d16d466fe52843b701a7f78283155bc949980c9"
+    },
+    {
+      "bytes": 11635,
+      "mode": "0644",
+      "path": "engine/numeric_integrity.py",
+      "sha256": "368d2483ef1c712b91e61a3ac6c5ce1255e79475675259f72e695af8ccbc9b06"
+    },
+    {
+      "bytes": 12050,
+      "mode": "0644",
+      "path": "engine/prompt_builder.py",
+      "sha256": "6afb45ead4f3b0c455d03814f69487896731322b9a0802497e7dfb17257110b6"
+    },
+    {
+      "bytes": 6370,
+      "mode": "0644",
+      "path": "engine/provider_vault.py",
+      "sha256": "0e4ba0827869e26620d49149ad9718ad2c50166eb2a09dfbda122f3eb95da900"
+    },
+    {
+      "bytes": 12948,
+      "mode": "0644",
+      "path": "engine/research_scout.py",
+      "sha256": "5ce80635981ec9459d5f281971d032d19d8aa904ecd00a1bbc9fbbc825c8ae0f"
+    },
+    {
+      "bytes": 17864,
+      "mode": "0644",
+      "path": "engine/resident_engine.py",
+      "sha256": "23ffb6d88a6b58741aeeb9e91e1674ca8ff799776899b60980ded98790535e12"
+    },
+    {
+      "bytes": 4986,
+      "mode": "0644",
+      "path": "engine/response_policy.py",
+      "sha256": "301af885ee5ba41e54d5339d087736c53f383556e01c64f0ca49bb765a9d17e3"
+    },
+    {
+      "bytes": 6215,
+      "mode": "0644",
+      "path": "engine/runtime_config.py",
+      "sha256": "430c7f02dffb9313b1f58460614e01088aea2ea0c8ca180f4a6d8e9a3193a8a2"
+    },
+    {
+      "bytes": 9560,
+      "mode": "0644",
+      "path": "engine/second_brain.py",
+      "sha256": "f62c5a2da06ca82d9b352e6e2f5be5dc1ef873280ad34822fd4afbf856208a53"
+    },
+    {
+      "bytes": 17631,
+      "mode": "0644",
+      "path": "engine/task_ledger.py",
+      "sha256": "9e41b1adc24db395da1601a9e3f0e9c6caf9ef0537f4d6e9228e47a79a8a8226"
+    },
+    {
+      "bytes": 3325,
+      "mode": "0644",
+      "path": "engine/temporal_refresh.py",
+      "sha256": "2b1fc785804d43ee8eea546906aae97c7da2cc64a61a58ecbd5128bb7b9d5551"
+    },
+    {
+      "bytes": 55800,
+      "mode": "0644",
+      "path": "engine/tui_app.py",
+      "sha256": "a844a733c73c2b3acc58ff976693d6eed87e5f100d6b0dcdb819834c02bd7a51"
+    },
+    {
+      "bytes": 37841,
+      "mode": "0644",
+      "path": "engine/web_search.py",
+      "sha256": "254e10d31d62575b2cd78239cab0abf82bcc5a3e2c2e671cd5ff78cddca0a0d5"
+    },
+    {
+      "bytes": 5256,
+      "mode": "0644",
+      "path": "engine/workspace_documenter.py",
+      "sha256": "8098d46327deede46dcc07ec175a20465dcceabba0dd3a723e56b6f65ba9da5a"
+    },
+    {
+      "bytes": 10303,
+      "mode": "0644",
+      "path": "engine/workspace_state.py",
+      "sha256": "55b2b658b9970c87d6a72fd173aee975b8627f9f9cd2c9160fa8c429287bb55f"
+    },
+    {
+      "bytes": 18260,
+      "mode": "0755",
+      "path": "install.sh",
+      "sha256": "b1789b71b2af9b6cb030da4a2c8515d6beca860479bae3fe7c2e7524fb4788ac"
+    },
+    {
+      "bytes": 107,
+      "mode": "0644",
+      "path": "requirements-ci.txt",
+      "sha256": "c6aed2a44a9bd844f603c5cdbf480358775ea0e29a3839faa883c0c0ad129ffb"
+    },
+    {
+      "bytes": 37,
+      "mode": "0644",
+      "path": "requirements-dev.txt",
+      "sha256": "cc5828357ca3319448917719efcfc68f8e836be4a1ae24ec0d553d5a3d1f48a1"
+    },
+    {
+      "bytes": 133,
+      "mode": "0644",
+      "path": "requirements.txt",
+      "sha256": "9e287f7c347a8be80865971264c501f46a05bee17c8cd1619372fe2e92fbb9d1"
+    },
+    {
+      "bytes": 11407,
+      "mode": "0644",
+      "path": "tests/test_cognition.py",
+      "sha256": "f1811d304d40d1eef2b50df448ef511129522d237d2b5a4effe6950f2153a789"
+    },
+    {
+      "bytes": 11974,
+      "mode": "0644",
+      "path": "tests/test_continuity.py",
+      "sha256": "6e69f35441faacd96729a6b1e17b454ddf93427a8434d3ce6d32ff107de80fbd"
+    },
+    {
+      "bytes": 13308,
+      "mode": "0644",
+      "path": "tests/test_memory_system.py",
+      "sha256": "bdb8b8786e99c96a18c8c08a6d9291d81c54aed29f757df69aecefa15be7a595"
+    },
+    {
+      "bytes": 5345,
+      "mode": "0644",
+      "path": "tests/test_public_release.py",
+      "sha256": "49a40004910fb1f5757d9b3c22f1315dd3bdc023d927684050f8aed964b34832"
+    },
+    {
+      "bytes": 21468,
+      "mode": "0644",
+      "path": "tests/test_resident_integration.py",
+      "sha256": "0f24025cc26eef50fcb3f5f41df730c6d0d06d7e2245899062413d99804fd3fb"
+    },
+    {
+      "bytes": 11713,
+      "mode": "0644",
+      "path": "tests/test_trust_speed.py",
+      "sha256": "18d71b1c032ac97f35ad077af4ecf7eace761f291532fe650f92ce1151d7c6df"
+    },
+    {
+      "bytes": 5464,
+      "mode": "0644",
+      "path": "tests/test_tui_continuity.py",
+      "sha256": "a259daa34e5633a35da652e813499d879ee01d0bff6d9fb9baa4269ce47df3b2"
+    },
+    {
+      "bytes": 4596,
+      "mode": "0644",
+      "path": "tests/test_web_search.py",
+      "sha256": "91b789a9d264263d4ca7516771139be37d003c86d70151f0c89a124be0ddf5a2"
+    },
+    {
+      "bytes": 4512,
+      "mode": "0755",
+      "path": "tools/build_release.py",
+      "sha256": "ce84241914b31958eb3a015612cec23410bc1010287a24a388f671b30452054c"
+    },
+    {
+      "bytes": 6606,
+      "mode": "0755",
+      "path": "tools/device_probe.py",
+      "sha256": "9659fe08f3cfc53c03a92ef23d3772f9411bebd5c123765696cd2058140e7874"
+    },
+    {
+      "bytes": 6718,
+      "mode": "0755",
+      "path": "tools/public_release_audit.py",
+      "sha256": "426c96cba34ab18edd83b7498cb913cae7e1b8649ff52aefc28cd5efaf177a1c"
+    }
+  ],
+  "privacy_boundary": "source-only; no models, memory, credentials, caches, audio, or workspaces",
+  "project": "Project Intermix",
+  "release_date": "2026-08-25T00:00:00Z",
+  "schema": 1,
+  "version": "1.4.1-alpha.1"
+}

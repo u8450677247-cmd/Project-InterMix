@@ -1,0 +1,48 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  source-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Verify tag and audit source
+        run: |
+          test "${GITHUB_REF_NAME#v}" = "$(tr -d '[:space:]' < VERSION)"
+          python tools/public_release_audit.py .
+
+      - name: Build deterministic source archive
+        run: python tools/build_release.py . --output-dir "$RUNNER_TEMP/intermix-release"
+
+      - name: Attest source archive provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ runner.temp }}/intermix-release/*.zip
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release_args=(--verify-tag --generate-notes --title "Project Intermix ${GITHUB_REF_NAME#v}")
+          case "$GITHUB_REF_NAME" in
+            *-*) release_args+=(--prerelease) ;;
+          esac
+          gh release create "$GITHUB_REF_NAME" \
+            "$RUNNER_TEMP"/intermix-release/*.zip \
+            "$RUNNER_TEMP"/intermix-release/*.sha256 \
+            "${release_args[@]}"

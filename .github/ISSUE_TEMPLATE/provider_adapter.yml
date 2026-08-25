@@ -1,0 +1,57 @@
+name: Provider adapter proposal
+description: Propose an authorized source or search adapter with a deterministic evidence contract.
+title: "[Provider]: "
+labels: [provider, proposal]
+body:
+  - type: input
+    id: provider
+    attributes:
+      label: Provider and official documentation
+      placeholder: Name and documentation URL
+    validations:
+      required: true
+
+  - type: dropdown
+    id: source_type
+    attributes:
+      label: Source class
+      options:
+        - Official product or release API
+        - Verified registry
+        - Scholarly index
+        - General search API
+        - Community issue/discussion source
+    validations:
+      required: true
+
+  - type: textarea
+    id: coverage
+    attributes:
+      label: Claims and queries this adapter can prove
+      description: State exact authority, freshness, stable/prerelease semantics, and non-goals.
+    validations:
+      required: true
+
+  - type: textarea
+    id: limits
+    attributes:
+      label: Authentication, limits, and terms
+      description: Do not paste a key. Describe documented quota, timeout, attribution, and caching constraints.
+    validations:
+      required: true
+
+  - type: textarea
+    id: failure
+    attributes:
+      label: Fail-closed behavior and tests
+      description: Explain irrelevant, stale, conflicting, rate-limited, and unavailable cases.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: policy
+    attributes:
+      label: Policy confirmation
+      options:
+        - label: This proposal does not require CAPTCHA solving, proxy rotation, IP hopping, scraping against terms, or exposing credentials to the model.
+          required: true

@@ -1,0 +1,62 @@
+# Project Intermix: generated and private runtime state
+
+# Model weights, compiled delegates, and accelerator caches
+models/
+**/.shaders/
+*.litertlm
+*.onnx
+voices*.bin
+*.xnnpack_cache
+*_cache.bin
+
+# Private memory, configuration, credentials, and local identity
+memory/
+archive/
+.env
+.env.*
+!.env.example
+providers.env
+config.json
+identity.txt
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+
+# User workspaces and generated artifacts
+workspace/
+workspaces/
+sovereign_workspace/
+IntermixAudioBridge/
+output/
+reports/
+logs/
+*.wav
+*.mp3
+*.flac
+*.m4a
+
+# Python, test, editor, and OS state
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local packaging products
+dist/
+build/
+release/
+*.zip
+*.tar
+*.tar.gz
+SHA256SUMS.local
