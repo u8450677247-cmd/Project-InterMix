@@ -2,16 +2,15 @@ buy_me_a_coffee: yasseh
 PUBLIC_ALIAS_EXCEPTIONS = {
     ".github/FUNDING.yml": {"Yasseh"},
 }
-        allowed_aliases = {
+allowed_aliases = {
             alias.casefold()
             for alias in PUBLIC_ALIAS_EXCEPTIONS.get(relative, set())
         }
-
         for alias in PRIVATE_ALIASES:
-            if alias.casefold() in allowed_aliases:
-                continue
-            if re.search(rf"\b{re.escape(alias)}\b", text, re.IGNORECASE):
-                errors.append(f"private reference alias in {relative}")
+        if alias.casefold() in allowed_aliases:
+        continue
+        if re.search(rf"\b{re.escape(alias)}\b", text, re.IGNORECASE):
+        errors.append(f"private reference alias in {relative}")
         PUBLIC_ALIAS_EXCEPTIONS = {
     ".github/FUNDING.yml": {"Yasseh"},
 }
