@@ -129,7 +129,7 @@ class AndroidFoundationTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/android-foundation.yml").read_text(
             encoding="utf-8"
         )
-        self.assertIn('"feature/anicloud-android-*"', workflow)
+        self.assertIn('"feature/anicloud-*"', workflow)
         self.assertIn('sdkmanager "platforms;android-36"', workflow)
         self.assertNotIn("--channel=3", workflow)
         self.assertIn("actions/checkout@v7", workflow)
