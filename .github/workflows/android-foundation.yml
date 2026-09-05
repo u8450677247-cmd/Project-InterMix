@@ -1,0 +1,65 @@
+name: android-foundation
+
+on:
+  push:
+    branches:
+      - "feature/anicloud-android-*"
+    paths:
+      - "android/**"
+      - "docs/ANDROID_DESIGN.md"
+      - "docs/ANDROID_PRODUCT_CONTRACT.md"
+      - ".github/workflows/android-foundation.yml"
+  pull_request:
+    paths:
+      - "android/**"
+      - "docs/ANDROID_DESIGN.md"
+      - "docs/ANDROID_PRODUCT_CONTRACT.md"
+      - ".github/workflows/android-foundation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-foundation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-shell:
+    name: Native shell · JDK 17
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up pinned Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.4.1"
+
+      - name: Install Android API 37
+        run: sdkmanager "platforms;android-37" "build-tools;36.0.0"
+
+      - name: Test and assemble the disconnected foundation
+        run: >-
+          gradle -p android
+          :app:testDebugUnitTest
+          :app:assembleDebug
+          --no-daemon
+          --stacktrace
+
+      - name: Retain the first debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AniCloudAI-foundation-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7

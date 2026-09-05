@@ -60,3 +60,13 @@ release/
 *.tar
 *.tar.gz
 SHA256SUMS.local
+
+# Native Android local state and generated products
+android/.gradle/
+android/.kotlin/
+android/local.properties
+android/**/build/
+*.apk
+*.aab
+*.jks
+*.keystore

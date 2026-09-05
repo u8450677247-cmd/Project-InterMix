@@ -9,7 +9,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-39d5ff"></a>
   <a href="CHANGELOG.md"><img alt="Release: 1.4.1 alpha 1" src="https://img.shields.io/badge/release-1.4.1--alpha.1-a970ff"></a>
-  <a href=".github/workflows/tests.yml"><img alt="Tests: 87" src="https://img.shields.io/badge/tests-87%20deterministic-67e8c2"></a>
+  <a href=".github/workflows/tests.yml"><img alt="Tests: 93" src="https://img.shields.io/badge/tests-93%20deterministic-67e8c2"></a>
   <img alt="Status: developer preview" src="https://img.shields.io/badge/status-developer%20preview-ffca6b">
 </p>
 
@@ -41,7 +41,7 @@ This repository is a developer preview, not a polished Android application. The 
 | Cold/idle available memory | Approximately 7.0–7.6 GiB in the owner's test environment |
 | Resident-hot available memory | Approximately 2.6–3.7 GiB in the owner's test environment |
 | Cooling used during long tests | Optional Black Shark Magnetic/FunCooler 6 Pro (BR62); approximately 25 °C owner-observed device temperature |
-| Test suite | 87 deterministic public-alpha checks across memory, routing, grounding, cancellation, stream integrity, inference, workspace, release safety, and interface behavior |
+| Test suite | 93 deterministic public-alpha checks across memory, routing, grounding, cancellation, stream integrity, inference, workspace, release safety, and interface behavior |
 
 These are observations, not guarantees. Android memory pressure, other applications, firmware, drivers, ambient temperature, model build, and compiled caches can materially change the result.
 
@@ -56,7 +56,7 @@ These are observations, not guarantees. Android memory pressure, other applicati
 
 Google's current Gemma 4 documentation includes E2B and E4B benchmarks on the Galaxy S26 Ultra, which makes it a compelling test target—not a verified Intermix device. LiteRT-LM itself supports Python on Android, Linux, macOS, and Windows, but each Intermix backend and interface path still needs its own report.
 
-See [the device matrix](docs/DEVICE_MATRIX.md) before making or repeating a compatibility claim, [the installation guide](docs/INSTALLATION.md) before testing a new device, and the [Sovereign Glass design contract](docs/ANDROID_DESIGN.md) for the native Android interface direction.
+See [the device matrix](docs/DEVICE_MATRIX.md) before making or repeating a compatibility claim, [the installation guide](docs/INSTALLATION.md) before testing a new device, the [Sovereign Glass design contract](docs/ANDROID_DESIGN.md), and the [AniCloudAI product contract](docs/ANDROID_PRODUCT_CONTRACT.md) for the native Android direction.
 
 ## Install
 

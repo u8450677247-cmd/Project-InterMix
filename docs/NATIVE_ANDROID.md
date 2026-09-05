@@ -1,5 +1,12 @@
 # Native Android APK and TPU feasibility
 
+The implementation-facing product decisions are frozen in the
+[AniCloudAI Android product contract](ANDROID_PRODUCT_CONTRACT.md). The initial
+`android/` module is a deliberately disconnected native shell: it proves
+responsive composition, authentication, multiline input, synthetic streaming,
+STOP, and truthful unavailable states before private data or the model runtime
+can cross the boundary.
+
 ## Verdict
 
 A native Project Intermix APK is feasible today. Reusing the exact Gemma 4
@@ -37,9 +44,9 @@ assemble entirely on the phone.
 
 ## Recommended APK sequence
 
-### Milestone 1 — native shell, known GPU backend
+### Milestone 1 — native shell, then known GPU backend
 
-- Kotlin + Jetpack Compose responsive UI.
+- Kotlin + Jetpack Compose responsive UI. **Foundation scaffold present.**
 - LiteRT-LM Android Maven dependency and asynchronous token flow.
 - Foreground, user-visible inference lifecycle with cancellation.
 - Existing SQLite schema migration or reviewed export/import.
@@ -49,6 +56,9 @@ assemble entirely on the phone.
 - Backend telemetry matching the Termux cold/warm measurements.
 
 This milestone should reproduce behavior before redesigning memory or autonomy.
+The committed foundation does not claim model, database, network, thermal, or
+voice integration; those signals are visibly disconnected until their adapters
+are measured.
 
 ### Milestone 2 — native Android integration
 

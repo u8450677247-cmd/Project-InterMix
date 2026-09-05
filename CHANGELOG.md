@@ -33,6 +33,10 @@ may still change.
 - The Sovereign Glass native Android design contract, anchoring responsive
   surfaces, state semantics, visual tokens, accessibility, privacy, motion, and
   thermal fallbacks before APK implementation.
+- The disconnected AniCloudAI Compose foundation: Android authentication,
+  display-specific phone/desktop layouts, answer-mode controls, native
+  multiline composition, cancellable synthetic streaming, truthful adapter
+  states, a pinned Android CI gate, and the private-dogfood product contract.
 
 ### Preserved
 

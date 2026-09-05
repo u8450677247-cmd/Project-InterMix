@@ -2,10 +2,10 @@
 
 Status: version 0.1 design contract for the native Project Intermix APK.
 
-Sovereign Glass is the internal name of the interface system, not a final app
-name or trademark decision. The Pixel 10 Pro is the reference canvas, but the
-rules below are based on Android window size and capability rather than a device
-model check.
+Sovereign Glass is the internal name of the AniCloudAI interface system, not a
+trademark decision. The Pixel 10 Pro is the reference canvas, but the rules
+below are based on Android window size and capability rather than a device model
+check. The prototype package identity remains provisional until release review.
 
 ## Product principles
 
