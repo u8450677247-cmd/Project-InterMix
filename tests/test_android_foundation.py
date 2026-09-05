@@ -72,6 +72,7 @@ class AndroidFoundationTests(unittest.TestCase):
         )
         self.assertIn('"feature/anicloud-android-*"', workflow)
         self.assertIn('sdkmanager "platforms;android-37"', workflow)
+        self.assertIn("--channel=3", workflow)
         self.assertIn("actions/upload-artifact@v4", workflow)
         self.assertIn("AniCloudAI-foundation-debug", workflow)
         self.assertIn("app-debug.apk", workflow)
