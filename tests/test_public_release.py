@@ -146,6 +146,11 @@ class InstallerContractTests(unittest.TestCase):
         self.assertIn("--librarian-model", help_result.stdout)
         self.assertIn("--dual-model", help_result.stdout)
         self.assertIn("never downloads model weights", help_result.stdout)
+        installer = (ROOT / "install.sh").read_text(encoding="utf-8")
+        self.assertIn(
+            'PYTHONPATH="$BUNDLE_DIR/engine" PYTHONDONTWRITEBYTECODE=1',
+            installer,
+        )
 
 
 if __name__ == "__main__":

@@ -430,7 +430,8 @@ fi
 
 
 note "4/8" "Running the complete isolated release test suite"
-PYTHONPATH="$BUNDLE_DIR/engine" python -m unittest discover -s "$BUNDLE_DIR/tests" -v
+PYTHONPATH="$BUNDLE_DIR/engine" PYTHONDONTWRITEBYTECODE=1 \
+    python -m unittest discover -s "$BUNDLE_DIR/tests" -v
 
 
 note "5/8" "Creating a private rollback snapshot and versioned release"

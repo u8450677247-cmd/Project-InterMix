@@ -41,6 +41,11 @@ may still change.
 - E4B remains the automatic fallback when the optional E2B asset is absent or
   its resident backend becomes unavailable.
 
+### Fixed
+
+- Installer validation no longer writes Python bytecode caches into the source
+  bundle and then causes its own public-release audit to reject that tree.
+
 ## [1.4.1-alpha.1] - 2026-08-25
 
 ### Added
