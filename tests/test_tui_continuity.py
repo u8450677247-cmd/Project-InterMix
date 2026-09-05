@@ -20,6 +20,76 @@ except ImportError:
 
 @unittest.skipIf(textual is None, "Textual is verified by the device installer")
 class WorkspaceLensTests(unittest.TestCase):
+    def test_foreground_generation_exposes_stop_and_recovers_composer(self):
+        with tempfile.TemporaryDirectory() as temp:
+            env = os.environ.copy()
+            env["HOME"] = temp
+            env["PYTHONPATH"] = os.pathsep.join(
+                [str(ENGINE), *[path for path in sys.path if path]]
+            )
+            driver = textwrap.dedent(
+                '''
+                import asyncio
+                import json
+                from unittest.mock import patch
+
+                from tui_app import IntermixTUI
+                from textual.widgets import Button, Input
+
+                async def run():
+                    stop = asyncio.Event()
+
+                    def request_stop():
+                        stop.set()
+                        return True
+
+                    async def fake_stream(prompt):
+                        yield "token", "A safe partial response. "
+                        await stop.wait()
+                        yield "generation_stopped", json.dumps({
+                            "reason": "user",
+                            "detail": "Stopped by the user before completion.",
+                            "incomplete": True,
+                        })
+
+                    app = IntermixTUI()
+                    with (
+                        patch("tui_app.stream_inference", new=fake_stream),
+                        patch("tui_app.cancel_active_operations", new=request_stop),
+                    ):
+                        async with app.run_test(size=(48, 32)) as pilot:
+                            composer = app.query_one("#input-box", Input)
+                            composer.value = "Start a long response"
+                            composer.focus()
+                            await pilot.press("enter")
+                            await pilot.pause()
+                            button = app.query_one("#voice-last", Button)
+                            assert app.busy
+                            assert str(button.label) == "STOP", button.label
+                            assert button.display and not button.disabled
+                            await pilot.click("#voice-last")
+                            for _ in range(50):
+                                await pilot.pause()
+                                if not app.busy:
+                                    break
+                            assert not app.busy
+                            assert not composer.disabled
+                            assert not app.voice_generation_complete
+                    print("generation-stop-recovery-ok")
+
+                asyncio.run(run())
+                '''
+            )
+            result = subprocess.run(
+                [sys.executable, "-c", driver],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=env,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("generation-stop-recovery-ok", result.stdout)
+
     def test_workspace_lens_opens_edits_and_saves(self):
         with tempfile.TemporaryDirectory() as temp:
             env = os.environ.copy()

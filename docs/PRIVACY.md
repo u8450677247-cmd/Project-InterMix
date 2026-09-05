@@ -50,6 +50,14 @@ Users can inspect and remove state:
 /memory sensitive off
 ```
 
+## Interrupted and corrupted generation
+
+STOP, `Ctrl+X`, a repetition-loop trigger, or a leaked model-control marker
+creates a controller-owned incomplete event. Text already streamed may remain
+visible in the current cockpit so the user can inspect what happened, but the
+partial model output is not stored as an assistant message, parsed as a memory
+proposal, executed as an agent action, or submitted to voice synthesis.
+
 ## Web grounding
 
 When a question is classified as time-sensitive, an optimized query and the

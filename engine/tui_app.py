@@ -96,6 +96,7 @@ SLASH_COMMANDS = [
     "/files",
     "/agent status",
     "/cancel",
+    "/generation status",
     "/brief ",
     "/deep ",
     "/create ",
@@ -175,6 +176,7 @@ PHASE_STYLES = {
     "streaming": ("STREAMING", "#67e8c2"),
     "verifying": ("VERIFYING", "#a970ff"),
     "fallback": ("FALLBACK", "#ffca6b"),
+    "stopping": ("STOPPING", "#ff6f91"),
 }
 
 IDLE_SECONDS = 60
@@ -929,7 +931,10 @@ class IntermixTUI(App):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "voice-last":
-            self._queue_completed_voice()
+            if self.busy:
+                self.action_cancel_operation()
+            else:
+                self._queue_completed_voice()
 
     async def _monitor_audio_bridge(self) -> None:
         while True:
@@ -943,6 +948,16 @@ class IntermixTUI(App):
     def _apply_audio_bridge_status(self, status: dict[str, Any]) -> None:
         button = self.query_one("#voice-last", Button)
         telemetry = self.query_one("#voice-telemetry", Static)
+        if self.busy:
+            telemetry.update(
+                "[bold #50fa7b]VOICE: ONLINE 🔊[/]"
+                if status["connected"]
+                else "[#6272a4]VOICE: OFFLINE 🔇[/]"
+            )
+            button.display = True
+            button.label = "STOP"
+            button.disabled = False
+            return
         button.display = bool(status["connected"])
         if not status["connected"]:
             telemetry.update("[#6272a4]VOICE: OFFLINE 🔇[/]")
@@ -1006,6 +1021,15 @@ class IntermixTUI(App):
         button.disabled = not bool(
             self.voice_generation_complete and self.voice_text and not self.busy
         )
+
+    def _set_generation_controls(self, active: bool) -> None:
+        button = self.query_one("#voice-last", Button)
+        if active:
+            button.display = True
+            button.label = "STOP"
+            button.disabled = False
+            return
+        self._tick_audio_bridge()
 
     async def _play_voice_request(self, request_id: str) -> None:
         try:
@@ -1175,7 +1199,9 @@ class IntermixTUI(App):
         )
         cancelled = cancel_active_operations() or voice_cancelled
         self.query_one("#activity", Static).update(
-            "Cancellation requested" if cancelled else "No cancellable command is active"
+            "Stopping current operation safely…"
+            if cancelled
+            else "No cancellable operation is active"
         )
 
     def _open_workspace_file(self, path: Path) -> None:
@@ -1448,8 +1474,25 @@ class IntermixTUI(App):
         self.phase_started = time.monotonic()
         self._set_phase("recalling", "Selecting durable context")
         input_widget.disabled = True
+        self._set_generation_controls(True)
+        self.run_worker(
+            self._run_inference_turn(user_text, ai_widget),
+            group="inference",
+            exclusive=True,
+            name="foreground-inference",
+        )
+
+    async def _run_inference_turn(
+        self,
+        user_text: str,
+        ai_widget: AssistantMessage,
+    ) -> None:
+        input_widget = self.query_one("#input-box", Input)
+        transcript = self.query_one("#transcript", VerticalScroll)
         accumulated = ""
         error_seen = False
+        incomplete = False
+        stop_detail = ""
         last_repaint = 0.0
         try:
             async for event_type, chunk in stream_inference(user_text):
@@ -1568,28 +1611,69 @@ class IntermixTUI(App):
                     scroll_needed = True
                 elif event_type == "next_step":
                     self._set_phase("generating", f"Agent repair step {chunk}")
+                elif event_type == "generation_stopped":
+                    incomplete = True
+                    try:
+                        stop = json.loads(chunk)
+                    except json.JSONDecodeError:
+                        stop = {"reason": "cancelled", "detail": chunk}
+                    stop_detail = str(
+                        stop.get("detail") or "Generation stopped before completion."
+                    )
+                    await transcript.mount(
+                        SystemPanel(
+                            "Generation stopped",
+                            stop_detail
+                            + "\nThe visible partial response was not written to memory.",
+                            warning=True,
+                        )
+                    )
+                    self._set_phase("stopping", stop_detail)
+                    scroll_needed = True
                 elif event_type == "error":
                     error_seen = True
                     await transcript.mount(SystemPanel("Inference guard", chunk, warning=True))
                     scroll_needed = True
                 if scroll_needed:
                     transcript.scroll_end(animate=False)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            error_seen = True
+            await transcript.mount(
+                SystemPanel(
+                    "Inference failure",
+                    f"{type(exc).__name__}: {exc}",
+                    warning=True,
+                )
+            )
         finally:
             final_text = accumulated or (
-                "No speculative response was generated."
-                if error_seen
-                else "The local engine returned no visible response."
+                "Generation stopped before a complete response was produced."
+                if incomplete
+                else (
+                    "No speculative response was generated."
+                    if error_seen
+                    else "The local engine returned no visible response."
+                )
             )
             await ai_widget.finalize(final_text)
-            self.voice_text = accumulated.strip() if accumulated.strip() and not error_seen else ""
+            self.voice_text = (
+                accumulated.strip()
+                if accumulated.strip() and not error_seen and not incomplete
+                else ""
+            )
             self.voice_generation_complete = bool(self.voice_text)
             self.busy = False
             self.phase_started = 0.0
             input_widget.disabled = False
             input_widget.focus()
-            self._set_phase("ready", "Local memory synchronized")
+            self._set_phase(
+                "ready",
+                "Generation stopped safely" if incomplete else "Local memory synchronized",
+            )
             self._refresh_telemetry()
-            self._tick_audio_bridge()
+            self._set_generation_controls(False)
             transcript.scroll_end(animate=False)
 
 

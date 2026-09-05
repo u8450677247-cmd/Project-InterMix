@@ -27,6 +27,7 @@ from agent import (
 )
 from claim_contracts import ClaimContract, classify_claim, extract_versions
 from freshness_policy import assess_freshness
+from generation_guard import GENERATION_RUNTIME, RepetitionWatchdog
 from idle_maintenance import cancel_idle_maintenance, maintenance_status
 from memory_protocol import HiddenMemoryFilter, apply_memory_payload, parse_memory_payload
 from memory_store import DEFAULT_DB, MemoryStore
@@ -166,9 +167,18 @@ def get_active_task_status() -> dict[str, Any] | None:
 
 
 def cancel_active_operations() -> bool:
-    cancelled = cancel_agent_tools()
+    generation_cancelled = GENERATION_RUNTIME.cancel(
+        "user",
+        "Stopped by the user before the response completed.",
+    )
+    resident_cancelled = RESIDENT_ENGINE.cancel_active("user")
+    cancelled = cancel_agent_tools() or generation_cancelled or resident_cancelled
     cancel_idle_maintenance()
     return cancelled
+
+
+def get_generation_status() -> dict[str, Any]:
+    return GENERATION_RUNTIME.status()
 
 
 def record_manual_workspace_event(event: dict[str, Any]) -> None:
@@ -375,6 +385,7 @@ def _phase(name: str, detail: str = "", **metrics: Any) -> str:
 async def _stream_pty_raw(
     prompt: str,
     model_role: str = REASONING_ROLE,
+    max_output_tokens: int | None = None,
 ) -> AsyncGenerator[tuple[str, str], None]:
     profile = ENGINE_PROFILES.get(model_role, ENGINE_PROFILES[REASONING_ROLE])
     if not os.path.exists(profile.model_path):
@@ -415,6 +426,8 @@ async def _stream_pty_raw(
     return_code = 0
     try:
         while True:
+            if GENERATION_RUNTIME.cancelled:
+                break
             readable, _, _ = select.select([master_fd], [], [], 0.05)
             if master_fd in readable:
                 try:
@@ -488,6 +501,7 @@ def _model_mode() -> str:
 async def _stream_raw_backend(
     prompt: str,
     model_role: str = REASONING_ROLE,
+    max_output_tokens: int | None = None,
 ) -> AsyncGenerator[tuple[str, str], None]:
     mode = _inference_mode()
     try_resident = mode in {"auto", "resident"} and RESIDENT_ENGINE.can_attempt(
@@ -501,6 +515,7 @@ async def _stream_raw_backend(
                 prompt,
                 force=mode == "resident",
                 profile=model_role,
+                max_output_tokens=max_output_tokens,
             ):
                 if event_type == "token":
                     resident_tokens = True
@@ -515,23 +530,43 @@ async def _stream_raw_backend(
                 reason=str(exc)[:240],
             )
 
-    async for event_type, payload in _stream_pty_raw(prompt, model_role):
+    async for event_type, payload in _stream_pty_raw(
+        prompt,
+        model_role,
+        max_output_tokens,
+    ):
         yield event_type, payload
 
 
 async def _stream_model(
     prompt: str,
     model_role: str = REASONING_ROLE,
+    max_output_tokens: int | None = None,
 ) -> AsyncGenerator[tuple[str, str], None]:
     """Hide the memory tail while streaming through either inference backend."""
     hidden_filter = HiddenMemoryFilter()
+    watchdog = RepetitionWatchdog()
     visible_parts: list[str] = []
     backend_metadata: dict[str, Any] = {"backend": "unknown", "return_code": 0}
+    stopped = False
     try:
-        async for event_type, payload in _stream_raw_backend(prompt, model_role):
+        async for event_type, payload in _stream_raw_backend(
+            prompt,
+            model_role,
+            max_output_tokens,
+        ):
+            if GENERATION_RUNTIME.cancelled:
+                stopped = True
+                break
             if event_type == "token":
                 visible = hidden_filter.feed(payload)
                 if visible:
+                    decision = watchdog.feed(visible)
+                    if decision.triggered:
+                        GENERATION_RUNTIME.cancel(decision.reason, decision.detail)
+                        RESIDENT_ENGINE.cancel_active(decision.reason)
+                        stopped = True
+                        break
                     visible_parts.append(visible)
                     yield "token", visible
             elif event_type == "_backend_meta":
@@ -544,12 +579,24 @@ async def _stream_model(
     except Exception as exc:
         backend_metadata["return_code"] = 1
         backend_metadata["error"] = f"{type(exc).__name__}: {exc}"
-        yield "error", f"{type(exc).__name__}: {exc}"
+        if not GENERATION_RUNTIME.cancelled:
+            yield "error", f"{type(exc).__name__}: {exc}"
+
+    stopped = stopped or GENERATION_RUNTIME.cancelled
 
     final = hidden_filter.finish()
-    if final.visible:
-        visible_parts.append(final.visible)
-        yield "token", final.visible
+    if final.visible and not stopped:
+        decision = watchdog.feed(final.visible)
+        if decision.triggered:
+            GENERATION_RUNTIME.cancel(decision.reason, decision.detail)
+            RESIDENT_ENGINE.cancel_active(decision.reason)
+            stopped = True
+        else:
+            visible_parts.append(final.visible)
+            yield "token", final.visible
+    if stopped:
+        backend_metadata["cancelled"] = True
+        backend_metadata["cancel_reason"] = GENERATION_RUNTIME.stop_payload()["reason"]
     metadata = {
         **backend_metadata,
         "model_role": backend_metadata.get("model_role", model_role),
@@ -573,7 +620,11 @@ async def _generate_librarian_handoff(
     )
     visible_parts: list[str] = []
     metadata: dict[str, Any] = {}
-    async for event_type, payload in _stream_model(prompt, LIBRARIAN_ROLE):
+    async for event_type, payload in _stream_model(
+        prompt,
+        LIBRARIAN_ROLE,
+        max_output_tokens=768,
+    ):
         if event_type == "token":
             visible_parts.append(payload)
         elif event_type == "_model_meta":
@@ -599,7 +650,21 @@ def _fallback_session_update(session_id: str, query: str) -> None:
         STORE.update_session(session_id, **updates)
 
 
-async def stream_inference(
+def _record_generation_stop(session_id: str) -> str:
+    payload = GENERATION_RUNTIME.stop_payload()
+    detail = str(payload.get("detail") or "Generation stopped before completion.")
+    STORE.append_message(
+        session_id,
+        "system",
+        detail,
+        speaker="Generation Guard",
+        source="generation_guard",
+        metadata={**payload, "quarantined_partial": True},
+    )
+    return json.dumps(payload, ensure_ascii=False)
+
+
+async def _stream_inference_turn(
     user_prompt: str,
     force_web: bool = False,
     force_agent: bool = False,
@@ -664,6 +729,9 @@ async def stream_inference(
             "controller_clock": numeric_ledger.clock,
         },
     )
+    if GENERATION_RUNTIME.cancelled:
+        yield "generation_stopped", _record_generation_stop(session_id)
+        return
     captured_events = capture_explicit_events(
         STORE,
         clean_query,
@@ -745,6 +813,9 @@ async def stream_inference(
         web_data, grounding_status = "", "skipped"
     else:
         web_data, grounding_status = await _ground(clean_query, web_mode, search_plan)
+    if GENERATION_RUNTIME.cancelled:
+        yield "generation_stopped", _record_generation_stop(session_id)
+        return
     search_seconds = time.monotonic() - search_started if grounding_needed else 0.0
     if search_plan is not None:
         execution = last_search_report() if grounding_status == "live" else {
@@ -765,6 +836,9 @@ async def stream_inference(
         except Exception:
             # Warm-up is an optimization; normal backend fallback remains authoritative.
             pass
+    if GENERATION_RUNTIME.cancelled:
+        yield "generation_stopped", _record_generation_stop(session_id)
+        return
     handoff_text = ""
     handoff_metadata: dict[str, Any] = {}
     librarian_handoff_succeeded = False
@@ -780,6 +854,9 @@ async def stream_inference(
             query=clean_query,
             web_data=web_data,
         )
+        if GENERATION_RUNTIME.cancelled:
+            yield "generation_stopped", _record_generation_stop(session_id)
+            return
         if handoff_text:
             librarian_handoff_succeeded = bool(
                 not handoff_metadata.get("error")
@@ -887,7 +964,11 @@ async def stream_inference(
         hold_for_grounding = bool(web_data)
         hold_output = hold_for_integrity or hold_for_grounding
         grounding_released = False
-        async for event_type, chunk in _stream_model(prompt.text, route.effective_role):
+        async for event_type, chunk in _stream_model(
+            prompt.text,
+            route.effective_role,
+            max_output_tokens=response_policy.output_reserve,
+        ):
             if event_type == "token":
                 visible_parts.append(chunk)
                 if agent_mode:
@@ -917,6 +998,10 @@ async def stream_inference(
                     model_metadata = {}
                 hidden = str(model_metadata.get("hidden", ""))
                 return_code = int(model_metadata.get("return_code", 0) or 0)
+
+        if GENERATION_RUNTIME.cancelled:
+            yield "generation_stopped", _record_generation_stop(session_id)
+            return
 
         visible = "".join(visible_parts).strip()
         numeric_repairs = 0
@@ -955,6 +1040,7 @@ async def stream_inference(
                 async for repair_type, repair_chunk in _stream_model(
                     repair_prompt,
                     REASONING_ROLE,
+                    max_output_tokens=min(1200, response_policy.output_reserve),
                 ):
                     if repair_type == "token":
                         repaired_parts.append(repair_chunk)
@@ -968,6 +1054,9 @@ async def stream_inference(
                         except json.JSONDecodeError:
                             repaired_metadata = {}
                         repaired_hidden = str(repaired_metadata.get("hidden", ""))
+                if GENERATION_RUNTIME.cancelled:
+                    yield "generation_stopped", _record_generation_stop(session_id)
+                    return
                 repaired = "".join(repaired_parts).strip()
                 repaired_check = numeric_ledger.validate(repaired)
                 if repaired_check.valid:
@@ -1004,6 +1093,7 @@ async def stream_inference(
             async for repair_type, repair_chunk in _stream_model(
                 fact_repair_prompt,
                 REASONING_ROLE,
+                max_output_tokens=min(640, response_policy.output_reserve),
             ):
                 if repair_type == "token":
                     repaired_parts.append(repair_chunk)
@@ -1016,6 +1106,9 @@ async def stream_inference(
                         repaired_metadata = json.loads(repair_chunk)
                     except json.JSONDecodeError:
                         repaired_metadata = {}
+            if GENERATION_RUNTIME.cancelled:
+                yield "generation_stopped", _record_generation_stop(session_id)
+                return
             repaired = "".join(repaired_parts).strip()
             if _grounded_answer_is_valid(repaired, web_data, verified_fact):
                 visible = repaired
@@ -1059,6 +1152,9 @@ async def stream_inference(
                 verified_detail,
             )
             for offset in range(0, len(visible), 256):
+                if GENERATION_RUNTIME.cancelled:
+                    yield "generation_stopped", _record_generation_stop(session_id)
+                    return
                 yield "token", visible[offset:offset + 256]
                 await asyncio.sleep(0)
 
@@ -1072,6 +1168,9 @@ async def stream_inference(
             yield "token", prefix + display_visible
 
         if display_visible:
+            if GENERATION_RUNTIME.cancelled:
+                yield "generation_stopped", _record_generation_stop(session_id)
+                return
             assistant_id = STORE.append_message(
                 session_id,
                 "assistant",
@@ -1129,6 +1228,9 @@ async def stream_inference(
             break
 
         feedback, events = await asyncio.to_thread(execute_agent_tools_detailed, visible)
+        if GENERATION_RUNTIME.cancelled:
+            yield "generation_stopped", _record_generation_stop(session_id)
+            return
         for event in events:
             STORE.record_project_event(
                 session_id=session_id,
@@ -1248,6 +1350,50 @@ async def stream_inference(
     yield "phase", _phase("ready", "Resident memory synchronized")
 
 
+async def stream_inference(
+    user_prompt: str,
+    force_web: bool = False,
+    force_agent: bool = False,
+    is_web: bool | None = None,
+    is_agent: bool | None = None,
+) -> AsyncGenerator[tuple[str, str], None]:
+    """Run one foreground turn with shared cancellation lifecycle state."""
+    GENERATION_RUNTIME.begin()
+    exhausted = False
+    stopped = False
+    try:
+        async for event_type, payload in _stream_inference_turn(
+            user_prompt,
+            force_web=force_web,
+            force_agent=force_agent,
+            is_web=is_web,
+            is_agent=is_agent,
+        ):
+            if event_type == "generation_stopped":
+                stopped = True
+            yield event_type, payload
+        exhausted = True
+    except asyncio.CancelledError:
+        GENERATION_RUNTIME.cancel(
+            "consumer_cancelled",
+            "The interface detached before generation completed.",
+        )
+        RESIDENT_ENGINE.cancel_active("consumer_cancelled")
+        raise
+    finally:
+        if not exhausted and not GENERATION_RUNTIME.cancelled:
+            GENERATION_RUNTIME.cancel(
+                "consumer_closed",
+                "The response consumer closed before generation completed.",
+            )
+        if GENERATION_RUNTIME.cancelled:
+            RESIDENT_ENGINE.cancel_active(
+                str(GENERATION_RUNTIME.stop_payload().get("reason") or "cancelled")
+            )
+            stopped = True
+        GENERATION_RUNTIME.finish("stopped" if stopped else "completed")
+
+
 def recent_transcript(limit: int = 40) -> list[dict[str, Any]]:
     session = STORE.get_active_session(create=True)
     assert session is not None
@@ -1276,7 +1422,13 @@ def local_command(command: str) -> dict[str, Any]:
         return {
             "handled": True,
             "action": "show",
-            "output": "Active workspace operation cancelled." if cancelled else "No cancellable workspace command is active.",
+            "output": "Active operation cancellation requested." if cancelled else "No cancellable operation is active.",
+        }
+    if lower == "/generation status":
+        return {
+            "handled": True,
+            "action": "show",
+            "output": json.dumps(get_generation_status(), indent=2, ensure_ascii=False),
         }
     if lower == "/model status":
         engine = get_engine_status()
@@ -1828,6 +1980,7 @@ __all__ = [
     "get_active_task_status",
     "get_agent_runtime_status",
     "get_engine_status",
+    "get_generation_status",
     "get_store",
     "local_command",
     "recent_transcript",

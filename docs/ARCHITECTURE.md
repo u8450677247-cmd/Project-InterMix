@@ -22,6 +22,7 @@ flowchart TD
 | Boundary | Model may propose | Controller owns |
 |---|---|---|
 | Visible answer | Natural-language draft | Hidden-protocol filtering, grounding validation, numeric checks, final display |
+| Stream integrity | Incremental token output | Output ceiling, explicit cancellation, exact repetition/control-token detection, incomplete-turn quarantine |
 | Memory | Versioned upsert/delete proposal | Schema validation, explicitness, sensitivity rules, provenance, conflict history |
 | Model handoff | Bounded E2B intent and memory proposal | Route selection, profile availability, unload-before-load, validation, E4B fallback |
 | Persona | Explicit communication preference | Changelog, bounded prompt injection, undo, no inferred diagnosis or immutable trait |
@@ -55,7 +56,7 @@ sequenceDiagram
         L-->>C: Untrusted brief plus validated memory proposal
     end
     C->>L: Budgeted prompt to selected profile
-    L-->>C: Token stream plus hidden memory proposal
+    L-->>C: Bounded token stream plus hidden memory proposal
     C->>C: Filter, verify, repair once, or fail closed
     C-->>U: Visible response and diagnostics
     C->>M: Store verified outcome and typed events
@@ -94,6 +95,22 @@ SQLite FTS5 supplies lexical retrieval without a second embedding model. This ke
 ## Inference lifecycle
 
 `resident_engine.py` creates the LiteRT-LM engine on one dedicated worker thread, not Textual's event loop. Each assembled prompt receives a fresh conversation object while the expensive engine remains reusable. The optional E2B librarian and required E4B reasoning model are profiles of this single manager: switching closes the current engine before constructing the next one.
+
+Every resident conversation receives the selected response policy's physical
+output ceiling. The Textual handler launches foreground inference as an async
+worker, leaving STOP and `Ctrl+X` responsive. Cancellation is cooperative at a
+native stream boundary: the consumer detaches promptly, the conversation closes
+on its owning worker thread, and an interrupted engine is discarded rather than
+reused. The PTY fallback terminates its subprocess on the same shared signal.
+
+`generation_guard.py` observes only visible streamed text. It stops exact runaway
+word/phrase cycles, three consecutive duplicated long blocks, leaked model
+control tokens, legacy visible memory-delta markers, and invalid control or
+replacement characters. It does not judge topic, style, opinion, or factual
+quality. A
+stopped partial remains visible in the current cockpit but is recorded only as a
+controller-owned incomplete event; it cannot become an assistant message, memory
+proposal, agent action, or voice request.
 
 The residency profile uses Android `MemAvailable`:
 
@@ -150,6 +167,8 @@ The paths are defaults, not public-source assumptions. They can be replaced thro
 ## Shutdown and recovery
 
 - The TUI shuts down the worker without blocking indefinitely.
+- Interrupted or mechanically corrupted generations are visibly marked and
+  quarantined from assistant memory and voice.
 - Conversation and mission state are committed before they are treated as complete.
 - Version activation uses an atomic symlink replacement.
 - `intermix-rollback` swaps code releases while leaving memory and provider data untouched.

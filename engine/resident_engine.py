@@ -70,8 +70,10 @@ class _InferenceRequest:
     loop: asyncio.AbstractEventLoop
     events: asyncio.Queue[tuple[str, str]]
     profile: EngineProfile | None = None
+    max_output_tokens: int | None = None
     request_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     cancelled: threading.Event = field(default_factory=threading.Event)
+    cancel_reason: str = ""
 
 
 @dataclass
@@ -194,6 +196,7 @@ class ResidentEngineManager:
         self._profile_failures: dict[str, int] = {}
         self._last_error = ""
         self._shutdown_requested = False
+        self._active_request: _InferenceRequest | None = None
 
     def _set_state(self, state: str) -> None:
         with self._state_lock:
@@ -214,6 +217,9 @@ class ResidentEngineManager:
                 "profile_failures": dict(self._profile_failures),
                 "last_error": self._last_error,
                 "active_profile": self._active_profile,
+                "active_request_id": (
+                    self._active_request.request_id if self._active_request else ""
+                ),
             }
         memory_mb = available_memory_mb()
         profile, effective_idle = self._residency_profile(memory_mb)
@@ -363,18 +369,25 @@ class ResidentEngineManager:
 
     def _handle_request(self, request: _InferenceRequest) -> None:
         request_started = time.perf_counter()
+        if request.cancelled.is_set():
+            return
         init_seconds = self._ensure_engine(request)
         if request.cancelled.is_set():
+            self._close_engine("cancelled")
             return
 
         self._set_state("generating")
         self._emit(request, "phase", _phase("generating", "Running local inference"))
         first_text_seconds: float | None = None
-        conversation = self._engine.create_conversation()
+        profile = request.profile or self.default_profile
+        conversation = self._create_conversation(
+            request.max_output_tokens,
+            profile.context_tokens,
+        )
         try:
             for chunk in conversation.send_message_async(request.prompt):
                 if request.cancelled.is_set():
-                    continue
+                    break
                 text = _extract_text(chunk)
                 if not text:
                     continue
@@ -394,6 +407,13 @@ class ResidentEngineManager:
             close = getattr(conversation, "close", None)
             if callable(close):
                 close()
+
+        if request.cancelled.is_set():
+            # LiteRT-LM's Python stream is cooperatively stopped at a chunk
+            # boundary. Recreate the engine after any interrupted conversation
+            # so no uncertain native conversation state is reused.
+            self._close_engine("cancelled")
+            return
 
         elapsed = time.perf_counter() - request_started
         with self._state_lock:
@@ -421,6 +441,24 @@ class ResidentEngineManager:
             ),
         )
         self._emit(request, "_done", "")
+
+    def _create_conversation(
+        self,
+        max_output_tokens: int | None,
+        context_tokens: int,
+    ) -> Any:
+        if max_output_tokens is None:
+            return self._engine.create_conversation()
+        limit = max(64, min(int(max_output_tokens), context_tokens))
+        try:
+            return self._engine.create_conversation(max_output_tokens=limit)
+        except TypeError as exc:
+            # Compatibility for older LiteRT-LM/fake engines which predate the
+            # keyword. Do not mask unrelated TypeErrors raised inside the API.
+            message = str(exc).casefold()
+            if "unexpected keyword" not in message and "takes no keyword" not in message:
+                raise
+            return self._engine.create_conversation()
 
     def _handle_warm(self, request: _WarmRequest) -> None:
         self._ensure_engine(request)
@@ -478,6 +516,8 @@ class ResidentEngineManager:
                 if isinstance(item, _WarmRequest):
                     self._handle_warm(item)
                 else:
+                    with self._state_lock:
+                        self._active_request = item
                     self._handle_request(item)
             except Exception as exc:
                 failed_profile = (item.profile or self.default_profile).name
@@ -494,9 +534,21 @@ class ResidentEngineManager:
                     pass
                 self._emit(item, "error", self._last_error)
                 self._emit(item, "_done", "")
+            finally:
+                if isinstance(item, _InferenceRequest):
+                    with self._state_lock:
+                        if self._active_request is item:
+                            self._active_request = None
+                        if self._state == "stopping":
+                            self._state = "hot" if self._engine is not None else "cold"
 
     async def stream(
-        self, prompt: str, *, force: bool = False, profile: str | None = None
+        self,
+        prompt: str,
+        *,
+        force: bool = False,
+        profile: str | None = None,
+        max_output_tokens: int | None = None,
     ) -> AsyncGenerator[tuple[str, str], None]:
         selected = self._resolve_profile(profile)
         if not self.can_attempt(force=force, profile=selected.name):
@@ -509,18 +561,29 @@ class ResidentEngineManager:
             loop=loop,
             events=events,
             profile=selected,
+            max_output_tokens=max_output_tokens,
         )
+        with self._state_lock:
+            self._active_request = request
         self._requests.put(request)
+        deadline = time.monotonic() + self.request_timeout
         try:
             while True:
-                try:
-                    event_type, payload = await asyncio.wait_for(
-                        events.get(), timeout=self.request_timeout
-                    )
-                except asyncio.TimeoutError as exc:
+                if request.cancelled.is_set():
+                    return
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    request.cancel_reason = "timeout"
+                    request.cancelled.set()
                     raise ResidentEngineError(
                         f"Resident inference exceeded {self.request_timeout} seconds"
-                    ) from exc
+                    )
+                try:
+                    event_type, payload = await asyncio.wait_for(
+                        events.get(), timeout=min(0.25, remaining)
+                    )
+                except asyncio.TimeoutError:
+                    continue
                 if event_type == "_done":
                     return
                 if event_type == "error":
@@ -528,6 +591,17 @@ class ResidentEngineManager:
                 yield event_type, payload
         finally:
             request.cancelled.set()
+
+    def cancel_active(self, reason: str = "user") -> bool:
+        """Request cooperative cancellation of the foreground native stream."""
+        with self._state_lock:
+            request = self._active_request
+            if request is None or request.cancelled.is_set():
+                return False
+            request.cancel_reason = reason or "user"
+            request.cancelled.set()
+            self._state = "stopping"
+            return True
 
     async def warm(self, profile: str | None = None) -> bool:
         """Load the engine without generating text when measured headroom is safe."""
