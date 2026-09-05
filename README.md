@@ -9,7 +9,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-39d5ff"></a>
   <a href="CHANGELOG.md"><img alt="Release: 1.4.1 alpha 1" src="https://img.shields.io/badge/release-1.4.1--alpha.1-a970ff"></a>
-  <a href=".github/workflows/tests.yml"><img alt="Tests: 75" src="https://img.shields.io/badge/tests-75%20deterministic-67e8c2"></a>
+  <a href=".github/workflows/tests.yml"><img alt="Tests: 85" src="https://img.shields.io/badge/tests-85%20deterministic-67e8c2"></a>
   <img alt="Status: developer preview" src="https://img.shields.io/badge/status-developer%20preview-ffca6b">
 </p>
 
@@ -26,6 +26,7 @@ This repository is a developer preview, not a polished Android application. The 
 - **Bounded autonomy:** the Core may read, write, and test inside one fixed workspace. Deletions require explicit review and hash revalidation.
 - **Resource awareness:** a resident LiteRT-LM engine is reused while memory permits, then unloaded under pressure or sustained inactivity.
 - **Optional dual-model routing:** a smaller E2B librarian can handle ordinary conversation and prepare bounded context for E4B reasoning while only one model stays resident.
+- **Recoverable generation:** the phone UI stays interactive during inference, exposes STOP, caps native output, and quarantines mechanically corrupted or interrupted replies before memory or voice.
 - **Readable terminal UX:** cyan/violet hierarchy, streamed plain text, final Markdown rendering, foldable diagnostics, compact mode, and a workspace lens.
 
 ## Verified reference profile
@@ -40,7 +41,7 @@ This repository is a developer preview, not a polished Android application. The 
 | Cold/idle available memory | Approximately 7.0–7.6 GiB in the owner's test environment |
 | Resident-hot available memory | Approximately 2.6–3.7 GiB in the owner's test environment |
 | Cooling used during long tests | Optional Black Shark Magnetic/FunCooler 6 Pro (BR62); approximately 25 °C owner-observed device temperature |
-| Test suite | 75 deterministic public-alpha checks across memory, routing, grounding, inference, workspace, release safety, and interface behavior |
+| Test suite | 85 deterministic public-alpha checks across memory, routing, grounding, cancellation, stream integrity, inference, workspace, release safety, and interface behavior |
 
 These are observations, not guarantees. Android memory pressure, other applications, firmware, drivers, ambient temperature, model build, and compiled caches can materially change the result.
 
@@ -134,6 +135,7 @@ Inside the cockpit:
 ```text
 /status
 /engine status
+/generation status
 /model status
 /persona status
 /web status
@@ -219,6 +221,8 @@ The language model proposes prose, memories, and workspace actions. Deterministi
 | `/files` | Open the collaborative workspace lens |
 | `/memory facts` | Inspect durable facts |
 | `/memory audit` | Review typed and sensitive-memory policy |
+| `/cancel` or `Ctrl+X` | Stop the foreground generation or active workspace operation |
+| `/generation status` | Inspect the latest foreground-generation lifecycle state |
 | `/sessions` | Reopen conversation sessions |
 | `/engine status` | Inspect cold/hot state and latency telemetry |
 | `/engine unload` | Release the resident model explicitly |

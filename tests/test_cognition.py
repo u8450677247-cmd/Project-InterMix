@@ -45,7 +45,11 @@ class NumericIntegrityTests(unittest.TestCase):
             store = MemoryStore(Path(temp.name) / "brain.db")
             calls = {"count": 0}
 
-            async def fake_stream(prompt: str, model_role: str = "reasoning"):
+            async def fake_stream(
+                prompt: str,
+                model_role: str = "reasoning",
+                max_output_tokens: int | None = None,
+            ):
                 calls["count"] += 1
                 if calls["count"] == 1:
                     answer = "The sequence is 1:1777 and 1+7+7+7+7=2222."

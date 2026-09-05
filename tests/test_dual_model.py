@@ -85,7 +85,11 @@ class ControllerHandoffTests(unittest.TestCase):
             store = MemoryStore(Path(temporary.name) / "memory.db")
             calls = []
 
-            async def fake_model(prompt: str, model_role: str = REASONING_ROLE):
+            async def fake_model(
+                prompt: str,
+                model_role: str = REASONING_ROLE,
+                max_output_tokens: int | None = None,
+            ):
                 calls.append((model_role, prompt))
                 if model_role == LIBRARIAN_ROLE:
                     visible = (

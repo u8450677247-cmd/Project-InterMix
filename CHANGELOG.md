@@ -21,6 +21,12 @@ may still change.
   `/web last plan` execution diagnostics.
 - Evidence-backed “Further path” prompts for non-exact questions about
   implementation, design rationale, trade-offs, and limitations.
+- A foreground STOP control, cooperative resident/PTY cancellation, hard native
+  output ceilings, and an automatic stream-corruption watchdog for repeated
+  words, duplicated blocks, leaked model control tokens, and legacy visible
+  memory-delta markers, and invalid stream characters.
+- Incomplete-turn quarantine: visible partial output remains on screen for
+  inspection but is excluded from assistant history, memory proposals, and voice.
 
 ### Preserved
 
