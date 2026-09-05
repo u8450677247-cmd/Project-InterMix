@@ -25,7 +25,7 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("compileSdk = 36", app_build)
         self.assertIn("targetSdk = 36", app_build)
         self.assertIn("minSdk = 31", app_build)
-        self.assertIn("compose-bom:2026.08.00", app_build)
+        self.assertIn("compose-bom:2026.03.01", app_build)
 
     def test_manifest_is_well_formed_and_requests_no_runtime_permission(self):
         manifest = APP / "src/main/AndroidManifest.xml"

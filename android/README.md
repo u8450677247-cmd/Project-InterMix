@@ -31,8 +31,9 @@ read the live Termux installation.
 | compile / target SDK | 36 (stable foundation baseline) |
 | minimum SDK | 31 |
 | built-in Kotlin | 2.3.10 |
-| Compose BOM | 2026.08.00 |
+| Compose BOM | 2026.03.01 (Compose 1.10.6) |
 
+Compose 1.10.6 is the newest stable line retained for the API 36 foundation.
 API 36 is the reproducible CI baseline while the Android 17 / API 37 platform
 package is absent from the hosted command-line SDK index. The APK remains a
 Pixel 10 Pro / Android 17 runtime reference build; raise the compile and target
