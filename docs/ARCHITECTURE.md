@@ -23,6 +23,7 @@ flowchart TD
 |---|---|---|
 | Visible answer | Natural-language draft | Hidden-protocol filtering, grounding validation, numeric checks, final display |
 | Stream integrity | Incremental token output | Output ceiling, explicit cancellation, exact repetition/control-token detection, incomplete-turn quarantine |
+| Composer | Multiline user draft | Explicit submission, preserved paragraph boundaries, seven-row viewport cap, post-send reset |
 | Memory | Versioned upsert/delete proposal | Schema validation, explicitness, sensitivity rules, provenance, conflict history |
 | Model handoff | Bounded E2B intent and memory proposal | Route selection, profile availability, unload-before-load, validation, E4B fallback |
 | Persona | Explicit communication preference | Changelog, bounded prompt injection, undo, no inferred diagnosis or immutable trait |

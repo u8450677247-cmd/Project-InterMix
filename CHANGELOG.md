@@ -27,6 +27,9 @@ may still change.
   memory-delta markers, and invalid stream characters.
 - Incomplete-turn quarantine: visible partial output remains on screen for
   inspection but is excluded from assistant history, memory proposals, and voice.
+- An auto-growing chat composer with multiline paste, preserved paragraph
+  spacing, `Enter` to send, `Shift+Enter` or `Ctrl+Enter` for a newline,
+  seven-row capping, internal scrolling, and post-send collapse.
 
 ### Preserved
 

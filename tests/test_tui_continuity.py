@@ -33,8 +33,8 @@ class WorkspaceLensTests(unittest.TestCase):
                 import json
                 from unittest.mock import patch
 
-                from tui_app import IntermixTUI
-                from textual.widgets import Button, Input
+                from tui_app import IntermixTUI, MessageComposer
+                from textual.widgets import Button
 
                 async def run():
                     stop = asyncio.Event()
@@ -58,8 +58,9 @@ class WorkspaceLensTests(unittest.TestCase):
                         patch("tui_app.cancel_active_operations", new=request_stop),
                     ):
                         async with app.run_test(size=(48, 32)) as pilot:
-                            composer = app.query_one("#input-box", Input)
-                            composer.value = "Start a long response"
+                            composer = app.query_one("#input-box", MessageComposer)
+                            composer.load_text("Start a long response")
+                            composer.cursor_location = composer.document.end
                             composer.focus()
                             await pilot.press("enter")
                             await pilot.pause()
@@ -89,6 +90,119 @@ class WorkspaceLensTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("generation-stop-recovery-ok", result.stdout)
+
+    def test_multiline_composer_preserves_paste_blank_lines_and_submission(self):
+        with tempfile.TemporaryDirectory() as temp:
+            env = os.environ.copy()
+            env["HOME"] = temp
+            env["PYTHONPATH"] = os.pathsep.join(
+                [str(ENGINE), *[path for path in sys.path if path]]
+            )
+            driver = textwrap.dedent(
+                '''
+                import asyncio
+                from unittest.mock import patch
+
+                from textual import events
+                from textual.containers import Horizontal
+                from tui_app import IntermixTUI, MessageComposer
+
+                async def run():
+                    captured = []
+
+                    async def fake_stream(prompt):
+                        captured.append(prompt)
+                        yield "token", "Accepted."
+
+                    app = IntermixTUI()
+                    with patch("tui_app.stream_inference", new=fake_stream):
+                        async with app.run_test(size=(91, 38)) as pilot:
+                            composer = app.query_one("#input-box", MessageComposer)
+                            composer.focus()
+                            await composer._on_paste(events.Paste("Line one\\n\\nLine three"))
+                            await pilot.pause()
+                            assert composer.text == "Line one\\n\\nLine three"
+                            await pilot.press("shift+enter")
+                            composer.insert("Line four", maintain_selection_offset=False)
+                            await pilot.pause()
+                            expected = "Line one\\n\\nLine three\\nLine four"
+                            assert composer.text == expected, repr(composer.text)
+                            assert app.query_one("#composer", Horizontal).outer_size.height >= 5
+                            await pilot.press("enter")
+                            for _ in range(50):
+                                await pilot.pause()
+                                if captured and not app.busy:
+                                    break
+                            assert captured == [expected], captured
+                            assert composer.text == ""
+                            await pilot.pause()
+                            assert app.query_one("#composer", Horizontal).outer_size.height == 3
+                    print("multiline-composer-submission-ok")
+
+                asyncio.run(run())
+                '''
+            )
+            result = subprocess.run(
+                [sys.executable, "-c", driver],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=env,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("multiline-composer-submission-ok", result.stdout)
+
+    def test_multiline_composer_caps_height_and_retains_slash_completion(self):
+        with tempfile.TemporaryDirectory() as temp:
+            env = os.environ.copy()
+            env["HOME"] = temp
+            env["PYTHONPATH"] = os.pathsep.join(
+                [str(ENGINE), *[path for path in sys.path if path]]
+            )
+            driver = textwrap.dedent(
+                '''
+                import asyncio
+
+                from textual.containers import Horizontal
+                from tui_app import IntermixTUI, MessageComposer
+
+                async def run():
+                    app = IntermixTUI()
+                    async with app.run_test(size=(91, 38)) as pilot:
+                        composer = app.query_one("#input-box", MessageComposer)
+                        composer.focus()
+                        composer.load_text("\\n".join(f"Line {number}" for number in range(10)))
+                        composer.cursor_location = composer.document.end
+                        await pilot.pause()
+                        await pilot.pause()
+                        assert app.query_one("#composer", Horizontal).outer_size.height == 8
+
+                        composer.load_text("/gen")
+                        composer.cursor_location = composer.document.end
+                        composer.update_suggestion()
+                        await pilot.pause()
+                        assert composer.suggestion == "eration status", composer.suggestion
+                        await pilot.press("right")
+                        assert composer.text == "/generation status", composer.text
+
+                        composer.load_text("One line")
+                        await pilot.pause()
+                        await pilot.pause()
+                        assert app.query_one("#composer", Horizontal).outer_size.height == 3
+                    print("multiline-composer-layout-ok")
+
+                asyncio.run(run())
+                '''
+            )
+            result = subprocess.run(
+                [sys.executable, "-c", driver],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=env,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("multiline-composer-layout-ok", result.stdout)
 
     def test_workspace_lens_opens_edits_and_saves(self):
         with tempfile.TemporaryDirectory() as temp:
