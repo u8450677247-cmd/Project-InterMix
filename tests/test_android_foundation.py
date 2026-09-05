@@ -22,8 +22,8 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn('version "2.3.10"', root_build)
         self.assertNotIn("org.jetbrains.kotlin.android", root_build + app_build)
         self.assertIn("gradle-9.4.1-bin.zip", wrapper)
-        self.assertIn("compileSdk = 37", app_build)
-        self.assertIn("targetSdk = 37", app_build)
+        self.assertIn("compileSdk = 36", app_build)
+        self.assertIn("targetSdk = 36", app_build)
         self.assertIn("minSdk = 31", app_build)
         self.assertIn("compose-bom:2026.08.00", app_build)
 
@@ -71,8 +71,8 @@ class AndroidFoundationTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn('"feature/anicloud-android-*"', workflow)
-        self.assertIn('sdkmanager "platforms;android-37"', workflow)
-        self.assertIn("--channel=3", workflow)
+        self.assertIn('sdkmanager "platforms;android-36"', workflow)
+        self.assertNotIn("--channel=3", workflow)
         self.assertIn("actions/upload-artifact@v4", workflow)
         self.assertIn("AniCloudAI-foundation-debug", workflow)
         self.assertIn("app-debug.apk", workflow)

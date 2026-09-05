@@ -28,10 +28,15 @@ read the live Termux installation.
 | Android Gradle Plugin | 9.2.1 |
 | Gradle | 9.4.1 |
 | JDK | 17 |
-| compile / target SDK | 37 |
+| compile / target SDK | 36 (stable foundation baseline) |
 | minimum SDK | 31 |
 | built-in Kotlin | 2.3.10 |
 | Compose BOM | 2026.08.00 |
+
+API 36 is the reproducible CI baseline while the Android 17 / API 37 platform
+package is absent from the hosted command-line SDK index. The APK remains a
+Pixel 10 Pro / Android 17 runtime reference build; raise the compile and target
+SDK together after API 37 is available to the headless build environment.
 
 The source includes `gradle-wrapper.properties`, but not the generated binary
 `gradle-wrapper.jar`. On the first trusted development machine, install the
