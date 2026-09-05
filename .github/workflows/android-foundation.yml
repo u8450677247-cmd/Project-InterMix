@@ -45,8 +45,18 @@ jobs:
         with:
           gradle-version: "9.4.1"
 
+      - name: Resolve Android command-line tools
+        shell: bash
+        run: |
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          sdkmanager_dir="$sdk_root/cmdline-tools/latest/bin"
+          test -x "$sdkmanager_dir/sdkmanager"
+          echo "$sdkmanager_dir" >> "$GITHUB_PATH"
+
       - name: Install Android API 37
-        run: sdkmanager "platforms;android-37" "build-tools;36.0.0"
+        run: |
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager "platforms;android-37" "build-tools;36.0.0"
 
       - name: Test and assemble the disconnected foundation
         run: >-
