@@ -38,20 +38,20 @@ private val SovereignDarkScheme = darkColorScheme(
 )
 
 private val SovereignLightScheme = lightColorScheme(
-    primary = Color(0xFF006879),
+    primary = Color(0xFF006A92),
     onPrimary = Color.White,
-    secondary = Color(0xFF6542A5),
+    secondary = Color(0xFF60449A),
     onSecondary = Color.White,
-    tertiary = Color(0xFF006B58),
-    background = Color(0xFFF5F9FF),
-    onBackground = Color(0xFF121820),
-    surface = Color(0xFFFFFFFF),
-    onSurface = Color(0xFF121820),
-    surfaceVariant = Color(0xFFE7EEF7),
-    onSurfaceVariant = Color(0xFF4E5C6B),
+    tertiary = Color(0xFF006C5C),
+    background = Color(0xFFEAF6FF),
+    onBackground = Color(0xFF0B2239),
+    surface = Color(0xFFF8FCFF),
+    onSurface = Color(0xFF0B2239),
+    surfaceVariant = Color(0xFFDCEEFF),
+    onSurfaceVariant = Color(0xFF405A72),
     error = Color(0xFFB3264A),
     onError = Color.White,
-    outline = Color(0xFF71808F),
+    outline = Color(0xFF7895AD),
 )
 
 @Composable

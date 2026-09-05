@@ -1,6 +1,14 @@
 package dev.anicloud.sovereign.prototype.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -14,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.matchParentSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -25,13 +34,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -43,17 +52,19 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -63,29 +74,52 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.anicloud.sovereign.prototype.AnswerMode
 import dev.anicloud.sovereign.prototype.AnswerModeSelection
 import dev.anicloud.sovereign.prototype.Appearance
+import dev.anicloud.sovereign.prototype.ChatMessage
+import dev.anicloud.sovereign.prototype.ChatSpeaker
+import dev.anicloud.sovereign.prototype.CockpitState
 import dev.anicloud.sovereign.prototype.ComposerMaxVisibleLines
 import dev.anicloud.sovereign.prototype.Destination
 import dev.anicloud.sovereign.prototype.FoundationLayout
 import dev.anicloud.sovereign.prototype.FoundationPreferenceStore
 import dev.anicloud.sovereign.prototype.LayoutPreference
+import dev.anicloud.sovereign.prototype.ModelStage
 import dev.anicloud.sovereign.prototype.RuntimePhase
+import dev.anicloud.sovereign.prototype.SovereignViewModel
+import dev.anicloud.sovereign.prototype.allowsAmbientMotion
 import dev.anicloud.sovereign.prototype.resolveFoundationLayout
-import kotlinx.coroutines.delay
+import dev.anicloud.sovereign.prototype.thermalStatusLabel
+import java.util.Locale
 
-private enum class Speaker { User, Core }
-
-private data class TranscriptMessage(
-    val id: Int,
-    val speaker: Speaker,
-    val text: String,
+private data class CockpitActions(
+    val onImportModel: () -> Unit,
+    val onRetryModel: () -> Unit,
+    val onSend: (String, AnswerMode) -> Unit,
+    val onStop: () -> Unit,
 )
 
 @Composable
-fun AniCloudApp(onLock: () -> Unit) {
+fun AniCloudApp(
+    onLock: () -> Unit,
+    sovereignViewModel: SovereignViewModel = viewModel(),
+) {
     val context = LocalContext.current
+    val cockpit by sovereignViewModel.state.collectAsStateWithLifecycle()
+    val modelPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let(sovereignViewModel::importModel)
+    }
+    val cockpitActions = CockpitActions(
+        onImportModel = {
+            modelPicker.launch(arrayOf("application/octet-stream", "*/*"))
+        },
+        onRetryModel = sovereignViewModel::retryModel,
+        onSend = sovereignViewModel::send,
+        onStop = sovereignViewModel::stopGeneration,
+    )
     val displayId = context.display?.displayId ?: 0
     val preferenceStore = remember(context.applicationContext) {
         FoundationPreferenceStore(context.applicationContext)
@@ -110,53 +144,59 @@ fun AniCloudApp(onLock: () -> Unit) {
 
     SovereignTheme(appearance) {
         Surface(
-            color = MaterialTheme.colorScheme.background,
+            color = Color.Transparent,
             modifier = Modifier
                 .fillMaxSize()
                 .windowInsetsPadding(WindowInsets.safeDrawing),
         ) {
-            if (layout == FoundationLayout.Desktop) {
-                DesktopShell(
-                    destination = destination,
-                    defaultMode = defaultMode,
-                    appearance = appearance,
-                    layoutPreference = layoutPreference,
-                    onDestination = { destinationName = it.name },
-                    onDefaultMode = {
-                        defaultModeName = it.name
-                        preferenceStore.setDefaultAnswerMode(it)
-                    },
-                    onAppearance = {
-                        appearanceName = it.name
-                        preferenceStore.setAppearance(it)
-                    },
-                    onLayoutPreference = {
-                        layoutName = it.name
-                        preferenceStore.setLayoutForDisplay(displayId, it)
-                    },
-                    onLock = onLock,
-                )
-            } else {
-                PhoneShell(
-                    destination = destination,
-                    defaultMode = defaultMode,
-                    appearance = appearance,
-                    layoutPreference = layoutPreference,
-                    onDestination = { destinationName = it.name },
-                    onDefaultMode = {
-                        defaultModeName = it.name
-                        preferenceStore.setDefaultAnswerMode(it)
-                    },
-                    onAppearance = {
-                        appearanceName = it.name
-                        preferenceStore.setAppearance(it)
-                    },
-                    onLayoutPreference = {
-                        layoutName = it.name
-                        preferenceStore.setLayoutForDisplay(displayId, it)
-                    },
-                    onLock = onLock,
-                )
+            LivingVoid(cockpit) {
+                if (layout == FoundationLayout.Desktop) {
+                    DesktopShell(
+                        destination = destination,
+                        defaultMode = defaultMode,
+                        appearance = appearance,
+                        layoutPreference = layoutPreference,
+                        cockpit = cockpit,
+                        cockpitActions = cockpitActions,
+                        onDestination = { destinationName = it.name },
+                        onDefaultMode = {
+                            defaultModeName = it.name
+                            preferenceStore.setDefaultAnswerMode(it)
+                        },
+                        onAppearance = {
+                            appearanceName = it.name
+                            preferenceStore.setAppearance(it)
+                        },
+                        onLayoutPreference = {
+                            layoutName = it.name
+                            preferenceStore.setLayoutForDisplay(displayId, it)
+                        },
+                        onLock = onLock,
+                    )
+                } else {
+                    PhoneShell(
+                        destination = destination,
+                        defaultMode = defaultMode,
+                        appearance = appearance,
+                        layoutPreference = layoutPreference,
+                        cockpit = cockpit,
+                        cockpitActions = cockpitActions,
+                        onDestination = { destinationName = it.name },
+                        onDefaultMode = {
+                            defaultModeName = it.name
+                            preferenceStore.setDefaultAnswerMode(it)
+                        },
+                        onAppearance = {
+                            appearanceName = it.name
+                            preferenceStore.setAppearance(it)
+                        },
+                        onLayoutPreference = {
+                            layoutName = it.name
+                            preferenceStore.setLayoutForDisplay(displayId, it)
+                        },
+                        onLock = onLock,
+                    )
+                }
             }
         }
     }
@@ -213,11 +253,51 @@ fun LockedSurface(
 }
 
 @Composable
+private fun LivingVoid(cockpit: CockpitState, content: @Composable () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+    ) {
+        if (allowsAmbientMotion(cockpit.thermalStatus, cockpit.stage)) {
+            val transition = rememberInfiniteTransition(label = "living-void")
+            val pulse by transition.animateFloat(
+                initialValue = 0.035f,
+                targetValue = 0.085f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(durationMillis = 9_000),
+                    repeatMode = RepeatMode.Reverse,
+                ),
+                label = "void-breath",
+            )
+            Canvas(Modifier.matchParentSize()) {
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            HorizonCyan.copy(alpha = pulse),
+                            CognitionViolet.copy(alpha = pulse * 0.35f),
+                            Color.Transparent,
+                        ),
+                        center = Offset(size.width * 0.62f, size.height * 0.42f),
+                        radius = size.minDimension * 0.58f,
+                    ),
+                    radius = size.minDimension * 0.58f,
+                    center = Offset(size.width * 0.62f, size.height * 0.42f),
+                )
+            }
+        }
+        content()
+    }
+}
+
+@Composable
 private fun PhoneShell(
     destination: Destination,
     defaultMode: AnswerMode,
     appearance: Appearance,
     layoutPreference: LayoutPreference,
+    cockpit: CockpitState,
+    cockpitActions: CockpitActions,
     onDestination: (Destination) -> Unit,
     onDefaultMode: (AnswerMode) -> Unit,
     onAppearance: (Appearance) -> Unit,
@@ -225,13 +305,15 @@ private fun PhoneShell(
     onLock: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
-        TopRail(destination = destination, onLock = onLock)
+        TopRail(destination = destination, cockpit = cockpit, onLock = onLock)
         Box(Modifier.weight(1f)) {
             DestinationContent(
                 destination = destination,
                 defaultMode = defaultMode,
                 appearance = appearance,
                 layoutPreference = layoutPreference,
+                cockpit = cockpit,
+                cockpitActions = cockpitActions,
                 onDestination = onDestination,
                 onDefaultMode = onDefaultMode,
                 onAppearance = onAppearance,
@@ -258,6 +340,8 @@ private fun DesktopShell(
     defaultMode: AnswerMode,
     appearance: Appearance,
     layoutPreference: LayoutPreference,
+    cockpit: CockpitState,
+    cockpitActions: CockpitActions,
     onDestination: (Destination) -> Unit,
     onDefaultMode: (AnswerMode) -> Unit,
     onAppearance: (Appearance) -> Unit,
@@ -267,9 +351,10 @@ private fun DesktopShell(
     Row(Modifier.fillMaxSize()) {
         NavigationPane(
             destination = destination,
+            cockpit = cockpit,
             onDestination = onDestination,
             onLock = onLock,
-            modifier = Modifier.width(224.dp),
+            modifier = Modifier.width(240.dp),
         )
         VerticalDivider(
             modifier = Modifier
@@ -287,6 +372,8 @@ private fun DesktopShell(
                 defaultMode = defaultMode,
                 appearance = appearance,
                 layoutPreference = layoutPreference,
+                cockpit = cockpit,
+                cockpitActions = cockpitActions,
                 onDestination = onDestination,
                 onDefaultMode = onDefaultMode,
                 onAppearance = onAppearance,
@@ -300,7 +387,7 @@ private fun DesktopShell(
                 .width(1.dp),
             color = MaterialTheme.colorScheme.outline,
         )
-        SystemLens(Modifier.width(304.dp))
+        SystemLens(cockpit = cockpit, modifier = Modifier.width(320.dp))
     }
 }
 
@@ -310,6 +397,8 @@ private fun DestinationContent(
     defaultMode: AnswerMode,
     appearance: Appearance,
     layoutPreference: LayoutPreference,
+    cockpit: CockpitState,
+    cockpitActions: CockpitActions,
     onDestination: (Destination) -> Unit,
     onDefaultMode: (AnswerMode) -> Unit,
     onAppearance: (Appearance) -> Unit,
@@ -321,6 +410,8 @@ private fun DestinationContent(
             defaultMode = defaultMode,
             appearance = appearance,
             layoutPreference = layoutPreference,
+            cockpit = cockpit,
+            cockpitActions = cockpitActions,
             onOpenChat = { onDestination(Destination.Chat) },
             onDefaultMode = onDefaultMode,
             onAppearance = onAppearance,
@@ -328,12 +419,18 @@ private fun DestinationContent(
             compact = compact,
         )
 
-        Destination.Chat -> ChatSurface(defaultMode = defaultMode)
+        Destination.Chat -> ChatSurface(
+            defaultMode = defaultMode,
+            cockpit = cockpit,
+            cockpitActions = cockpitActions,
+        )
         Destination.Agents -> AgentSurface()
         Destination.System -> SystemSurface(
             defaultMode = defaultMode,
             appearance = appearance,
             layoutPreference = layoutPreference,
+            cockpit = cockpit,
+            cockpitActions = cockpitActions,
             onDefaultMode = onDefaultMode,
             onAppearance = onAppearance,
             onLayoutPreference = onLayoutPreference,
@@ -342,7 +439,7 @@ private fun DestinationContent(
 }
 
 @Composable
-private fun TopRail(destination: Destination, onLock: () -> Unit) {
+private fun TopRail(destination: Destination, cockpit: CockpitState, onLock: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -354,10 +451,14 @@ private fun TopRail(destination: Destination, onLock: () -> Unit) {
         Text("◈", color = HorizonCyan, fontSize = 20.sp)
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
-            Text("ANICLOUDAI", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-            Text(destination.label.uppercase(), color = MutedText, fontSize = 10.sp)
+            Text("ANICLOUDAI", color = PrimaryText, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Text(destination.label.uppercase(), color = MutedText, fontSize = 12.sp)
         }
-        Text("● READY", color = ResonanceMint, fontSize = 11.sp)
+        Text(
+            "● ${cockpit.stage.label.uppercase()}",
+            color = modelVitalityColor(cockpit),
+            fontSize = 13.sp,
+        )
         TextButton(onClick = onLock) { Text("LOCK") }
     }
 }
@@ -365,6 +466,7 @@ private fun TopRail(destination: Destination, onLock: () -> Unit) {
 @Composable
 private fun NavigationPane(
     destination: Destination,
+    cockpit: CockpitState,
     onDestination: (Destination) -> Unit,
     onLock: () -> Unit,
     modifier: Modifier = Modifier,
@@ -377,7 +479,7 @@ private fun NavigationPane(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text("◈  ANICLOUDAI", color = HorizonCyan, fontWeight = FontWeight.Bold)
-        Text("SOVEREIGN CORE", color = SoftViolet, fontSize = 11.sp)
+        Text("SOVEREIGN CORE", color = SoftViolet, fontSize = 13.sp)
         Spacer(Modifier.height(24.dp))
         Destination.entries.forEach { item ->
             FilterChip(
@@ -388,7 +490,12 @@ private fun NavigationPane(
             )
         }
         Spacer(Modifier.weight(1f))
-        Text("FOUNDATION · NO MODEL LOADED", color = WaitingAmber, fontSize = 10.sp)
+        Text(
+            if (cockpit.model == null) "FOUNDATION · NO MODEL LOADED" else
+                "E4B · ${cockpit.backend?.name ?: cockpit.stage.label.uppercase()}",
+            color = modelVitalityColor(cockpit),
+            fontSize = 12.sp,
+        )
         OutlinedButton(onClick = onLock, modifier = Modifier.fillMaxWidth()) {
             Text("LOCK NOW")
         }
@@ -400,6 +507,8 @@ private fun HomeDashboard(
     defaultMode: AnswerMode,
     appearance: Appearance,
     layoutPreference: LayoutPreference,
+    cockpit: CockpitState,
+    cockpitActions: CockpitActions,
     onOpenChat: () -> Unit,
     onDefaultMode: (AnswerMode) -> Unit,
     onAppearance: (Appearance) -> Unit,
@@ -425,15 +534,16 @@ private fun HomeDashboard(
                 )
             }
         }
-        item { HealthStrip() }
+        item { HealthStrip(cockpit) }
         item {
             ResumeCard(onOpenChat = onOpenChat)
         }
         if (showChecklist) {
             item {
-                SetupChecklist(onDismiss = { showChecklist = false })
+                SetupChecklist(cockpit = cockpit, onDismiss = { showChecklist = false })
             }
         }
+        item { ModelControlCard(cockpit = cockpit, actions = cockpitActions) }
         item {
             QuickPreferences(
                 defaultMode = defaultMode,
@@ -452,21 +562,25 @@ private fun HomeDashboard(
                 modifier = Modifier.horizontalScroll(rememberScrollState()),
             ) {
                 ActionCard("VOICE", "Conversation shortcut", HorizonCyan)
-                ActionCard("AGENTS", "0 active · 1 paused", CognitionViolet)
-                ActionCard("MODELS", "Guided download pending", WaitingAmber)
+                ActionCard("AGENTS", "Foreground service pending", CognitionViolet)
+                ActionCard(
+                    "MODELS",
+                    cockpit.model?.displayName ?: "Local import ready",
+                    modelVitalityColor(cockpit),
+                )
             }
         }
         item {
             SectionTitle("Recent conversations")
             Spacer(Modifier.height(8.dp))
-            ConversationRow("Native Android foundation", "Just now · local prototype")
-            ConversationRow("Grounding quality review", "Paused · Termux history not imported")
+            ConversationRow("Current native session", "In memory · persistence adapter pending")
+            ConversationRow("Termux history", "Not imported")
         }
         item {
             StatusCard(
                 title = "Downloads & updates",
-                value = "No update channel connected",
-                detail = "Checks will remain quiet and appear only when a verified update exists.",
+                value = "Termux-assisted dogfood",
+                detail = "Manual signed-artifact flow · no background check or silent install.",
                 accent = WaitingAmber,
             )
         }
@@ -474,7 +588,7 @@ private fun HomeDashboard(
             Text(
                 if (compact) "PHONE LAYOUT · DISPLAY-SPECIFIC" else "DESKTOP LAYOUT · FIXED THREE-PANE",
                 color = MutedText,
-                fontSize = 10.sp,
+                fontSize = 12.sp,
                 fontFamily = FontFamily.Monospace,
             )
         }
@@ -482,30 +596,30 @@ private fun HomeDashboard(
 }
 
 @Composable
-private fun HealthStrip() {
+private fun HealthStrip(cockpit: CockpitState) {
     Row(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         modifier = Modifier.horizontalScroll(rememberScrollState()),
     ) {
         StatusCard(
             title = "Model",
-            value = "Disconnected",
-            detail = "UI foundation only",
-            accent = WaitingAmber,
+            value = cockpit.model?.displayName ?: "Disconnected",
+            detail = cockpit.detail,
+            accent = modelVitalityColor(cockpit),
             modifier = Modifier.width(190.dp),
         )
         StatusCard(
             title = "Memory",
-            value = "No user data",
-            detail = "Migration not run",
+            value = cockpit.availableMemoryBytes?.let(::formatBytes) ?: "Unavailable",
+            detail = "Android MemAvailable · measured now",
             accent = CognitionViolet,
             modifier = Modifier.width(190.dp),
         )
         StatusCard(
             title = "Thermal",
-            value = "Adapter pending",
-            detail = "No invented reading",
-            accent = ResonanceMint,
+            value = thermalStatusLabel(cockpit.thermalStatus),
+            detail = "Android thermal pressure · categorical",
+            accent = thermalVitalityColor(cockpit.thermalStatus),
             modifier = Modifier.width(190.dp),
         )
     }
@@ -515,7 +629,7 @@ private fun HealthStrip() {
 private fun ResumeCard(onOpenChat: () -> Unit) {
     Card(
         onClick = onOpenChat,
-        colors = CardDefaults.cardColors(containerColor = Smoked),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(1.dp, HorizonCyan.copy(alpha = 0.55f)),
     ) {
         Row(
@@ -523,10 +637,14 @@ private fun ResumeCard(onOpenChat: () -> Unit) {
             modifier = Modifier.padding(18.dp),
         ) {
             Column(Modifier.weight(1f)) {
-                Text("RESUME LAST CONVERSATION", color = HorizonCyan, fontSize = 11.sp)
+                Text("RESUME LAST CONVERSATION", color = HorizonCyan, fontSize = 13.sp)
                 Spacer(Modifier.height(6.dp))
-                Text("Native Android foundation", fontWeight = FontWeight.Bold)
-                Text("Draft and transcript remain local", color = MutedText, fontSize = 12.sp)
+                Text("Current native session", fontWeight = FontWeight.Bold)
+                Text(
+                    "In-memory only · durable history adapter pending",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 14.sp,
+                )
             }
             Text("OPEN  →", color = ResonanceMint, fontWeight = FontWeight.Bold)
         }
@@ -534,18 +652,109 @@ private fun ResumeCard(onOpenChat: () -> Unit) {
 }
 
 @Composable
-private fun SetupChecklist(onDismiss: () -> Unit) {
+private fun SetupChecklist(cockpit: CockpitState, onDismiss: () -> Unit) {
     OutlinedCard(border = BorderStroke(1.dp, CognitionViolet.copy(alpha = 0.55f))) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("PRIVATE DOGFOOD CHECKLIST", color = SoftViolet, fontSize = 11.sp)
+                Text("PRIVATE DOGFOOD CHECKLIST", color = SoftViolet, fontSize = 13.sp)
                 Spacer(Modifier.weight(1f))
                 TextButton(onClick = onDismiss) { Text("DISMISS") }
             }
-            Text("○ Verify model package and checksum")
+            Text(
+                if (cockpit.model == null) "○ Import model and record SHA-256" else
+                    "● Model fingerprint recorded: ${cockpit.model.sha256.take(12)}…",
+                color = if (cockpit.model == null) MaterialTheme.colorScheme.onSurface else ResonanceMint,
+            )
             Text("○ Import a reviewed Termux archive")
             Text("○ Run the synthetic integrity benchmark")
             Text("○ Enable voice only when requested")
+        }
+    }
+}
+
+@Composable
+private fun ModelControlCard(cockpit: CockpitState, actions: CockpitActions) {
+    val accent = modelVitalityColor(cockpit)
+    OutlinedCard(border = BorderStroke(1.dp, accent.copy(alpha = 0.6f))) {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(18.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text("LOCAL MODEL", color = accent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        cockpit.model?.displayName ?: "Connect Sovereign Core",
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(cockpit.detail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                }
+                Text(cockpit.stage.label.uppercase(), color = accent, fontSize = 12.sp)
+            }
+
+            if (cockpit.stage == ModelStage.Importing) {
+                val total = cockpit.importBytesTotal
+                if (total != null && total > 0) {
+                    val progress =
+                        (cockpit.importBytesCopied.toFloat() / total.toFloat()).coerceIn(0f, 1f)
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        color = HorizonCyan,
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    LinearProgressIndicator(
+                        color = HorizonCyan,
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                Text(
+                    if (total == null) formatBytes(cockpit.importBytesCopied) else
+                        "${formatBytes(cockpit.importBytesCopied)} / ${formatBytes(total)}",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                )
+            }
+
+            cockpit.model?.let { model ->
+                Text(
+                    "SHA-256  ${model.sha256}\nSIZE     ${formatBytes(model.byteSize)}\n" +
+                        "BACKEND  ${cockpit.backend?.name ?: "NOT ACTIVE"}",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                )
+            }
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+            ) {
+                OutlinedButton(
+                    onClick = actions.onImportModel,
+                    enabled = cockpit.stage !in setOf(
+                        ModelStage.Importing,
+                        ModelStage.Initializing,
+                        ModelStage.Generating,
+                        ModelStage.Recovering,
+                    ) && (cockpit.thermalStatus == null || cockpit.thermalStatus < 3),
+                ) {
+                    Text(if (cockpit.model == null) "CHOOSE .LITERTLM" else "CHOOSE DIFFERENT MODEL")
+                }
+                if (cockpit.stage == ModelStage.Error && cockpit.model != null) {
+                    Button(onClick = actions.onRetryModel) { Text("RETRY LOAD") }
+                }
+            }
+            Text(
+                "The picker grants one file only. AniCloudAI copies it into app-private, " +
+                    "no-backup storage; no broad storage permission is requested.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp,
+            )
         }
     }
 }
@@ -561,7 +770,7 @@ private fun QuickPreferences(
 ) {
     OutlinedCard {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("QUICK CONTROLS", color = HorizonCyan, fontSize = 11.sp)
+            Text("QUICK CONTROLS", color = HorizonCyan, fontSize = 13.sp)
             ChoiceRow("Default answer", AnswerMode.entries, defaultMode, { it.label }, onDefaultMode)
             ChoiceRow("Appearance", Appearance.entries, appearance, { it.label }, onAppearance)
             ChoiceRow("This display", LayoutPreference.entries, layoutPreference, { it.label }, onLayoutPreference)
@@ -578,7 +787,7 @@ private fun <T> ChoiceRow(
     onSelected: (T) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(title, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+        Text(title, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.horizontalScroll(rememberScrollState()),
@@ -595,60 +804,47 @@ private fun <T> ChoiceRow(
 }
 
 @Composable
-private fun ChatSurface(defaultMode: AnswerMode) {
-    val messages = remember {
-        mutableStateListOf(
-            TranscriptMessage(
-                id = 1,
-                speaker = Speaker.Core,
-                text = "Native foundation ready. No model, memory, or network adapter is connected yet.",
-            ),
-        )
-    }
+private fun ChatSurface(
+    defaultMode: AnswerMode,
+    cockpit: CockpitState,
+    cockpitActions: CockpitActions,
+) {
     var draft by rememberSaveable { mutableStateOf("") }
-    var streamText by remember { mutableStateOf("") }
-    var activePrompt by remember { mutableStateOf<String?>(null) }
-    var generationSerial by remember { mutableIntStateOf(0) }
-    var phase by remember { mutableStateOf(RuntimePhase.Ready) }
-    var phaseDetail by remember { mutableStateOf("Local UI ready") }
     var selection by remember(defaultMode) {
         mutableStateOf(AnswerModeSelection(defaultMode = defaultMode))
     }
-    var nextId by remember { mutableIntStateOf(2) }
-
-    LaunchedEffect(activePrompt, generationSerial) {
-        val prompt = activePrompt ?: return@LaunchedEffect
-        val mode = selection.modeForNextResponse()
-        val response = syntheticResponse(prompt, mode)
-        streamText = ""
-        response.split(' ').forEachIndexed { index, token ->
-            delay(34)
-            streamText += if (index == 0) token else " $token"
-        }
-        messages += TranscriptMessage(nextId++, Speaker.Core, streamText)
-        streamText = ""
-        activePrompt = null
-        selection = selection.afterResponse()
-        phase = RuntimePhase.Ready
-        phaseDetail = "Synthetic stream complete"
-    }
 
     Column(Modifier.fillMaxSize()) {
-        TruthThread(phase = phase, detail = phaseDetail, active = activePrompt != null)
+        TruthThread(
+            phase = runtimePhase(cockpit.stage),
+            detail = cockpit.detail,
+            active = cockpit.isGenerating,
+        )
         LazyColumn(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.weight(1f),
         ) {
-            items(messages, key = { it.id }) { message -> MessageBlock(message) }
-            if (streamText.isNotBlank()) {
-                item { StreamingBlock(streamText) }
+            if (cockpit.model == null || cockpit.stage == ModelStage.Error) {
+                item { ModelControlCard(cockpit = cockpit, actions = cockpitActions) }
+            }
+            items(cockpit.messages, key = { it.id }) { message -> MessageBlock(message) }
+            if (cockpit.streamText.isNotBlank()) {
+                item { StreamingBlock(cockpit.streamText) }
             }
         }
         Composer(
             draft = draft,
             selection = selection,
-            isGenerating = activePrompt != null,
+            canSend = cockpit.canSend,
+            isGenerating = cockpit.isGenerating,
+            blockedMessage = when {
+                cockpit.thermalStatus != null && cockpit.thermalStatus >= 3 ->
+                    "INFERENCE PAUSED BY ANDROID THERMAL SAFETY"
+                cockpit.model == null ->
+                    "IMPORT AND INITIALIZE A .LITERTLM MODEL TO ENABLE SEND"
+                else -> cockpit.detail.uppercase()
+            },
             onDraft = { draft = it },
             onMode = {
                 selection = selection.copy(
@@ -657,39 +853,16 @@ private fun ChatSurface(defaultMode: AnswerMode) {
             },
             onSend = {
                 val submitted = draft
-                if (submitted.isNotBlank() && activePrompt == null) {
-                    messages += TranscriptMessage(nextId++, Speaker.User, submitted)
+                if (submitted.isNotBlank() && cockpit.canSend) {
+                    val mode = selection.modeForNextResponse()
                     draft = ""
-                    generationSerial++
-                    activePrompt = submitted
-                    phase = RuntimePhase.Reasoning
-                    phaseDetail = "Synthetic stream · ${selection.modeForNextResponse().label}"
+                    selection = selection.afterResponse()
+                    cockpitActions.onSend(submitted, mode)
                 }
             },
-            onStop = {
-                if (streamText.isNotBlank()) {
-                    messages += TranscriptMessage(
-                        nextId++,
-                        Speaker.Core,
-                        "$streamText\n\n[Stopped by user; synthetic output was not committed.]",
-                    )
-                }
-                activePrompt = null
-                streamText = ""
-                selection = selection.afterResponse()
-                phase = RuntimePhase.Recovering
-                phaseDetail = "Stopped cleanly · partial output quarantined"
-            },
+            onStop = cockpitActions.onStop,
         )
     }
-}
-
-private fun syntheticResponse(prompt: String, mode: AnswerMode): String {
-    val lines = prompt.lines().size
-    return "Synthetic ${mode.label} response: the native composer preserved $lines input line" +
-        (if (lines == 1) "" else "s") +
-        ". This stream exercises rendering and STOP only; no language model, memory, web search, " +
-        "or factual claim pipeline has run."
 }
 
 @Composable
@@ -698,7 +871,7 @@ private fun TruthThread(phase: RuntimePhase, detail: String, active: Boolean) {
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .background(SmokedDeep)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
             .padding(horizontal = 16.dp, vertical = 10.dp),
     ) {
         val color = when (phase) {
@@ -707,37 +880,46 @@ private fun TruthThread(phase: RuntimePhase, detail: String, active: Boolean) {
             RuntimePhase.Grounding, RuntimePhase.Verifying -> HorizonCyan
             else -> CognitionViolet
         }
-        Text("● ${phase.label.uppercase()}", color = color, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Text("● ${phase.label.uppercase()}", color = color, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.width(12.dp))
         Text(
             detail,
-            color = MutedText,
-            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 13.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
-        if (active) Text("CANCELLABLE", color = WaitingAmber, fontSize = 10.sp)
+        if (active) Text("CANCELLABLE", color = WaitingAmber, fontSize = 12.sp)
     }
 }
 
 @Composable
-private fun MessageBlock(message: TranscriptMessage) {
-    val isUser = message.speaker == Speaker.User
-    val accent = if (isUser) CognitionViolet else HorizonCyan
+private fun MessageBlock(message: ChatMessage) {
+    val isUser = message.speaker == ChatSpeaker.User
+    val accent = when (message.speaker) {
+        ChatSpeaker.User -> CognitionViolet
+        ChatSpeaker.Core -> HorizonCyan
+        ChatSpeaker.System -> WaitingAmber
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .background(
-                if (isUser) CognitionViolet.copy(alpha = 0.08f) else Smoked,
+                if (isUser) MaterialTheme.colorScheme.secondary.copy(alpha = 0.08f) else
+                    MaterialTheme.colorScheme.surface,
                 RoundedCornerShape(4.dp),
             )
             .padding(start = 12.dp, top = 10.dp, end = 12.dp, bottom = 12.dp),
     ) {
         Text(
-            if (isUser) "YOU" else "SOVEREIGN CORE",
+            when (message.speaker) {
+                ChatSpeaker.User -> "YOU"
+                ChatSpeaker.Core -> "SOVEREIGN CORE"
+                ChatSpeaker.System -> "SYSTEM LENS"
+            },
             color = accent,
-            fontSize = 10.sp,
+            fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
         )
         Spacer(Modifier.height(6.dp))
@@ -747,20 +929,22 @@ private fun MessageBlock(message: TranscriptMessage) {
 
 @Composable
 private fun StreamingBlock(text: String) {
-    MessageBlock(TranscriptMessage(-1, Speaker.Core, "$text▌"))
+    MessageBlock(ChatMessage(-1, ChatSpeaker.Core, "$text▌"))
 }
 
 @Composable
 private fun Composer(
     draft: String,
     selection: AnswerModeSelection,
+    canSend: Boolean,
     isGenerating: Boolean,
+    blockedMessage: String,
     onDraft: (String) -> Unit,
     onMode: (AnswerMode) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
 ) {
-    Surface(color = SmokedDeep, tonalElevation = 3.dp) {
+    Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 3.dp) {
         Column(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.padding(12.dp),
@@ -770,7 +954,7 @@ private fun Composer(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.horizontalScroll(rememberScrollState()),
             ) {
-                Text("NEXT", color = MutedText, fontSize = 10.sp)
+                Text("NEXT", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
                 AnswerMode.entries.forEach { mode ->
                     FilterChip(
                         selected = selection.modeForNextResponse() == mode,
@@ -801,7 +985,7 @@ private fun Composer(
                 } else {
                     Button(
                         onClick = onSend,
-                        enabled = draft.isNotBlank(),
+                        enabled = draft.isNotBlank() && canSend,
                         modifier = Modifier.height(56.dp),
                     ) {
                         Text("SEND", fontWeight = FontWeight.Bold)
@@ -809,10 +993,14 @@ private fun Composer(
                 }
             }
             Text(
-                "RETURN NEWLINE · VISIBLE SEND ONLY · 1–7 LINES",
-                color = MutedText,
+                if (canSend || isGenerating) {
+                    "RETURN NEWLINE · VISIBLE SEND ONLY · 1–7 LINES"
+                } else {
+                    blockedMessage
+                },
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontFamily = FontFamily.Monospace,
-                fontSize = 9.sp,
+                fontSize = 11.sp,
             )
         }
     }
@@ -828,9 +1016,9 @@ private fun AgentSurface() {
         item { PageHeading("Agents", "Checkpointed work that never hides its state") }
         item {
             StatusCard(
-                "PAUSED AGENT",
-                "Android foundation audit",
-                "0 writes · no foreground service connected",
+                "DESIGN PLACEHOLDER",
+                "No agent runtime connected",
+                "0 writes · foreground service adapter pending",
                 CognitionViolet,
             )
         }
@@ -854,6 +1042,8 @@ private fun SystemSurface(
     defaultMode: AnswerMode,
     appearance: Appearance,
     layoutPreference: LayoutPreference,
+    cockpit: CockpitState,
+    cockpitActions: CockpitActions,
     onDefaultMode: (AnswerMode) -> Unit,
     onAppearance: (Appearance) -> Unit,
     onLayoutPreference: (LayoutPreference) -> Unit,
@@ -864,7 +1054,8 @@ private fun SystemSurface(
         modifier = Modifier.fillMaxSize(),
     ) {
         item { PageHeading("System Lens", "Measured truth, capability, and control") }
-        item { HealthStrip() }
+        item { HealthStrip(cockpit) }
+        item { ModelControlCard(cockpit = cockpit, actions = cockpitActions) }
         item {
             QuickPreferences(
                 defaultMode,
@@ -876,22 +1067,13 @@ private fun SystemSurface(
             )
         }
         item {
-            ContractCard(
-                "Privacy state",
-                listOf(
-                    "Authentication: Android biometric or device credential",
-                    "Ordinary history: app-private storage adapter pending",
-                    "Sanctuary: ciphertext vault adapter pending",
-                    "Diagnostics: local export only",
-                    "Screenshot privacy toggle: pending",
-                ),
-            )
+            PrivacyStateCard()
         }
     }
 }
 
 @Composable
-private fun SystemLens(modifier: Modifier = Modifier) {
+private fun SystemLens(cockpit: CockpitState, modifier: Modifier = Modifier) {
     Column(
         verticalArrangement = Arrangement.spacedBy(14.dp),
         modifier = modifier
@@ -899,23 +1081,114 @@ private fun SystemLens(modifier: Modifier = Modifier) {
             .background(SmokedDeep)
             .padding(16.dp),
     ) {
-        Text("SYSTEM LENS", color = HorizonCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-        LensValue("MODEL", "NOT CONNECTED", WaitingAmber)
-        LensValue("MEMORY", "NO USER DATA", CognitionViolet)
-        LensValue("THERMAL", "ADAPTER PENDING", ResonanceMint)
+        Text("SYSTEM LENS", color = HorizonCyan, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        LensValue(
+            "MODEL",
+            cockpit.model?.let { "E4B · ${cockpit.backend?.name ?: cockpit.stage.label.uppercase()}" }
+                ?: "NOT CONNECTED",
+            modelVitalityColor(cockpit),
+        )
+        LensValue(
+            "MEMORY",
+            cockpit.availableMemoryBytes?.let(::formatBytes)?.uppercase() ?: "UNAVAILABLE",
+            CognitionViolet,
+        )
+        LensValue(
+            "THERMAL",
+            thermalStatusLabel(cockpit.thermalStatus).uppercase(),
+            thermalVitalityColor(cockpit.thermalStatus),
+        )
+        ThermalSparkline(cockpit.thermalHistory, cockpit.thermalStatus)
+        LensValue(
+            "LAST RESPONSE",
+            cockpit.lastFirstTokenMillis?.let { ttft ->
+                "TTFT ${formatDuration(ttft)} · TOTAL " +
+                    (cockpit.lastResponseMillis?.let(::formatDuration) ?: "IN PROGRESS")
+            } ?: "NOT MEASURED",
+            if (cockpit.lastFirstTokenMillis == null) MutedText else HorizonCyan,
+        )
+        LensValue(
+            "MODEL LOAD",
+            cockpit.modelLoadMillis?.let(::formatDuration) ?: "NOT MEASURED",
+            if (cockpit.modelLoadMillis == null) MutedText else CognitionViolet,
+        )
         LensValue("GROUNDING", "OFFLINE", MutedText)
+        LensValue("ROUTE", cockpit.routeLabel.uppercase(), modelVitalityColor(cockpit))
         HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-        Text("Truthful placeholders replace invented telemetry in this foundation build.", color = MutedText, fontSize = 11.sp)
+        Text(
+            "Memory is Android MemAvailable. Thermal history contains categorical Android " +
+                "status events—not an invented temperature.",
+            color = MutedText,
+            fontSize = 13.sp,
+        )
         Spacer(Modifier.weight(1f))
-        Text("PIXEL 10 PRO REFERENCE\nOTHER DEVICES EXPERIMENTAL", color = SoftViolet, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+        Text("PIXEL 10 PRO REFERENCE\nOTHER DEVICES EXPERIMENTAL", color = SoftViolet, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
     }
 }
 
 @Composable
 private fun LensValue(label: String, value: String, color: Color) {
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Text(label, color = MutedText, fontSize = 9.sp)
-        Text(value, color = color, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+        Text(label, color = MutedText, fontSize = 11.sp)
+        Text(value, color = color, fontFamily = FontFamily.Monospace, fontSize = 14.sp)
+    }
+}
+
+@Composable
+private fun ThermalSparkline(history: List<Int>, current: Int?) {
+    val points = if (history.isEmpty()) current?.let(::listOf).orEmpty() else history
+    val color = thermalVitalityColor(current)
+    Canvas(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(38.dp),
+    ) {
+        drawLine(
+            color = MutedText.copy(alpha = 0.22f),
+            start = Offset(0f, size.height - 1f),
+            end = Offset(size.width, size.height - 1f),
+            strokeWidth = 1f,
+        )
+        if (points.isEmpty()) return@Canvas
+        val xStep = if (points.size == 1) 0f else size.width / (points.size - 1)
+        val path = Path()
+        var singlePoint = Offset.Zero
+        points.forEachIndexed { index, raw ->
+            val x = if (points.size == 1) size.width - 4f else index * xStep
+            val y = size.height - (raw.coerceIn(0, 6) / 6f * (size.height - 4f)) - 2f
+            singlePoint = Offset(x, y)
+            if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        if (points.size == 1) {
+            drawCircle(color = color, radius = 3.5f, center = singlePoint)
+        } else {
+            drawPath(path, color = color, style = Stroke(width = 2.2f, cap = StrokeCap.Round))
+        }
+    }
+}
+
+@Composable
+private fun PrivacyStateCard() {
+    val entries = listOf(
+        Triple("⌁", "Authentication", "Android biometric or device credential"),
+        Triple("▣", "Ordinary history", "App-private persistence adapter pending"),
+        Triple("◇", "Sanctuary", "Ciphertext vault adapter pending"),
+        Triple("↗", "Diagnostics", "Manual local export only"),
+        Triple("◉", "Screen privacy", "User-controlled concealment toggle pending"),
+    )
+    OutlinedCard {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("PRIVACY STATE", color = SoftViolet, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            entries.forEach { (glyph, title, detail) ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(glyph, color = CognitionViolet, fontSize = 18.sp, modifier = Modifier.width(28.dp))
+                    Column {
+                        Text(title, fontWeight = FontWeight.SemiBold)
+                        Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -929,9 +1202,9 @@ private fun StatusCard(
 ) {
     OutlinedCard(modifier = modifier, border = BorderStroke(1.dp, accent.copy(alpha = 0.45f))) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(title.uppercase(), color = accent, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+            Text(title.uppercase(), color = accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             Text(value, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+            Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
         }
     }
 }
@@ -953,7 +1226,7 @@ private fun ConversationRow(title: String, detail: String) {
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(title, fontWeight = FontWeight.Medium)
-            Text(detail, color = MutedText, fontSize = 11.sp)
+            Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
         }
         Text("→", color = HorizonCyan)
     }
@@ -963,7 +1236,7 @@ private fun ConversationRow(title: String, detail: String) {
 private fun ContractCard(title: String, lines: List<String>) {
     OutlinedCard {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(title.uppercase(), color = SoftViolet, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Text(title.uppercase(), color = SoftViolet, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             lines.forEach { Text("• $it", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
     }
@@ -979,7 +1252,7 @@ private fun PageHeading(title: String, detail: String) {
 
 @Composable
 private fun SectionTitle(title: String) {
-    Text(title.uppercase(), color = SoftViolet, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+    Text(title.uppercase(), color = SoftViolet, fontSize = 13.sp, fontWeight = FontWeight.Bold)
 }
 
 private fun destinationGlyph(destination: Destination): String = when (destination) {
@@ -987,6 +1260,48 @@ private fun destinationGlyph(destination: Destination): String = when (destinati
     Destination.Chat -> "◈"
     Destination.Agents -> "▸"
     Destination.System -> "◎"
+}
+
+private fun runtimePhase(stage: ModelStage): RuntimePhase = when (stage) {
+    ModelStage.Empty -> RuntimePhase.Offline
+    ModelStage.Importing -> RuntimePhase.Recalling
+    ModelStage.Initializing -> RuntimePhase.Verifying
+    ModelStage.Ready -> RuntimePhase.Ready
+    ModelStage.Generating -> RuntimePhase.Reasoning
+    ModelStage.Recovering -> RuntimePhase.Recovering
+    ModelStage.Error -> RuntimePhase.Degraded
+}
+
+private fun modelVitalityColor(cockpit: CockpitState): Color = when (cockpit.stage) {
+    ModelStage.Empty -> WaitingAmber
+    ModelStage.Importing, ModelStage.Initializing -> CognitionViolet
+    ModelStage.Ready -> ResonanceMint
+    ModelStage.Generating -> HorizonCyan
+    ModelStage.Recovering -> WaitingAmber
+    ModelStage.Error -> InterventionCoral
+}
+
+private fun thermalVitalityColor(status: Int?): Color = when {
+    status == null -> WaitingAmber
+    status < 2 -> ResonanceMint
+    status < 3 -> WaitingAmber
+    else -> InterventionCoral
+}
+
+private fun formatBytes(bytes: Long): String {
+    val gib = 1024.0 * 1024.0 * 1024.0
+    val mib = 1024.0 * 1024.0
+    return if (bytes >= gib) {
+        String.format(Locale.US, "%.2f GiB", bytes / gib)
+    } else {
+        String.format(Locale.US, "%.1f MiB", bytes / mib)
+    }
+}
+
+private fun formatDuration(millis: Long): String = if (millis < 1_000L) {
+    "$millis ms"
+} else {
+    String.format(Locale.US, "%.2f s", millis / 1_000.0)
 }
 
 private inline fun <reified T : Enum<T>> enumOrDefault(raw: String, fallback: T): T =

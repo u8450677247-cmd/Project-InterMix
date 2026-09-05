@@ -8,6 +8,7 @@ import org.junit.Test
 class FoundationContractTest {
     @Test
     fun automaticLayoutUsesTheDesktopThreshold() {
+        assertEquals(1200, DesktopThresholdDp)
         assertEquals(
             FoundationLayout.Phone,
             resolveFoundationLayout(DesktopThresholdDp - 1, LayoutPreference.Automatic),
@@ -49,5 +50,42 @@ class FoundationContractTest {
         grace.markBackgrounded(1_000)
         assertFalse(grace.needsAuthentication(31_000))
         assertTrue(grace.needsAuthentication(31_001))
+    }
+
+    @Test
+    fun repeatedTailIsQuarantinedButOrdinaryTextPasses() {
+        val repeated = "the the the the"
+        assertEquals(
+            "repetition-loop",
+            GenerationIntegrityGuard.inspectStreamingText(repeated)?.code,
+        )
+        assertEquals(
+            null,
+            GenerationIntegrityGuard.inspectStreamingText(
+                "The local model answered once, preserved its values, and stopped normally.",
+            ),
+        )
+    }
+
+    @Test
+    fun exactNumericAnchorsMustSurviveWhenExplicitlyRequested() {
+        val prompt = "Preserve every value exactly: 6800 tokens, 6.99 GiB, 0.52x, 814.8 MiB."
+        val valid = "Context 6800 tokens; memory 6.99 GiB; voice 0.52x; peak 814.8 MiB."
+        val drifted = "Context 6800 tokens; memory about 7 GiB; voice 0.52x."
+
+        assertTrue(GenerationIntegrityGuard.missingExactNumericAnchors(prompt, valid).isEmpty())
+        assertEquals(
+            listOf("6.99 gib", "814.8 mib"),
+            GenerationIntegrityGuard.missingExactNumericAnchors(prompt, drifted),
+        )
+    }
+
+    @Test
+    fun ambientMotionYieldsToInferenceAndThermalPressure() {
+        assertTrue(allowsAmbientMotion(status = 0, stage = ModelStage.Ready))
+        assertFalse(allowsAmbientMotion(status = 2, stage = ModelStage.Ready))
+        assertFalse(allowsAmbientMotion(status = 0, stage = ModelStage.Generating))
+        assertTrue(isSevereThermalStatus(3))
+        assertFalse(isSevereThermalStatus(2))
     }
 }

@@ -221,13 +221,61 @@ display.
 
 - **Phone:** conversation and dashboard first; tools and System Lens use sheets
   or full-height destinations.
-- **Desktop:** a polished fixed three-pane layout: navigation, primary workspace,
-  and System Lens. Resizable and detachable panes can follow after the fixed
+- **Desktop:** at Android's large-width breakpoint (`1200dp`), a polished fixed
+  three-pane layout: navigation, primary workspace, and System Lens. Windows
+  below that threshold keep System Lens as a destination instead of squeezing
+  the conversation. Resizable and detachable panes can follow after the fixed
   contract is stable.
 
 Large text, TalkBack, keyboard, touch, stylus, split screen, freeform windows,
 rotation, and reduced motion remain first-class. Sovereign Glass must fall back
 to fully opaque surfaces without losing controls or truth.
+
+### Private dogfood update channel
+
+During native development, Termux may act as the deliberate update console. It
+downloads only a successful GitHub Actions artifact from the configured branch,
+records its commit and SHA-256, signs it with one persistent Termux-private
+dogfood key, verifies the resulting APK, and opens Android's visible package
+installer only when requested. It cannot silently install or downgrade the app.
+
+The dogfood key never enters the repository, APK artifact, diagnostic export, or
+chat transcript. Losing that key ends seamless updates for that private install;
+the user must therefore make an intentional secure backup. Public releases use
+a separately governed release key and signed checksum manifest.
+
+### Deferred: Palette Lab guided generative theming
+
+Palette Lab is explicitly out of scope for the E4B cockpit milestone. AniCloudAI
+may later become a design-your-own local AI cockpit, but the model never
+receives unrestricted authority over executable UI code or live theme state.
+Preset appearances remain the zero-knowledge path: Sovereign Obsidian is the
+default, System follows Android, and Light uses a pale baby-blue workspace with
+dark navy writing and dark navigation anchors.
+
+Palette Lab is an optional advanced layer. A person describes an atmosphere in
+plain language or chooses a small vocabulary—mood, accent, surface character,
+contrast, density, and motion. The local model may propose only a versioned set
+of documented design tokens. Deterministic Android code then:
+
+1. clamps every token to an allowed type and range;
+2. tests text, control, focus, and state contrast at supported sizes;
+3. checks color-blind distinguishability and OLED legibility;
+4. preserves reduced-motion and thermal restrictions;
+5. locks semantic meanings for warning, failure, privacy, STOP, and destructive
+   confirmation; and
+6. renders a reversible preview with a token diff before explicit approval.
+
+An invalid proposal is rejected with a specific explanation and cannot partly
+apply. The user can return to a known preset in one action. Theme generation
+runs locally by default, never changes reasoning quality, and pauses with other
+nonessential visuals while inference or moderate thermal pressure is active.
+
+The ambient “living void” is similarly bounded: a slow, low-opacity pulse may
+make an idle cockpit feel present, but it stops during model import,
+initialization, inference, reduced motion, or moderate-or-higher thermal
+pressure. Thermal visuals represent Android's categorical thermal status and
+history; they never imply an unavailable temperature sensor reading.
 
 ## Community and feedback
 
@@ -254,3 +302,24 @@ The first native shell passes only when it can:
 Model inference, Room migration, the event bridge, foreground agents,
 Keystore-backed Sanctuary storage, grounding, voice, and release signing are
 subsequent gated adapters—not simulated capabilities in the foundation APK.
+
+## E4B cockpit adapter gate
+
+The first native-intelligence candidate passes only when it can:
+
+1. select exactly one `.litertlm` package through Android's file picker;
+2. copy and SHA-256 fingerprint it in app-private no-backup storage without a
+   broad storage permission;
+3. initialize the pinned LiteRT-LM runtime away from the UI thread, attempting
+   GPU first and reporting a measured CPU fallback;
+4. stream a real response while remaining responsive to resize and STOP;
+5. explicitly cancel native processing, discard the partial answer, and rebuild
+   conversation state before accepting a turn after STOP;
+6. quarantine repetition, invalid Unicode, runaway output, and missing exact
+   numeric anchors before they become a completed message;
+7. show actual Android `MemAvailable`, categorical thermal pressure, active
+   backend, route, and model fingerprint; and
+8. pass the exact-number and stop/recovery smoke tests on the Pixel 10 Pro.
+
+This gate does not imply native memory, grounding, E2B routing, voice, agent
+services, or NPU/TPU acceleration. Each requires its own measured adapter.

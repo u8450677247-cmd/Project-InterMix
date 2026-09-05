@@ -2,7 +2,10 @@ package dev.anicloud.sovereign.prototype
 
 const val ComposerMaxVisibleLines = 7
 const val AuthenticationGraceMillis = 30_000L
-const val DesktopThresholdDp = 840
+// The fixed desktop cockpit reserves 240 dp for navigation and 320 dp for
+// System Lens. It therefore activates at Android's large-window breakpoint,
+// not at the ordinary 840 dp expanded breakpoint where chat would be squeezed.
+const val DesktopThresholdDp = 1200
 
 enum class AnswerMode(val label: String, val description: String) {
     Performance("Performance", "Prefer the fast conversational model"),

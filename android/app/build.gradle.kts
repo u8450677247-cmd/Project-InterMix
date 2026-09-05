@@ -11,10 +11,16 @@ android {
         applicationId = "dev.anicloud.sovereign.prototype"
         minSdk = 31
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0-foundation"
+        versionCode = 2
+        versionName = "0.2.0-e4b-cockpit"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        ndk {
+            // The first native-intelligence build is a Pixel 10 Pro reference
+            // artifact. Keeping only arm64 avoids shipping unused desktop ABIs.
+            abiFilters += "arm64-v8a"
+        }
     }
 
     buildTypes {
@@ -57,7 +63,9 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.16.1")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")

@@ -9,8 +9,8 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.AniCloudAI">
 
-        <!-- Declared optional now so a later verified LiteRT-LM GPU adapter can
-             use vendor OpenCL without making either library an install gate. -->
+        <!-- LiteRT-LM requests these optional vendor libraries for its GPU
+             backend. Neither library is allowed to become an install gate. -->
         <uses-native-library
             android:name="libvndksupport.so"
             android:required="false" />

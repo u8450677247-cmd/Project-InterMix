@@ -2,10 +2,11 @@
 
 The implementation-facing product decisions are frozen in the
 [AniCloudAI Android product contract](ANDROID_PRODUCT_CONTRACT.md). The initial
-`android/` module is a deliberately disconnected native shell: it proves
-responsive composition, authentication, multiline input, synthetic streaming,
-STOP, and truthful unavailable states before private data or the model runtime
-can cross the boundary.
+`android/` module began as a deliberately disconnected native shell. That shell
+has now passed its first Pixel test. The current candidate adds one-file model
+import, SHA-256 fingerprinting, a pinned LiteRT-LM E4B runtime, guarded native
+streaming, measured GPU-to-CPU fallback, and explicit STOP recovery. Memory,
+grounding, voice, Termux synchronization, agents, and E2B remain disconnected.
 
 ## Verdict
 
@@ -46,19 +47,22 @@ assemble entirely on the phone.
 
 ### Milestone 1 — native shell, then known GPU backend
 
-- Kotlin + Jetpack Compose responsive UI. **Foundation scaffold present.**
-- LiteRT-LM Android Maven dependency and asynchronous token flow.
-- Foreground, user-visible inference lifecycle with cancellation.
+- Kotlin + Jetpack Compose responsive UI. **Foundation device test passed.**
+- Pinned LiteRT-LM Android dependency and asynchronous token flow.
+  **E4B candidate implemented; Pixel compile/runtime evidence pending.**
+- Foreground, user-visible inference lifecycle with native cancellation and
+  conversation-state reset after STOP. **Candidate implemented.**
 - Existing SQLite schema migration or reviewed export/import.
 - Storage Access Framework workspace selected by the user.
 - Android Keystore-backed provider vault.
 - User-selected external model file; no multi-gigabyte model inside the base APK.
 - Backend telemetry matching the Termux cold/warm measurements.
 
-This milestone should reproduce behavior before redesigning memory or autonomy.
-The committed foundation does not claim model, database, network, thermal, or
-voice integration; those signals are visibly disconnected until their adapters
-are measured.
+This milestone reproduces known behavior before redesigning memory or autonomy.
+The E4B candidate reports Android `MemAvailable`, categorical thermal pressure,
+model hash, backend, model-load time, first-token latency, and total latency. It
+does not claim database, network-grounding, voice, or E2B integration; those
+signals stay visibly disconnected until their adapters are measured.
 
 ### Milestone 2 — native Android integration
 
@@ -104,7 +108,8 @@ official LiteRT-LM and Google Tensor SDK toolchain.
 
 | Gate | Go condition |
 |---|---|
-| Native UI | Responsive prototype streams fake tokens without frame stalls |
+| Native UI | Responsive prototype renders and authenticates on the Pixel 10 Pro |
+| E4B adapter | Verified file imports, native output streams, STOP resets state, and integrity fixtures pass |
 | GPU parity | Same model produces equivalent guarded responses and survives restart |
 | Memory migration | Synthetic and copied-user exports round-trip without silent loss |
 | Workspace | SAF scope and deletion review pass instrumentation tests |

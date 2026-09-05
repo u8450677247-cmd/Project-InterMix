@@ -43,6 +43,12 @@ Color is never the only state carrier. Every state also receives a stable icon
 and text label. Contrast must be tested against the actual composited surface,
 including any wallpaper or content visible behind a translucent layer.
 
+Light mode is a deliberate counterpart rather than an inverted afterthought.
+Its workspace uses pale baby blue (`#EAF6FF`), near-white blue surfaces
+(`#F8FCFF`), deep navy writing (`#0B2239`), and dark navigation anchors.
+Interactive cyan, violet, mint, amber, and coral roles receive darker
+light-surface variants where required for contrast.
+
 ## Material and depth
 
 - The conversation canvas remains nearly opaque and visually quiet.
@@ -73,11 +79,29 @@ including any wallpaper or content visible behind a translucent layer.
 | Conversation stream | Full-height reading surface with restrained speaker accents and preserved Markdown structure |
 | Sovereign Composer | Grows from one to seven visible lines, scrolls after the cap, supports multiline paste, and exposes an immediate STOP state during generation |
 | Truth Thread | Compact phase strip for recalling, grounding, reasoning, verifying, degradation, and recovery; expands into evidence details |
-| System Lens | Bottom sheet on compact windows and side rail on expanded windows for runtime, memory, providers, thermals, and model state |
+| System Lens | Full-height destination below large width and a side rail in the large desktop cockpit for runtime, memory, providers, thermals, and model state |
 | Memory Matrix | Searchable, provenance-aware view with review, correction, expiry, and conflict controls |
 | Model Handoff | Inspectable E2B/E4B route, handoff reason, resident model, and fallback outcome without exposing internal chain-of-thought |
 | Sanctuary Gate | Biometric entry surface backed by Android Keystore; sensitive content is concealed in recents when the user enables that policy |
 | Workspace Lens | User-scoped document tree with explicit write state and destructive-action review |
+
+### Expanded cockpit hierarchy
+
+The aspirational desktop composition uses the fixed three-pane frame without
+turning every sentence into a dashboard tile:
+
+1. the left rail owns destinations and the explicit lock action;
+2. the center owns the operator request, optional bounded model-handoff brief,
+   model response, and composer;
+3. the right System Lens owns measured model, backend, memory, thermal,
+   latency, grounding, privacy, and persona state; and
+4. the top route strip names only the route currently proven by the controller.
+
+An E2B handoff card is absent—not merely dimmed—until an E2B package has been
+installed and measured. Tokens per second, temperature, grounding verification,
+vault status, and model residency never appear as decorative sample values in a
+runtime build. A design mockup may label illustrative values as `DEMO`, but the
+APK uses unavailable, offline, or not installed until real adapters report them.
 
 ## Runtime states
 
@@ -104,9 +128,14 @@ Layout follows measured window classes, not keyboard or desktop-mode guesses.
 
 | Window | Primary layout |
 |---|---|
-| Compact | Conversation first; System Lens, Memory Matrix, and tools open as full-height or modal bottom sheets |
-| Medium | Conversation plus an optional resizable contextual pane |
-| Expanded | Cockpit layout with persistent navigation or telemetry rail when the user leaves it enabled |
+| Compact, `<600dp` | Conversation first; System Lens, Memory Matrix, and tools open as full-height destinations or modal sheets |
+| Medium, `600–839dp` | Conversation first; a contextual pane may be added after the one-pane contract is stable |
+| Expanded, `840–1199dp` | Spacious one-pane workspace with persistent semantic navigation; no crushed three-pane cockpit |
+| Large, `≥1200dp` | Fixed three-pane cockpit with navigation, primary workspace, and measured System Lens |
+
+The E4B candidate implements the one-pane and large three-pane states. Automatic
+mode recomputes from the current app window while it is resized; it does not use
+the physical device name or full display resolution as a proxy.
 
 Rotation, split-screen, freeform desktop windows, display scaling, physical
 keyboards, and software keyboards must preserve the draft, transcript position,
@@ -121,7 +150,26 @@ the same semantic navigation destinations.
   distinct, user-disableable haptics.
 - Reduced-motion disables decorative interpolation and retains direct state
   changes.
-- There is no perpetual ambient animation while the app is idle.
+- An optional “living void” may breathe through one very slow, low-opacity
+  gradient while the cockpit is cool and idle. It stops during import,
+  initialization, inference, reduced motion, and moderate-or-higher Android
+  thermal pressure. It never represents model activity or progress.
+
+## Deferred concept: guided generative theming
+
+Palette Lab is not part of the E4B cockpit build. A later milestone may let
+Sovereign Core translate plain-language atmosphere into a
+custom cockpit, while deterministic code retains final authority. The simple
+path always starts from the three reviewed presets. The advanced path exposes
+only documented tokens for color, surface character, contrast, density, and
+motion—never arbitrary Compose code.
+
+Every generated proposal is schema-checked, clamped, contrast-tested, checked
+for color-blind distinguishability, and rendered as a reversible preview.
+Warning, failure, privacy, STOP, and destructive-confirmation meanings are
+locked. Applying a valid proposal requires explicit approval; rejection is
+atomic and reports the failed checks. One action always restores a reviewed
+preset.
 
 ## Thermal and resource policy
 
@@ -173,13 +221,14 @@ permit it; **Opaque** remains a first-class appearance rather than an error mode
 
 The design is implemented only when a prototype can:
 
-1. stream synthetic tokens while keeping scrolling, resize, and STOP responsive;
+1. stream native model output while keeping scrolling, resize, and STOP responsive;
 2. preserve a seven-line draft through rotation and compact/expanded transitions;
 3. expose every System Lens value from a compact phone window;
 4. render every runtime state with text, icon, and accessible semantics;
 5. pass contrast, large-text, TalkBack, reduced-motion, and opaque-mode checks;
 6. survive process recreation without inventing request or memory state; and
-7. show an honest GPU/CPU/NPU and E2B/E4B route based on measured runtime data.
+7. show an honest GPU/CPU and E2B/E4B route based on measured runtime data,
+   while leaving NPU unavailable until a supported runtime proves it.
 
 This contract deliberately anchors behavior before high-fidelity decoration.
 Reference mockups may evolve, but they may not hide truth, privacy, cancellation,
