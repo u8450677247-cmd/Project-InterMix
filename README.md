@@ -9,7 +9,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-39d5ff"></a>
   <a href="CHANGELOG.md"><img alt="Release: 1.4.1 alpha 1" src="https://img.shields.io/badge/release-1.4.1--alpha.1-a970ff"></a>
-  <a href=".github/workflows/tests.yml"><img alt="Tests: 71" src="https://img.shields.io/badge/tests-71%20deterministic-67e8c2"></a>
+  <a href=".github/workflows/tests.yml"><img alt="Tests: 75" src="https://img.shields.io/badge/tests-75%20deterministic-67e8c2"></a>
   <img alt="Status: developer preview" src="https://img.shields.io/badge/status-developer%20preview-ffca6b">
 </p>
 
@@ -22,6 +22,7 @@ This repository is a developer preview, not a polished Android application. The 
 - **Local sovereignty:** conversations, memory, model execution, and workspace files remain on the device by default.
 - **Virtual continuity:** SQLite FTS5 recall, typed events, summaries, and a separate mission ledger survive restarts and fresh sessions.
 - **Truth before fluency:** volatile questions can trigger web research; weak evidence produces an error or limitation instead of a confident invention.
+- **Adaptive grounding:** difficult lookups use one controller-planned primary query and, only when needed, one bounded parallel follow-up round for corroboration, implementation detail, and limitations.
 - **Bounded autonomy:** the Core may read, write, and test inside one fixed workspace. Deletions require explicit review and hash revalidation.
 - **Resource awareness:** a resident LiteRT-LM engine is reused while memory permits, then unloaded under pressure or sustained inactivity.
 - **Optional dual-model routing:** a smaller E2B librarian can handle ordinary conversation and prepare bounded context for E4B reasoning while only one model stays resident.
@@ -39,7 +40,7 @@ This repository is a developer preview, not a polished Android application. The 
 | Cold/idle available memory | Approximately 7.0–7.6 GiB in the owner's test environment |
 | Resident-hot available memory | Approximately 2.6–3.7 GiB in the owner's test environment |
 | Cooling used during long tests | Optional Black Shark Magnetic/FunCooler 6 Pro (BR62); approximately 25 °C owner-observed device temperature |
-| Test suite | 71 deterministic public-alpha checks across memory, routing, grounding, inference, workspace, release safety, and interface behavior |
+| Test suite | 75 deterministic public-alpha checks across memory, routing, grounding, inference, workspace, release safety, and interface behavior |
 
 These are observations, not guarantees. Android memory pressure, other applications, firmware, drivers, ambient temperature, model build, and compiled caches can materially change the result.
 
@@ -158,7 +159,9 @@ intermix-providers
 
 Keys are stored only in `~/.config/intermix/providers.env` with mode `600`, are allowlisted controller-side, and are never shown in provider status, placed in SQLite, or passed to the model. Do not paste keys into chat, issues, screenshots, or logs.
 
-Grounding uses query classification and a bounded provider wave. Official resolvers and authoritative registries are preferred for exact claims; optional search APIs expand coverage; DuckDuckGo is a cooled fallback. Captcha, proxy rotation, IP hopping, and rate-limit evasion are deliberately out of scope.
+Grounding uses query classification and a bounded provider wave. The controller derives at most three anchored query wordings from the user's request. It tries the primary wording first and launches one parallel follow-up round only when the evidence is missing or lacks independent corroboration. Official resolvers and authoritative registries are preferred for exact claims; optional search APIs expand coverage; DuckDuckGo is a cooled fallback. Captcha, proxy rotation, IP hopping, and rate-limit evasion are deliberately out of scope.
+
+Inspect the deterministic plan before searching with `/web plan …`, and inspect the most recent execution budget with `/web last plan`. Non-exact grounded answers may offer a short evidence-backed “Further path” about implementation, design rationale, trade-offs, or limitations; that section is omitted when sources do not support it.
 
 See [provider policy](docs/PROVIDERS.md).
 
@@ -210,6 +213,7 @@ The language model proposes prose, memories, and workspace actions. Deterministi
 |---|---|
 | `/web …` | Force a grounded answer or visible failure |
 | `/web plan …` | Inspect grounding intent without inference |
+| `/web last plan` | Inspect executed queries, request budget, sources, and follow-up activation |
 | `/workspace …` | Start/resume a durable bounded mission |
 | `/create …` | Allocate the long-form creation budget |
 | `/files` | Open the collaborative workspace lens |

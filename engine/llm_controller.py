@@ -50,6 +50,7 @@ from resident_engine import ENGINE_PROFILES, LIBRARIAN_PROFILE, RESIDENT_ENGINE,
 from research_scout import research_findings, research_status
 from runtime_config import CONFIG, PUBLIC_RELEASE
 from sanctuary import request_sanctuary, sanctuary_status
+from search_planner import SearchQueryPlan, build_search_query_plan
 from second_brain import capture_explicit_events, memory_audit
 from task_ledger import (
     activate_task,
@@ -67,6 +68,7 @@ from task_ledger import (
 from web_search import (
     evidence_source_ids,
     extract_verified_fact,
+    last_search_report,
     provider_status,
     search_web,
     validate_web_evidence,
@@ -286,7 +288,11 @@ def _verified_fact_fallback(fact: dict[str, Any]) -> str:
     )
 
 
-async def _ground(query: str, forced: bool) -> tuple[str, str]:
+async def _ground(
+    query: str,
+    forced: bool,
+    query_plan: SearchQueryPlan | None = None,
+) -> tuple[str, str]:
     if not should_ground(query, forced):
         return "", "skipped"
     claim = classify_claim(query)
@@ -298,16 +304,23 @@ async def _ground(query: str, forced: bool) -> tuple[str, str]:
         if validate_web_evidence(query, cached):
             return cached, "cached"
     freshness = assess_freshness(query, forced=forced)
+    plan = query_plan or build_search_query_plan(
+        query,
+        forced=forced,
+        decision=freshness,
+    )
     try:
-        supports_planned_query = "evaluation_query" in inspect.signature(search_web).parameters
+        search_parameters = inspect.signature(search_web).parameters
+        supports_planned_query = "evaluation_query" in search_parameters
+        supports_follow_ups = "follow_up_queries" in search_parameters
     except (TypeError, ValueError):
         supports_planned_query = False
+        supports_follow_ups = False
     if supports_planned_query:
-        result = await asyncio.to_thread(
-            search_web,
-            freshness.optimized_query,
-            evaluation_query=query,
-        )
+        search_kwargs: dict[str, Any] = {"evaluation_query": query}
+        if supports_follow_ups:
+            search_kwargs["follow_up_queries"] = plan.follow_up_queries
+        result = await asyncio.to_thread(search_web, plan.primary_query, **search_kwargs)
     else:
         # Compatibility with a user-supplied one-argument provider shim.
         result = await asyncio.to_thread(search_web, query)
@@ -335,7 +348,7 @@ async def _ground(query: str, forced: bool) -> tuple[str, str]:
             metadata={
                 "status": "verified",
                 "freshness_risk": freshness.risk,
-                "search_plan": freshness.optimized_query,
+                "search_plan": list(plan.queries),
                 "expected_success": freshness.expected_success,
             },
         )
@@ -707,9 +720,20 @@ async def stream_inference(
             "numbers from model memory; state that an absent detail is unavailable."
         )
 
+    search_plan: SearchQueryPlan | None = None
     warm_task: asyncio.Task[bool] | None = None
     if grounding_needed:
-        yield "phase", _phase("searching", "Retrieving current evidence")
+        freshness = assess_freshness(clean_query, forced=web_mode)
+        search_plan = build_search_query_plan(
+            clean_query,
+            forced=web_mode,
+            decision=freshness,
+        )
+        yield "phase", _phase(
+            "searching",
+            f"Planning up to {len(search_plan.queries)} bounded evidence queries",
+            planned_queries=len(search_plan.queries),
+        )
         prewarm_role = LIBRARIAN_ROLE if route.handoff_required else route.effective_role
         if (
             _inference_mode() != "pty"
@@ -720,8 +744,21 @@ async def stream_inference(
     if creation_mode and not web_mode:
         web_data, grounding_status = "", "skipped"
     else:
-        web_data, grounding_status = await _ground(clean_query, web_mode)
+        web_data, grounding_status = await _ground(clean_query, web_mode, search_plan)
     search_seconds = time.monotonic() - search_started if grounding_needed else 0.0
+    if search_plan is not None:
+        execution = last_search_report() if grounding_status == "live" else {
+            "status": grounding_status,
+            "adaptive_follow_up_used": False,
+            "requests_used": 0,
+        }
+        yield "grounding_plan", json.dumps(
+            {
+                **search_plan.as_dict(),
+                "execution": execution,
+            },
+            ensure_ascii=False,
+        )
     if warm_task is not None:
         try:
             await warm_task
@@ -761,6 +798,14 @@ async def stream_inference(
                 reason=str(handoff_metadata.get("error", "empty handoff"))[:240],
             )
     verified_fact = extract_verified_fact(clean_query, web_data) if web_data else None
+    if web_data and search_plan is not None and not claim_contract.exact:
+        response_instruction += (
+            "\n[GROUNDED INFORMATION FLOW]\nAnswer the user's core question first. "
+            "When the supplied evidence directly supports it, add one compact 'Further path' "
+            f"covering {search_plan.expansion_focus}. Cite that material with the supplied "
+            "source IDs. Omit the section when the evidence is insufficient; never invent "
+            "adjacent facts merely to keep the conversation going."
+        )
     if grounding_status in {"cached", "live"}:
         yield "grounding", grounding_status
         if verified_fact:
@@ -1353,6 +1398,17 @@ def local_command(command: str) -> dict[str, Any]:
             "action": "show",
             "output": "Resident engine unload requested. Memory will be released after any active generation.",
         }
+    if lower in {"/web last", "/web last plan"}:
+        report = last_search_report()
+        return {
+            "handled": True,
+            "action": "show",
+            "output": (
+                json.dumps(report, indent=2, ensure_ascii=False)
+                if report
+                else "No web search has completed in this process yet."
+            ),
+        }
     if lower in {"/web status", "/web providers"}:
         lines = []
         for item in provider_status():
@@ -1415,6 +1471,7 @@ def local_command(command: str) -> dict[str, Any]:
     if lower.startswith("/web plan "):
         query = text[len("/web plan "):].strip()
         decision = assess_freshness(query)
+        plan = build_search_query_plan(query, decision=decision)
         return {
             "handled": True,
             "action": "show",
@@ -1424,6 +1481,8 @@ def local_command(command: str) -> dict[str, Any]:
                     "risk": decision.risk,
                     "reason": decision.reason,
                     "optimized_query": decision.optimized_query,
+                    "bounded_queries": list(plan.queries),
+                    "follow_up_policy": "one parallel round only when primary evidence is insufficient",
                     "expected_success": decision.expected_success,
                 },
                 indent=2,

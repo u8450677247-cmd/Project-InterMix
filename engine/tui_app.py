@@ -82,6 +82,7 @@ SLASH_COMMANDS = [
     "/web ",
     "/web status",
     "/web plan ",
+    "/web last plan",
     "/web auto status",
     "/web watchlist",
     "/web watch remove ",
@@ -1534,6 +1535,21 @@ class IntermixTUI(App):
                     else:
                         source = "cached evidence" if chunk == "cached" else "live evidence"
                         self.query_one("#activity", Static).update(f"Linked {source}")
+                elif event_type == "grounding_plan":
+                    try:
+                        plan = json.loads(chunk)
+                    except json.JSONDecodeError:
+                        plan = {}
+                    execution = plan.get("execution", {}) if isinstance(plan, dict) else {}
+                    if not isinstance(execution, dict):
+                        execution = {}
+                    query_count = len(execution.get("executed_queries", [])) or 1
+                    requests = int(execution.get("requests_used", 0) or 0)
+                    adaptive = bool(execution.get("adaptive_follow_up_used"))
+                    label = "adaptive" if adaptive else "direct"
+                    self.query_one("#activity", Static).update(
+                        f"Grounding {label} · {query_count} quer{'y' if query_count == 1 else 'ies'} · {requests} requests"
+                    )
                 elif event_type == "fact_card":
                     try:
                         fact = json.loads(chunk)

@@ -15,6 +15,7 @@ ENGINE = ROOT / "engine"
 sys.path.insert(0, str(ENGINE))
 
 import web_search
+from search_planner import MAX_PLANNED_QUERIES, build_search_query_plan
 
 
 QUERY = "current Pixel 10 Pro Android update"
@@ -119,6 +120,98 @@ Provider: Wikipedia
         self.assertEqual(calls["lite"], 0)
         duck = next(item for item in web_search.provider_status() if item["provider"] == "duckduckgo")
         self.assertGreater(duck["cooldown_seconds"], 0)
+
+    def test_planner_is_bounded_and_preserves_technical_anchors(self):
+        plan = build_search_query_plan(
+            "Could you check how Pixel 10 Pro TPU access works inside Termux?",
+            forced=True,
+        )
+        self.assertLessEqual(len(plan.queries), MAX_PLANNED_QUERIES)
+        self.assertEqual(len(plan.queries), len(set(plan.queries)))
+        for query in plan.queries:
+            lowered = query.casefold()
+            self.assertIn("pixel", lowered)
+            self.assertIn("10", lowered)
+            self.assertIn("pro", lowered)
+            self.assertIn("tpu", lowered)
+        self.assertIn("implementation", plan.expansion_focus)
+
+    def test_design_question_gets_design_and_tradeoff_follow_ups(self):
+        plan = build_search_query_plan(
+            "How was the LiteRT Android runtime designed and implemented?",
+            forced=True,
+        )
+        combined = " ".join(plan.follow_up_queries).casefold()
+        self.assertIn("architecture", combined)
+        self.assertIn("tradeoffs", combined)
+        self.assertIn("design rationale", plan.expansion_focus)
+
+    def test_insufficient_primary_evidence_triggers_one_parallel_follow_up_round(self):
+        calls: list[str] = []
+
+        def wikipedia(query, limit):
+            calls.append(query)
+            number = len(calls)
+            return [
+                {
+                    "title": "Pixel 10 Pro TPU runtime design",
+                    "url": f"https://source-{number}.test/pixel-tpu",
+                    "snippet": "Pixel 10 Pro TPU runtime design and Android implementation details.",
+                    "provider": "Wikipedia",
+                    "published": "",
+                }
+            ]
+
+        empty = lambda query, limit: []
+        with (
+            patch.object(web_search, "_configured_wave", new=lambda: []),
+            patch.object(web_search, "_specialized_wave", new=lambda query: []),
+            patch.object(web_search, "_wikipedia", new=wikipedia),
+            patch.object(web_search, "_duckduckgo_html", new=empty),
+            patch.object(web_search, "_duckduckgo_lite", new=empty),
+        ):
+            result = web_search.search_web(
+                "Pixel 10 Pro TPU runtime design",
+                max_results=2,
+                evaluation_query="How was the Pixel 10 Pro TPU runtime designed?",
+                follow_up_queries=(
+                    "Pixel 10 Pro TPU official architecture implementation design",
+                    "Pixel 10 Pro TPU engineering rationale tradeoffs limitations",
+                ),
+            )
+
+        report = web_search.last_search_report()
+        self.assertTrue(report["adaptive_follow_up_used"])
+        self.assertGreaterEqual(len(report["executed_queries"]), 2)
+        self.assertLessEqual(report["requests_used"], report["request_budget"])
+        self.assertIn("source-1.test", result)
+        self.assertGreaterEqual(len(set(re.findall(r"source-(\d+)\.test", result))), 2)
+
+    def test_sufficient_primary_evidence_skips_follow_up_queries(self):
+        items = [
+            {
+                "title": "Pixel 10 Pro Android update",
+                "url": f"https://source-{index}.test/update",
+                "snippet": "Current Pixel 10 Pro Android update and security release.",
+                "provider": "Brave Search API",
+                "published": "",
+            }
+            for index in (1, 2)
+        ]
+        with (
+            patch.object(web_search, "_configured_wave", new=lambda: [("_brave", lambda query, limit: items)]),
+            patch.object(web_search, "_specialized_wave", new=lambda query: []),
+        ):
+            result = web_search.search_web(
+                "current Pixel 10 Pro Android update",
+                max_results=2,
+                follow_up_queries=("Pixel 10 Pro update official release notes",),
+            )
+        report = web_search.last_search_report()
+        self.assertFalse(report["adaptive_follow_up_used"])
+        self.assertEqual(report["executed_queries"], ["current Pixel 10 Pro Android update"])
+        self.assertIn("source-1.test", result)
+        self.assertIn("source-2.test", result)
 
 
 if __name__ == "__main__":

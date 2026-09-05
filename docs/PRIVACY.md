@@ -53,8 +53,15 @@ Users can inspect and remove state:
 ## Web grounding
 
 When a question is classified as time-sensitive, an optimized query and the
-minimum necessary context may be sent to configured providers. Full transcripts,
-durable memory, workspace files, and provider keys are not provider inputs.
+minimum necessary context may be sent to configured providers. For a difficult
+lookup, the controller may derive up to two additional query wordings from the
+same user-supplied terms and send them in one bounded follow-up round when the
+primary evidence is absent or uncorroborated. Full transcripts, durable memory,
+workspace files, persona state, and provider keys are not provider inputs.
+
+`/web plan …` shows planned wording without sending it. `/web last plan` shows
+non-secret execution diagnostics such as query wording, provider names, request
+counts, and rejected-result counts. It never displays provider credentials.
 
 Provider privacy policies and retention terms still apply. Local-first does not
 mean web requests are anonymous. Intermix does not rotate proxies, solve

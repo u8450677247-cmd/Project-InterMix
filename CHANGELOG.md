@@ -16,6 +16,11 @@ may still change.
   storage as encrypted and reserves biometric vault activation for the APK.
 - Installer and diagnostics support for an optional librarian model and its
   independent physical context ceiling.
+- Deterministic adaptive grounding with at most three anchored query wordings,
+  a single parallel follow-up round, an eight-request hard ceiling, and
+  `/web last plan` execution diagnostics.
+- Evidence-backed “Further path” prompts for non-exact questions about
+  implementation, design rationale, trade-offs, and limitations.
 
 ### Preserved
 

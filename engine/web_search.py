@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
-from typing import Any
+from typing import Any, Sequence
 
 from claim_contracts import (
     classify_claim,
@@ -59,6 +59,20 @@ INTENT_GROUPS = {
 
 _PROVIDER_LOCK = threading.Lock()
 _PROVIDER_STATE: dict[str, dict[str, float | int | str]] = {}
+_REPORT_LOCK = threading.Lock()
+_LAST_SEARCH_REPORT: dict[str, Any] = {}
+
+
+def _publish_search_report(report: dict[str, Any]) -> None:
+    with _REPORT_LOCK:
+        _LAST_SEARCH_REPORT.clear()
+        _LAST_SEARCH_REPORT.update(report)
+
+
+def last_search_report() -> dict[str, Any]:
+    """Return non-secret diagnostics for the most recently completed search."""
+    with _REPORT_LOCK:
+        return dict(_LAST_SEARCH_REPORT)
 
 
 def _safe_error(error: Exception) -> str:
@@ -877,11 +891,11 @@ def _run_wave(
     query: str,
     max_results: int,
     request_slots: int,
-) -> tuple[list[dict[str, str]], list[str], int]:
+) -> tuple[list[dict[str, str]], list[str], int, list[str]]:
     selected = [item for item in wave if _provider_ready(item[0])][: max(0, request_slots)]
     if not selected:
         cooling = [f"{name}: cooling down" for name, _ in wave if not _provider_ready(name)]
-        return [], cooling, 0
+        return [], cooling, 0, []
     results: list[dict[str, str]] = []
     errors: list[str] = []
     with ThreadPoolExecutor(max_workers=min(3, len(selected))) as executor:
@@ -899,7 +913,123 @@ def _run_wave(
             else:
                 _provider_succeeded(name)
                 results.extend(batch)
-    return results, errors, len(selected)
+    return results, errors, len(selected), [_provider_key(name) for name, _ in selected]
+
+
+def _distinct_hosts(results: Sequence[dict[str, str]]) -> set[str]:
+    return {
+        (urllib.parse.urlparse(str(item.get("url") or "")).hostname or "").casefold()
+        for item in results
+        if item.get("url")
+    } - {""}
+
+
+def _evidence_is_sufficient(
+    query: str,
+    results: Sequence[dict[str, str]],
+    max_results: int,
+) -> bool:
+    """Decide whether another query can add material corroboration."""
+    if not results:
+        return False
+    if classify_claim(query).exact:
+        return True
+    target = min(2, max_results)
+    if len(results) < target:
+        return False
+    return len(_distinct_hosts(results)) >= target
+
+
+def _adaptive_provider_wave(query: str, gate_query: str) -> list[tuple[str, Any]]:
+    """Select diverse providers for one follow-up query without model judgment."""
+    configured = _configured_wave()[:2]
+    specialized = _specialized_wave(query + " " + gate_query)
+    discovery = (
+        [("_google_news", _google_news), ("_bing_news", _bing_news)]
+        if _is_volatile(gate_query)
+        else [("_wikipedia", _wikipedia)]
+    )
+    combined = configured + specialized + discovery
+    unique: list[tuple[str, Any]] = []
+    seen: set[str] = set()
+    for name, provider in combined:
+        key = _provider_key(name)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append((name, provider))
+    return unique
+
+
+def _run_adaptive_round(
+    queries: Sequence[str],
+    gate_query: str,
+    max_results: int,
+    request_slots: int,
+) -> tuple[list[dict[str, str]], list[str], int, list[str], list[str]]:
+    """Run one bounded, parallel follow-up round across distinct query wordings."""
+    jobs: list[tuple[str, Any, str]] = []
+    cooling: list[str] = []
+    clean_queries: list[str] = []
+    query_waves: list[tuple[str, list[tuple[str, Any]]]] = []
+    for raw_query in queries[:2]:
+        query = re.sub(r"\s+", " ", str(raw_query)).strip()[:420]
+        if not query or query in clean_queries:
+            continue
+        clean_queries.append(query)
+        query_waves.append((query, _adaptive_provider_wave(query, gate_query)))
+
+    # Round-robin scheduling guarantees that two distinct follow-up wordings
+    # both run when at least two request slots remain.
+    wave_index = 0
+    while query_waves and len(jobs) < max(0, request_slots):
+        made_progress = False
+        for query, wave in query_waves:
+            if wave_index >= len(wave):
+                continue
+            made_progress = True
+            name, provider = wave[wave_index]
+            if _provider_ready(name):
+                jobs.append((name, provider, query))
+                if len(jobs) >= max(0, request_slots):
+                    break
+            else:
+                cooling.append(f"{name}: cooling down")
+        if not made_progress:
+            break
+        wave_index += 1
+
+    # Keep a keyless public fallback in the adaptive round. Only one DDG route
+    # is scheduled so its shared circuit breaker remains meaningful.
+    if clean_queries and len(jobs) < max(0, request_slots) and _provider_ready("_duckduckgo_html"):
+        jobs.append(("_duckduckgo_html", _duckduckgo_html, clean_queries[0]))
+
+    if not jobs:
+        return [], cooling, 0, [], []
+
+    results: list[dict[str, str]] = []
+    errors = list(cooling)
+    providers_used: list[str] = []
+    queries_used: list[str] = []
+    with ThreadPoolExecutor(max_workers=min(4, len(jobs))) as executor:
+        futures = {
+            executor.submit(provider, query, max_results): (name, query)
+            for name, provider, query in jobs
+        }
+        for future in as_completed(futures):
+            name, query = futures[future]
+            providers_used.append(_provider_key(name))
+            if query not in queries_used:
+                queries_used.append(query)
+            try:
+                batch = future.result()
+            except Exception as exc:
+                _provider_failed(name, exc)
+                errors.append(f"{name}: {_safe_error(exc)}")
+            else:
+                _provider_succeeded(name)
+                results.extend(batch)
+    return results, errors, len(jobs), queries_used, providers_used
 
 
 def search_web(
@@ -907,35 +1037,89 @@ def search_web(
     max_results: int = 4,
     *,
     evaluation_query: str | None = None,
+    follow_up_queries: Sequence[str] | None = None,
 ) -> str:
     clean_query = query.strip()
     if not clean_query:
+        _publish_search_report(
+            {
+                "status": "invalid",
+                "primary_query": "",
+                "follow_up_queries": [],
+                "executed_queries": [],
+                "requests_used": 0,
+            }
+        )
         return "No search query supplied."
     gate_query = (evaluation_query or clean_query).strip()
 
     max_results = max(1, min(int(max_results), 8))
-    request_budget = 6
+    planned_follow_ups: list[str] = []
+    for raw_query in follow_up_queries or ():
+        value = re.sub(r"\s+", " ", str(raw_query)).strip()[:420]
+        if value and value != clean_query and value not in planned_follow_ups:
+            planned_follow_ups.append(value)
+        if len(planned_follow_ups) >= 2:
+            break
+
+    request_budget = 8 if planned_follow_ups else 6
+    follow_up_reserve = min(3, request_budget - 1) if planned_follow_ups else 0
+    primary_budget = request_budget - follow_up_reserve
     requests_used = 0
     errors: list[str] = []
     rejected = 0
     candidates: list[dict[str, str]] = []
+    executed_queries = [clean_query]
+    providers_used: list[str] = []
+    adaptive_used = False
+
+    def finish(status: str, ranked: list[dict[str, str]] | None = None) -> str:
+        accepted = ranked or []
+        _publish_search_report(
+            {
+                "status": status,
+                "primary_query": clean_query,
+                "evaluation_query": gate_query,
+                "follow_up_queries": list(planned_follow_ups),
+                "executed_queries": list(executed_queries),
+                "adaptive_follow_up_used": adaptive_used,
+                "requests_used": requests_used,
+                "request_budget": request_budget,
+                "accepted_results": len(accepted),
+                "rejected_results": rejected,
+                "distinct_sources": len(_distinct_hosts(accepted)),
+                "providers_used": sorted(set(providers_used)),
+                "provider_errors": errors[-3:],
+            }
+        )
+        if accepted:
+            return _format_results(gate_query, accepted, max_results)
+        details: list[str] = []
+        if rejected:
+            details.append(f"rejected {rejected} irrelevant or stale candidate(s)")
+        if errors:
+            details.append("provider errors: " + "; ".join(errors[-2:]))
+        details.append(f"request budget {requests_used}/{request_budget}")
+        suffix = " " + "; ".join(details) if details else ""
+        return "No current web results were available." + suffix
 
     # Exact supported facts use the shortest authoritative path. One verified
     # official result is sufficient; broad discovery is neither faster nor
     # more authoritative for the same claim.
     contract = classify_claim(gate_query)
     if contract.exact and contract.subject.casefold() == "python":
-        batch, wave_errors, used = _run_wave(
+        batch, wave_errors, used, wave_providers = _run_wave(
             [("_python_org", _python_org)],
             gate_query,
             1,
             request_budget,
         )
         requests_used += used
+        providers_used.extend(wave_providers)
         errors.extend(wave_errors)
         official = [item for item in batch if _result_is_relevant(gate_query, item)]
         if official:
-            return _format_results(gate_query, official, 1)
+            return finish("verified_official", official[:1])
 
     configured = _configured_wave()
     specialized = _specialized_wave(gate_query)
@@ -946,22 +1130,50 @@ def search_web(
     )
     waves = [configured[:3], configured[3:] + specialized, discovery]
     for wave in waves:
-        if not wave or requests_used >= request_budget:
+        if not wave or requests_used >= primary_budget:
             continue
-        batch, wave_errors, used = _run_wave(
+        batch, wave_errors, used, wave_providers = _run_wave(
             wave,
             clean_query,
             max_results,
-            request_budget - requests_used,
+            primary_budget - requests_used,
         )
         requests_used += used
+        providers_used.extend(wave_providers)
         errors.extend(wave_errors)
         accepted_batch = [item for item in batch if _result_is_relevant(gate_query, item)]
         rejected += len(batch) - len(accepted_batch)
         candidates.extend(accepted_batch)
         ranked = _deduplicate_and_rank(gate_query, candidates, max_results)
-        if len(ranked) >= max_results:
-            return _format_results(gate_query, ranked, max_results)
+        if _evidence_is_sufficient(gate_query, ranked, max_results):
+            return finish("verified_primary", ranked)
+
+    ranked = _deduplicate_and_rank(gate_query, candidates, max_results)
+    if planned_follow_ups and not _evidence_is_sufficient(gate_query, ranked, max_results):
+        adaptive_used = True
+        batch, wave_errors, used, queries_used, adaptive_providers = _run_adaptive_round(
+            planned_follow_ups,
+            gate_query,
+            max_results,
+            request_budget - requests_used,
+        )
+        requests_used += used
+        errors.extend(wave_errors)
+        providers_used.extend(adaptive_providers)
+        for executed in queries_used:
+            if executed not in executed_queries:
+                executed_queries.append(executed)
+        accepted_batch = [item for item in batch if _result_is_relevant(gate_query, item)]
+        rejected += len(batch) - len(accepted_batch)
+        candidates.extend(accepted_batch)
+        ranked = _deduplicate_and_rank(gate_query, candidates, max_results)
+        if ranked:
+            status = (
+                "verified_adaptive"
+                if _evidence_is_sufficient(gate_query, ranked, max_results)
+                else "verified_partial"
+            )
+            return finish(status, ranked)
 
     # DuckDuckGo routes share one circuit breaker and remain the final public
     # fallback. Keep them sequential so a 403/429 on HTML cools the Lite route.
@@ -975,6 +1187,7 @@ def search_web(
             errors.append(f"{provider_name}: cooling down")
             continue
         requests_used += 1
+        providers_used.append(_provider_key(provider_name))
         try:
             batch = provider(clean_query, max_results)
         except Exception as exc:
@@ -986,26 +1199,19 @@ def search_web(
         rejected += len(batch) - len(accepted_batch)
         candidates.extend(accepted_batch)
         ranked = _deduplicate_and_rank(gate_query, candidates, max_results)
-        if len(ranked) >= max_results:
-            return _format_results(gate_query, ranked, max_results)
+        if _evidence_is_sufficient(gate_query, ranked, max_results):
+            return finish("verified_primary", ranked)
 
     ranked = _deduplicate_and_rank(gate_query, candidates, max_results)
     if ranked:
-        return _format_results(gate_query, ranked, max_results)
-
-    details: list[str] = []
-    if rejected:
-        details.append(f"rejected {rejected} irrelevant or stale candidate(s)")
-    if errors:
-        details.append("provider errors: " + "; ".join(errors[-2:]))
-    details.append(f"request budget {requests_used}/{request_budget}")
-    suffix = " " + "; ".join(details) if details else ""
-    return "No current web results were available." + suffix
+        return finish("verified_partial", ranked)
+    return finish("unavailable")
 
 
 __all__ = [
     "evidence_source_ids",
     "extract_verified_fact",
+    "last_search_report",
     "provider_status",
     "search_web",
     "validate_web_evidence",

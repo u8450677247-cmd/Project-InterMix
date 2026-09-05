@@ -25,7 +25,7 @@ flowchart TD
 | Memory | Versioned upsert/delete proposal | Schema validation, explicitness, sensitivity rules, provenance, conflict history |
 | Model handoff | Bounded E2B intent and memory proposal | Route selection, profile availability, unload-before-load, validation, E4B fallback |
 | Persona | Explicit communication preference | Changelog, bounded prompt injection, undo, no inferred diagnosis or immutable trait |
-| Web | Search need and synthesis | Query classification, provider choice, timeouts, cooldowns, relevance, source IDs, caching |
+| Web | Search need and synthesis | Query classification, anchored query plan, provider choice, timeouts, cooldowns, relevance, source IDs, caching |
 | Workspace | Ordered XML tool tags | Path containment, size ceilings, checkpoints, execution timeout, stop-on-failure, deletion review |
 | Mission state | Next-step suggestion | Durable task ledger, epochs, acceptance criteria, verified event log, completion gate |
 | Audio | Completed response text | Explicit button consent, fresh heartbeat, immutable request, WAV hash, Android playback |
@@ -44,7 +44,10 @@ sequenceDiagram
     U->>C: Prompt or slash command
     C->>M: Store user turn and retrieve context
     opt Volatile or forced query
-        C->>W: Bounded search plan
+        C->>W: Primary anchored query
+        opt Evidence missing or uncorroborated
+            C->>W: One parallel follow-up round
+        end
         W-->>C: Ranked evidence or failure
     end
     opt Difficult turn with E2B available
@@ -103,9 +106,11 @@ The CLI/PTY path remains an isolated fallback. Engine initialization, prefill/fi
 
 ## Grounding pipeline
 
-`freshness_policy.py` classifies stable, evolving, and volatile questions before the model runs. `claim_contracts.py` recognizes exact claims such as the latest stable Python release. `web_search.py` then executes the smallest useful provider wave.
+`freshness_policy.py` classifies stable, evolving, and volatile questions before the model runs. `search_planner.py` converts the original request into one primary search and at most two follow-up wordings. The plan is deterministic and anchored to terms from the user's question; neither E2B nor E4B may silently introduce another product, version, or claim before retrieval. `claim_contracts.py` recognizes exact claims such as the latest stable Python release. `web_search.py` then executes the smallest useful provider wave.
 
-Forced `/web` answers must cite a supplied source identifier. Exact facts can be rendered in controller-owned cards. If the evidence is irrelevant, stale, conflicting, or uncited, the draft is discarded. One bounded repair attempt is permitted; persistent failure becomes a visible grounding guard.
+An authoritative exact result ends the search immediately. A non-exact result normally requires two distinct source hosts. If the primary wave cannot reach that threshold, one parallel follow-up round targets official documentation, implementation/design evidence, independent corroboration, or known limitations according to the question's intent. The complete search stays within a hard eight-request ceiling. `/web last plan` exposes the non-secret execution report.
+
+Forced `/web` answers must cite a supplied source identifier. Exact facts can be rendered in controller-owned cards. Non-exact answers may add one concise “Further path” only when retrieved evidence supports the adjacent implementation, rationale, trade-off, or limitation. If the evidence is irrelevant, stale, conflicting, or uncited, the draft is discarded. One bounded repair attempt is permitted; persistent failure becomes a visible grounding guard.
 
 ## Numeric integrity
 
