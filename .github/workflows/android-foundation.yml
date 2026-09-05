@@ -3,7 +3,7 @@ name: android-foundation
 on:
   push:
     branches:
-      - "feature/anicloud-android-*"
+      - "feature/anicloud-*"
     paths:
       - "android/**"
       - "docs/ANDROID_DESIGN.md"
