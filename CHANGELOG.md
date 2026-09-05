@@ -27,6 +27,12 @@ may still change.
   memory-delta markers, and invalid stream characters.
 - Incomplete-turn quarantine: visible partial output remains on screen for
   inspection but is excluded from assistant history, memory proposals, and voice.
+- An auto-growing chat composer with multiline paste, preserved paragraph
+  spacing, `Enter` to send, `Shift+Enter` or `Ctrl+Enter` for a newline,
+  seven-row capping, internal scrolling, and post-send collapse.
+- The Sovereign Glass native Android design contract, anchoring responsive
+  surfaces, state semantics, visual tokens, accessibility, privacy, motion, and
+  thermal fallbacks before APK implementation.
 
 ### Preserved
 
@@ -34,6 +40,11 @@ may still change.
   numeric integrity, workspace permissions, and persistence.
 - E4B remains the automatic fallback when the optional E2B asset is absent or
   its resident backend becomes unavailable.
+
+### Fixed
+
+- Installer validation no longer writes Python bytecode caches into the source
+  bundle and then causes its own public-release audit to reject that tree.
 
 ## [1.4.1-alpha.1] - 2026-08-25
 

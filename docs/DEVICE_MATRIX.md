@@ -54,7 +54,7 @@ Review the file before attaching it. The default probe excludes unique identifie
 6. **Continuity:** create a synthetic workspace mission, verify it, restart, open a new session, and recall the verified outcome.
 7. **Grounding:** test one supported current exact claim and one intentionally unsupported claim. The unsupported claim must fail closed.
 8. **Workspace repair:** write a synthetic failing Python file, observe stop-on-failure, repair in a new epoch, test, and complete.
-9. **Geometry:** capture desktop and phone/compact layouts with synthetic, non-personal text.
+9. **Geometry:** capture desktop and phone/compact layouts with synthetic, non-personal text; verify multiline paste, blank-line preservation, `Shift+Enter`, seven-row capping, internal scrolling, and post-send collapse.
 10. **Stability:** note Signal 9, Android process kills, thermal throttling, UI stalls, provider failures, and cache growth during repeated daily use.
 
 Never upload raw memory databases, prompts, provider vaults, model files, shader caches, Android IDs, or screenshots containing personal content.

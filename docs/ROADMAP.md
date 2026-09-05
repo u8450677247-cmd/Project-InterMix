@@ -25,6 +25,11 @@ or recovery regressions across a documented device set.
 Goal: replace terminal-specific presentation and orchestration with an APK while
 preserving the tested controller contracts.
 
+The native interface follows the versioned [Sovereign Glass design
+contract](ANDROID_DESIGN.md): conversation-first on compact windows, inspectable
+runtime truth, biometric Sanctuary boundaries, accessible opaque fallbacks, and
+resource-aware visual effects.
+
 | Concern | Native direction |
 |---|---|
 | Interface | Kotlin + Jetpack Compose; responsive phone, tablet, and desktop layouts |

@@ -9,7 +9,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-39d5ff"></a>
   <a href="CHANGELOG.md"><img alt="Release: 1.4.1 alpha 1" src="https://img.shields.io/badge/release-1.4.1--alpha.1-a970ff"></a>
-  <a href=".github/workflows/tests.yml"><img alt="Tests: 85" src="https://img.shields.io/badge/tests-85%20deterministic-67e8c2"></a>
+  <a href=".github/workflows/tests.yml"><img alt="Tests: 87" src="https://img.shields.io/badge/tests-87%20deterministic-67e8c2"></a>
   <img alt="Status: developer preview" src="https://img.shields.io/badge/status-developer%20preview-ffca6b">
 </p>
 
@@ -27,7 +27,7 @@ This repository is a developer preview, not a polished Android application. The 
 - **Resource awareness:** a resident LiteRT-LM engine is reused while memory permits, then unloaded under pressure or sustained inactivity.
 - **Optional dual-model routing:** a smaller E2B librarian can handle ordinary conversation and prepare bounded context for E4B reasoning while only one model stays resident.
 - **Recoverable generation:** the phone UI stays interactive during inference, exposes STOP, caps native output, and quarantines mechanically corrupted or interrupted replies before memory or voice.
-- **Readable terminal UX:** cyan/violet hierarchy, streamed plain text, final Markdown rendering, foldable diagnostics, compact mode, and a workspace lens.
+- **Readable terminal UX:** cyan/violet hierarchy, an auto-growing multiline composer, streamed plain text, final Markdown rendering, foldable diagnostics, compact mode, and a workspace lens.
 
 ## Verified reference profile
 
@@ -41,7 +41,7 @@ This repository is a developer preview, not a polished Android application. The 
 | Cold/idle available memory | Approximately 7.0–7.6 GiB in the owner's test environment |
 | Resident-hot available memory | Approximately 2.6–3.7 GiB in the owner's test environment |
 | Cooling used during long tests | Optional Black Shark Magnetic/FunCooler 6 Pro (BR62); approximately 25 °C owner-observed device temperature |
-| Test suite | 85 deterministic public-alpha checks across memory, routing, grounding, cancellation, stream integrity, inference, workspace, release safety, and interface behavior |
+| Test suite | 87 deterministic public-alpha checks across memory, routing, grounding, cancellation, stream integrity, inference, workspace, release safety, and interface behavior |
 
 These are observations, not guarantees. Android memory pressure, other applications, firmware, drivers, ambient temperature, model build, and compiled caches can materially change the result.
 
@@ -56,7 +56,7 @@ These are observations, not guarantees. Android memory pressure, other applicati
 
 Google's current Gemma 4 documentation includes E2B and E4B benchmarks on the Galaxy S26 Ultra, which makes it a compelling test target—not a verified Intermix device. LiteRT-LM itself supports Python on Android, Linux, macOS, and Windows, but each Intermix backend and interface path still needs its own report.
 
-See [the device matrix](docs/DEVICE_MATRIX.md) before making or repeating a compatibility claim, and [the installation guide](docs/INSTALLATION.md) before testing a new device.
+See [the device matrix](docs/DEVICE_MATRIX.md) before making or repeating a compatibility claim, [the installation guide](docs/INSTALLATION.md) before testing a new device, and the [Sovereign Glass design contract](docs/ANDROID_DESIGN.md) for the native Android interface direction.
 
 ## Install
 
@@ -143,6 +143,11 @@ Inside the cockpit:
 /files
 ```
 
+The chat composer preserves pasted paragraphs and intentional blank lines. Press
+`Enter` to send, or `Shift+Enter` / `Ctrl+Enter` to insert a newline. It grows
+from the existing compact three-row rail to seven visible rows, then scrolls
+internally and collapses after submission.
+
 Outside the cockpit, create a report safe to attach to a GitHub issue:
 
 ```bash
@@ -207,7 +212,7 @@ flowchart TD
     C <--> M["SQLite memory + mission ledger"]
 ```
 
-The language model proposes prose, memories, and workspace actions. Deterministic controller code decides what can be displayed, stored, researched, or executed. See [architecture](docs/ARCHITECTURE.md).
+The language model proposes prose, memories, and workspace actions. Deterministic controller code decides what can be displayed, stored, researched, or executed. See [architecture](docs/ARCHITECTURE.md) and the [native Android design contract](docs/ANDROID_DESIGN.md).
 
 ## Key commands
 

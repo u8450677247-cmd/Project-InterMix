@@ -22,12 +22,11 @@ from rich.style import Style
 from textual import events
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.suggester import SuggestFromList
+from textual.message import Message
 from textual.widgets import (
     Button,
     Collapsible,
     DirectoryTree,
-    Input,
     Label,
     Markdown,
     Static,
@@ -182,6 +181,9 @@ PHASE_STYLES = {
 IDLE_SECONDS = 60
 MAINTENANCE_INTERVAL_SECONDS = 300
 STREAM_REPAINT_SECONDS = 0.09
+COMPOSER_COLLAPSED_HEIGHT = 3
+COMPOSER_MAX_VISIBLE_LINES = 7
+COMPOSER_BORDER_HEIGHT = 1
 
 _BASE_SYNTAX = TextAreaTheme.get_builtin_theme("css")
 INTERMIX_EDITOR_THEME = TextAreaTheme(
@@ -197,6 +199,72 @@ INTERMIX_EDITOR_THEME = TextAreaTheme(
     selection_style=Style(bgcolor="#3b2464"),
     syntax_styles=dict(_BASE_SYNTAX.syntax_styles),
 )
+
+
+class MessageComposer(TextArea):
+    """Soft-wrapped chat composer with explicit send and newline semantics."""
+
+    class Submitted(Message):
+        """Posted when Enter submits the complete composer document."""
+
+        def __init__(self, composer: "MessageComposer", value: str) -> None:
+            super().__init__()
+            self.composer = composer
+            self.value = value
+
+        @property
+        def control(self) -> "MessageComposer":
+            return self.composer
+
+    def __init__(self, *, placeholder: str, id: str) -> None:
+        super().__init__(
+            "",
+            id=id,
+            placeholder=placeholder,
+            soft_wrap=True,
+            show_line_numbers=False,
+            compact=True,
+            highlight_cursor_line=False,
+            max_checkpoints=20,
+        )
+
+    async def _on_key(self, event: events.Key) -> None:
+        if self.disabled or self.read_only:
+            return
+        if event.key == "enter":
+            event.stop()
+            event.prevent_default()
+            self.post_message(self.Submitted(self, self.text))
+            return
+        if event.key in {"shift+enter", "ctrl+enter"}:
+            event.stop()
+            event.prevent_default()
+            result = self.replace(
+                "\n",
+                *self.selection,
+                maintain_selection_offset=False,
+            )
+            self.move_cursor(result.end_location)
+            return
+        await super()._on_key(event)
+
+    def update_suggestion(self) -> None:
+        """Retain lightweight slash completion without the single-line Input."""
+
+        value = self.text
+        if (
+            not value.startswith("/")
+            or "\n" in value
+            or not self.cursor_at_end_of_text
+        ):
+            self.suggestion = ""
+            return
+        lowered = value.casefold()
+        for candidate in SLASH_COMMANDS:
+            if candidate.casefold().startswith(lowered) and len(candidate) > len(value):
+                self.suggestion = candidate[len(value):]
+                return
+        self.suggestion = ""
 
 
 def _short_time(timestamp: str | None = None) -> str:
@@ -764,15 +832,32 @@ class IntermixTUI(App):
 
     #input-box {
         width: 1fr;
-        height: 3;
+        height: 100%;
         background: transparent;
         border: none;
+        padding: 0;
         color: #f0f4f8;
+        scrollbar-size-vertical: 1;
+        scrollbar-color: #34506f;
+        scrollbar-background: #101a2a;
     }
 
     #input-box:focus {
         border: none;
         background: #101a2a;
+    }
+
+    #input-box .text-area--cursor {
+        color: #060a12;
+        background: #39d5ff;
+    }
+
+    #input-box .text-area--selection {
+        background: #3b2464;
+    }
+
+    #input-box .text-area--placeholder {
+        color: #66758b;
     }
 
     #voice-last {
@@ -792,7 +877,7 @@ class IntermixTUI(App):
     }
 
     #send-hint {
-        width: 14;
+        width: 19;
         content-align: right middle;
         color: #66758b;
     }
@@ -872,13 +957,12 @@ class IntermixTUI(App):
                         yield Static("Local memory online", id="activity")
                         yield Static("", id="latency")
                     with Horizontal(id="composer"):
-                        yield Input(
+                        yield MessageComposer(
                             placeholder=f"Message {CONFIG.assistant_name} or type / for commands",
                             id="input-box",
-                            suggester=SuggestFromList(SLASH_COMMANDS, case_sensitive=False),
                         )
                         yield Button("VOICE", id="voice-last", disabled=True)
-                        yield Static("ENTER  SEND", id="send-hint")
+                        yield Static("ENTER SEND\nSHIFT+ENTER LINE", id="send-hint")
                 with Vertical(id="workspace-panel"):
                     with Horizontal(id="workspace-header"):
                         yield Static("WORKSPACE LENS", id="workspace-title")
@@ -913,7 +997,8 @@ class IntermixTUI(App):
             name="audio-bridge-monitor",
         )
         self._tick_audio_bridge()
-        self.query_one("#input-box", Input).focus()
+        self.query_one("#input-box", MessageComposer).focus()
+        self.call_after_refresh(self._resize_composer)
 
     def on_unmount(self) -> None:
         cancel_idle_maintenance()
@@ -923,6 +1008,7 @@ class IntermixTUI(App):
 
     def on_resize(self, event: events.Resize) -> None:
         self._apply_responsive_layout(event.size.width)
+        self.call_after_refresh(self._resize_composer)
 
     def on_key(self, event: events.Key) -> None:
         self.last_user_activity = time.monotonic()
@@ -1068,7 +1154,7 @@ class IntermixTUI(App):
             self.voice_archive_visible = False
             self.query_one("#workspace-panel", Vertical).display = False
             self.query_one("#conversation-panel", Vertical).display = True
-            self.query_one("#input-box", Input).focus()
+            self.query_one("#input-box", MessageComposer).focus()
             self.query_one("#brand", Static).update("◈  PROJECT INTERMIX  /  RESONANCE")
             return
         self.workspace_visible = True
@@ -1130,6 +1216,21 @@ class IntermixTUI(App):
         )
         self.query_one("#workspace-mode", Static).display = width >= 86
 
+    def _resize_composer(self) -> None:
+        """Grow with wrapped content, cap at seven rows, and then scroll."""
+
+        composer = self.query_one("#input-box", MessageComposer)
+        wrapped_rows = max(
+            composer.document.line_count,
+            composer.wrapped_document.height,
+            1,
+        )
+        height = max(
+            COMPOSER_COLLAPSED_HEIGHT,
+            min(COMPOSER_MAX_VISIBLE_LINES, wrapped_rows) + COMPOSER_BORDER_HEIGHT,
+        )
+        self.query_one("#composer", Horizontal).styles.height = height
+
     async def action_clear_cockpit(self) -> None:
         await self._clear_transcript()
 
@@ -1150,7 +1251,7 @@ class IntermixTUI(App):
             self.query_one("#file-hints", Static).update("CTRL+S SAVE · CTRL+E CHAT · CTRL+V AUDIO")
             self.query_one("#brand", Static).update("◈  PROJECT INTERMIX  /  WORKSPACE")
         else:
-            self.query_one("#input-box", Input).focus()
+            self.query_one("#input-box", MessageComposer).focus()
             self.query_one("#brand", Static).update("◈  PROJECT INTERMIX  /  RESONANCE")
 
     async def action_refresh_workspace(self) -> None:
@@ -1239,6 +1340,11 @@ class IntermixTUI(App):
             self._open_workspace_file(selected)
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        if event.text_area.id == "input-box":
+            self.call_after_refresh(self._resize_composer)
+            return
+        if event.text_area.id != "file-editor":
+            return
         if self.editor_loading or self.current_file is None:
             return
         self.last_user_activity = time.monotonic()
@@ -1443,13 +1549,17 @@ class IntermixTUI(App):
         self._refresh_telemetry()
         transcript.scroll_end(animate=False)
 
-    async def on_input_submitted(self, event: Input.Submitted) -> None:
-        input_widget = self.query_one("#input-box", Input)
+    async def on_message_composer_submitted(
+        self,
+        event: MessageComposer.Submitted,
+    ) -> None:
+        input_widget = event.composer
         transcript = self.query_one("#transcript", VerticalScroll)
         user_text = event.value.strip()
-        input_widget.value = ""
         if not user_text or self.busy:
             return
+        input_widget.load_text("")
+        self.call_after_refresh(self._resize_composer)
         self.last_user_activity = time.monotonic()
         cancel_idle_maintenance()
         self.voice_text = ""
@@ -1487,7 +1597,7 @@ class IntermixTUI(App):
         user_text: str,
         ai_widget: AssistantMessage,
     ) -> None:
-        input_widget = self.query_one("#input-box", Input)
+        input_widget = self.query_one("#input-box", MessageComposer)
         transcript = self.query_one("#transcript", VerticalScroll)
         accumulated = ""
         error_seen = False
