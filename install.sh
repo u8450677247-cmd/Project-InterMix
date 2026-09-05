@@ -10,10 +10,14 @@ project_dir="${INTERMIX_PROJECT_DIR:-$HOME/project-intermix}"
 config_file="${INTERMIX_CONFIG_FILE:-$HOME/.config/intermix/config.json}"
 model_path=""
 model_label=""
+librarian_model_path=""
+librarian_model_label=""
 user_name=""
 assistant_name=""
 workspace_dir=""
 context_tokens=""
+librarian_context_tokens=""
+dual_model="auto"
 sensitive_mode="off"
 install_dependencies=1
 non_interactive=0
@@ -33,6 +37,10 @@ Options:
   --project-dir PATH       Installation root (default: ~/project-intermix)
   --model PATH             Existing .litertlm model; model weights are never bundled
   --model-label TEXT       Friendly model label shown in the cockpit
+  --librarian-model PATH   Optional E2B .litertlm model for conversational routing
+  --librarian-label TEXT   Friendly E2B label shown in diagnostics
+  --librarian-context N    Physical KV ceiling for the optional E2B model
+  --dual-model MODE        auto, on, or off (default: auto)
   --user-name TEXT         Name shown for the local user
   --assistant-name TEXT    Name shown for the local Core
   --workspace-dir PATH     Fixed agent workspace
@@ -79,6 +87,14 @@ while [ "$#" -gt 0 ]; do
             require_value "$@"; model_path="$2"; shift 2 ;;
         --model-label)
             require_value "$@"; model_label="$2"; shift 2 ;;
+        --librarian-model)
+            require_value "$@"; librarian_model_path="$2"; shift 2 ;;
+        --librarian-label)
+            require_value "$@"; librarian_model_label="$2"; shift 2 ;;
+        --librarian-context)
+            require_value "$@"; librarian_context_tokens="$2"; shift 2 ;;
+        --dual-model)
+            require_value "$@"; dual_model="$2"; shift 2 ;;
         --user-name)
             require_value "$@"; user_name="$2"; shift 2 ;;
         --assistant-name)
@@ -112,6 +128,16 @@ esac
 case "$context_tokens" in
     "") ;;
     *[!0-9]*) fail "--context-tokens must be an integer" ;;
+esac
+
+case "$librarian_context_tokens" in
+    "") ;;
+    *[!0-9]*) fail "--librarian-context must be an integer" ;;
+esac
+
+case "$dual_model" in
+    auto|on|off) ;;
+    *) fail "--dual-model must be auto, on, or off" ;;
 esac
 
 cleanup() {
@@ -237,7 +263,11 @@ try:
     value = json.load(open(sys.argv[1], encoding="utf-8"))
 except (OSError, ValueError):
     value = {}
-for key in ("user_name", "assistant_name", "model_path", "model_label", "workspace_dir", "context_tokens"):
+for key in (
+    "user_name", "assistant_name", "model_path", "model_label",
+    "workspace_dir", "context_tokens", "librarian_model_path",
+    "librarian_model_label", "librarian_context_tokens", "dual_model_enabled",
+):
     print(str(value.get(key, "")).replace("\n", " "))
 PY
     )
@@ -247,6 +277,15 @@ PY
     model_label="${model_label:-${existing_config[3]:-}}"
     workspace_dir="${workspace_dir:-${existing_config[4]:-}}"
     context_tokens="${context_tokens:-${existing_config[5]:-}}"
+    librarian_model_path="${librarian_model_path:-${existing_config[6]:-}}"
+    librarian_model_label="${librarian_model_label:-${existing_config[7]:-}}"
+    librarian_context_tokens="${librarian_context_tokens:-${existing_config[8]:-}}"
+    if [ "$dual_model" = "auto" ]; then
+        case "${existing_config[9]:-}" in
+            True|true|1) dual_model="on" ;;
+            False|false|0) dual_model="off" ;;
+        esac
+    fi
 fi
 
 user_name="${user_name:-Operator}"
@@ -264,11 +303,19 @@ if [ -z "$context_tokens" ]; then
     fi
 fi
 
+librarian_context_tokens="${librarian_context_tokens:-$context_tokens}"
+
 if [ "$context_tokens" -lt 1024 ] || [ "$context_tokens" -gt 32768 ]; then
     fail "Context tokens must be between 1024 and 32768."
 fi
 if [ "$context_tokens" -gt 8000 ] && [ "$force" -ne 1 ]; then
     fail "The public alpha is bounded to 8000 tokens by default; use --force for larger experimental contexts."
+fi
+if [ "$librarian_context_tokens" -lt 1024 ] || [ "$librarian_context_tokens" -gt 32768 ]; then
+    fail "Librarian context tokens must be between 1024 and 32768."
+fi
+if [ "$librarian_context_tokens" -gt 8000 ] && [ "$force" -ne 1 ]; then
+    fail "The public alpha librarian is bounded to 8000 tokens by default; use --force for larger experiments."
 fi
 
 if [ "$non_interactive" -ne 1 ]; then
@@ -285,15 +332,27 @@ if [ -n "$model_path" ] && [ ! -f "$model_path" ]; then
     model_path=""
 fi
 
+if [ -n "$librarian_model_path" ] && [ ! -f "$librarian_model_path" ]; then
+    warn "Configured librarian model no longer exists: $librarian_model_path"
+    librarian_model_path=""
+fi
+
 if [ -z "$model_path" ]; then
     model_candidates=()
+    librarian_candidates=()
     search_roots=("$project_dir/models" "$HOME/storage/shared" "$HOME/storage/downloads")
     for root in "${search_roots[@]}"; do
         [ -d "$root" ] || continue
         while IFS= read -r -d '' candidate; do
-            model_candidates+=("$candidate")
+            case "$(basename "$candidate" | tr '[:upper:]' '[:lower:]')" in
+                *e2b*) librarian_candidates+=("$candidate") ;;
+                *) model_candidates+=("$candidate") ;;
+            esac
         done < <(find "$root" -maxdepth 3 -type f -iname '*.litertlm' -print0 2>/dev/null)
     done
+    if [ -z "$librarian_model_path" ] && [ "${#librarian_candidates[@]}" -eq 1 ]; then
+        librarian_model_path="${librarian_candidates[0]}"
+    fi
     if [ "${#model_candidates[@]}" -eq 1 ]; then
         model_path="${model_candidates[0]}"
     elif [ "${#model_candidates[@]}" -gt 1 ] && [ "$non_interactive" -ne 1 ]; then
@@ -330,10 +389,38 @@ if [ "$model_bytes" -lt 104857600 ]; then
 fi
 model_label="${model_label:-$(basename "$model_path" .litertlm)}"
 
+if [ -z "$librarian_model_path" ]; then
+    librarian_model_path="$project_dir/models/gemma-4-E2B-it.litertlm"
+fi
+if [ -f "$librarian_model_path" ]; then
+    [ -r "$librarian_model_path" ] || fail "The librarian model is not readable: $librarian_model_path"
+    case "${librarian_model_path,,}" in
+        *.litertlm) ;;
+        *) fail "The librarian model must use the .litertlm format." ;;
+    esac
+    librarian_bytes="$(wc -c < "$librarian_model_path")"
+    if [ "$librarian_bytes" -lt 104857600 ]; then
+        [ "$force" -eq 1 ] || fail "The librarian model is unexpectedly small and may be incomplete."
+    fi
+fi
+librarian_model_label="${librarian_model_label:-$(basename "$librarian_model_path" .litertlm)}"
+dual_model_enabled=true
+if [ "$dual_model" = "off" ]; then
+    dual_model_enabled=false
+fi
+
 printf 'Identity: %s ↔ %s\n' "$user_name" "$assistant_name"
-printf 'Model: %s\n' "$model_path"
+printf 'Reasoning model: %s\n' "$model_path"
+if [ -f "$librarian_model_path" ] && [ "$dual_model_enabled" = true ]; then
+    printf 'Librarian model: %s (one resident model at a time)\n' "$librarian_model_path"
+elif [ "$dual_model_enabled" = true ]; then
+    printf 'Librarian model: not installed; E4B fallback remains active\n'
+else
+    printf 'Librarian model: disabled\n'
+fi
 printf 'Workspace: %s\n' "$workspace_dir"
 printf 'Physical context: %s tokens\n' "$context_tokens"
+printf 'Librarian context: %s tokens\n' "$librarian_context_tokens"
 printf 'Sensitive wellbeing capture: %s\n' "$sensitive_mode"
 
 if [ "$dry_run" -eq 1 ]; then
@@ -411,25 +498,31 @@ note "6/8" "Writing non-secret runtime configuration and initializing local memo
 
 mkdir -p "$(dirname "$config_file")"
 python - "$config_file" "$project_dir" "$model_path" "$model_label" "$user_name" \
-    "$assistant_name" "$workspace_dir" "$context_tokens" <<'PY'
+    "$assistant_name" "$workspace_dir" "$context_tokens" "$librarian_model_path" \
+    "$librarian_model_label" "$librarian_context_tokens" "$dual_model_enabled" <<'PY'
 import json, os, sys, tempfile
 from pathlib import Path
 
 (
     config_file, project_dir, model_path, model_label, user_name,
-    assistant_name, workspace_dir, context_tokens,
+    assistant_name, workspace_dir, context_tokens, librarian_model_path,
+    librarian_model_label, librarian_context_tokens, dual_model_enabled,
 ) = sys.argv[1:]
 path = Path(config_file).expanduser()
 path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
 os.chmod(path.parent, 0o700)
 payload = {
-    "schema": 1,
+    "schema": 2,
     "project_name": "Project Intermix",
     "user_name": user_name,
     "assistant_name": assistant_name,
     "model_label": model_label,
     "project_dir": str(Path(project_dir).expanduser().resolve()),
     "model_path": str(Path(model_path).expanduser().resolve()),
+    "librarian_model_path": str(Path(librarian_model_path).expanduser().resolve()),
+    "librarian_model_label": librarian_model_label,
+    "librarian_context_tokens": int(librarian_context_tokens),
+    "dual_model_enabled": dual_model_enabled.casefold() == "true",
     "model_cache_dir": str(Path(project_dir).expanduser().resolve() / "models"),
     "memory_db": str(Path(project_dir).expanduser().resolve() / "memory" / "sovereign.db"),
     "identity_file": str(Path(project_dir).expanduser().resolve() / "memory" / "identity.txt"),

@@ -185,7 +185,7 @@ class ControllerFactTests(unittest.TestCase):
             store.set_setting("fact_style", "hybrid")
             calls = {"count": 0}
 
-            async def fake_model(prompt: str):
+            async def fake_model(prompt: str, model_role: str = "reasoning"):
                 calls["count"] += 1
                 if calls["count"] == 1:
                     answer = "[1] Python 3.14.6 is currently the latest stable version."

@@ -4,6 +4,26 @@ All notable public changes are documented here. Project Intermix follows
 Semantic Versioning once the public API stabilizes; pre-1.0 and alpha contracts
 may still change.
 
+## [Unreleased]
+
+### Added
+
+- Optional E2B Memory Librarian with deterministic E2B/E4B routing, bounded
+  handoffs, and one-resident-model-at-a-time switching for constrained Android.
+- Reversible explicit communication preferences with an inspectable persona
+  changelog and one-step undo.
+- A fail-closed Sanctuary capability contract that refuses to describe Termux
+  storage as encrypted and reserves biometric vault activation for the APK.
+- Installer and diagnostics support for an optional librarian model and its
+  independent physical context ceiling.
+
+### Preserved
+
+- Python remains the authority for memory validation, model routing, grounding,
+  numeric integrity, workspace permissions, and persistence.
+- E4B remains the automatic fallback when the optional E2B asset is absent or
+  its resident backend becomes unavailable.
+
 ## [1.4.1-alpha.1] - 2026-08-25
 
 ### Added

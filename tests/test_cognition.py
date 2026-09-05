@@ -45,7 +45,7 @@ class NumericIntegrityTests(unittest.TestCase):
             store = MemoryStore(Path(temp.name) / "brain.db")
             calls = {"count": 0}
 
-            async def fake_stream(prompt: str):
+            async def fake_stream(prompt: str, model_role: str = "reasoning"):
                 calls["count"] += 1
                 if calls["count"] == 1:
                     answer = "The sequence is 1:1777 and 1+7+7+7+7=2222."
@@ -209,7 +209,7 @@ class CreationAndReportTests(unittest.TestCase):
 
 
 class SchemaUpgradeTests(unittest.TestCase):
-    def test_additive_v1_to_v2_upgrade_preserves_existing_rows(self):
+    def test_additive_v1_to_v3_upgrade_preserves_existing_rows(self):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "brain.db"
             original = MemoryStore(path)
@@ -238,7 +238,7 @@ class SchemaUpgradeTests(unittest.TestCase):
             upgraded = MemoryStore(path)
             messages = upgraded.get_messages(session["id"], limit=10)
             self.assertEqual([item["id"] for item in messages], [message_id])
-            self.assertEqual(upgraded.status()["schema_version"], 2)
+            self.assertEqual(upgraded.status()["schema_version"], 3)
             with upgraded.connection(readonly=True) as db:
                 tables = {
                     row[0]
@@ -247,7 +247,14 @@ class SchemaUpgradeTests(unittest.TestCase):
                     ).fetchall()
                 }
             self.assertTrue(
-                {"memory_events", "memory_entities", "memory_relations", "fact_watchlist", "report_runs"}
+                {
+                    "memory_events",
+                    "memory_entities",
+                    "memory_relations",
+                    "fact_watchlist",
+                    "report_runs",
+                    "persona_revisions",
+                }
                 <= tables
             )
 

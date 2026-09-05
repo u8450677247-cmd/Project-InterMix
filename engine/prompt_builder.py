@@ -10,6 +10,7 @@ from typing import Any
 from memory_protocol import MEMORY_PROTOCOL_INSTRUCTIONS
 from memory_retriever import RecallResult, retrieve_context
 from memory_store import MemoryStore, estimate_tokens
+from persona_manager import persona_prompt_block
 from second_brain import retrieve_second_brain_context
 from runtime_config import CONFIG
 
@@ -141,6 +142,7 @@ def build_prompt(
     response_mode: str = "normal",
     input_limit_tokens: int | None = None,
     output_reserve_tokens: int | None = None,
+    include_memory_protocol: bool = True,
 ) -> PromptBuild:
     lookup_mode = response_mode == "lookup"
     output_reserve = max(
@@ -174,6 +176,7 @@ def build_prompt(
     if lookup_mode:
         recall = RecallResult(text="", memory_ids=[], message_ids=[], estimated_tokens=0)
         second_brain_context = ""
+        persona_context = ""
     else:
         recall = retrieve_context(store, user_text, session_id=session_id, token_budget=760)
         second_brain_context = retrieve_second_brain_context(
@@ -181,6 +184,7 @@ def build_prompt(
             user_text,
             token_budget=520,
         )
+        persona_context = persona_prompt_block(store)
 
     grounding_contract = ""
     if web_data:
@@ -216,6 +220,7 @@ def build_prompt(
         _Block("recent", recent_text, 80 if lookup_mode else 450, 4, "tail"),
         _Block("recall", recall.text, 0, 6, "head"),
         _Block("second_brain", second_brain_context, 0, 6, "head_tail"),
+        _Block("persona", _truncate(persona_context, 360, "tail"), 0, 5, "tail"),
         _Block(
             "grounding_contract",
             grounding_contract,
@@ -273,8 +278,12 @@ def build_prompt(
         ),
         _Block(
             "protocol",
-            "" if lookup_mode else MEMORY_PROTOCOL_INSTRUCTIONS,
-            0 if lookup_mode else estimate_tokens(MEMORY_PROTOCOL_INSTRUCTIONS),
+            "" if lookup_mode or not include_memory_protocol else MEMORY_PROTOCOL_INSTRUCTIONS,
+            (
+                0
+                if lookup_mode or not include_memory_protocol
+                else estimate_tokens(MEMORY_PROTOCOL_INSTRUCTIONS)
+            ),
             0,
             "head",
         ),

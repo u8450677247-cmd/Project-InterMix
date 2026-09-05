@@ -9,7 +9,8 @@ flowchart TD
     UI["Textual cockpit"] --> CTRL["Inference controller"]
     CTRL --> INTENT["Intent, freshness, numeric, and claim classifiers"]
     CTRL --> PROMPT["Budgeted prompt assembler"]
-    PROMPT --> ENGINE["Resident LiteRT-LM engine"]
+    CTRL --> ROUTER["Deterministic model router"]
+    ROUTER --> ENGINE["One resident LiteRT-LM profile"]
     CTRL --> WEB["Bounded provider waves"]
     CTRL --> AGENT["Ordered workspace executor"]
     CTRL <--> DB["SQLite memory and ledgers"]
@@ -22,6 +23,8 @@ flowchart TD
 |---|---|---|
 | Visible answer | Natural-language draft | Hidden-protocol filtering, grounding validation, numeric checks, final display |
 | Memory | Versioned upsert/delete proposal | Schema validation, explicitness, sensitivity rules, provenance, conflict history |
+| Model handoff | Bounded E2B intent and memory proposal | Route selection, profile availability, unload-before-load, validation, E4B fallback |
+| Persona | Explicit communication preference | Changelog, bounded prompt injection, undo, no inferred diagnosis or immutable trait |
 | Web | Search need and synthesis | Query classification, provider choice, timeouts, cooldowns, relevance, source IDs, caching |
 | Workspace | Ordered XML tool tags | Path containment, size ceilings, checkpoints, execution timeout, stop-on-failure, deletion review |
 | Mission state | Next-step suggestion | Durable task ledger, epochs, acceptance criteria, verified event log, completion gate |
@@ -37,14 +40,18 @@ sequenceDiagram
     participant C as Controller
     participant M as Memory
     participant W as Web
-    participant L as LiteRT-LM
+    participant L as E2B/E4B engine
     U->>C: Prompt or slash command
     C->>M: Store user turn and retrieve context
     opt Volatile or forced query
         C->>W: Bounded search plan
         W-->>C: Ranked evidence or failure
     end
-    C->>L: Budgeted prompt
+    opt Difficult turn with E2B available
+        C->>L: E2B bounded intent and memory handoff
+        L-->>C: Untrusted brief plus validated memory proposal
+    end
+    C->>L: Budgeted prompt to selected profile
     L-->>C: Token stream plus hidden memory proposal
     C->>C: Filter, verify, repair once, or fail closed
     C-->>U: Visible response and diagnostics
@@ -83,7 +90,7 @@ SQLite FTS5 supplies lexical retrieval without a second embedding model. This ke
 
 ## Inference lifecycle
 
-`resident_engine.py` creates the LiteRT-LM engine on one dedicated worker thread, not Textual's event loop. Each assembled prompt receives a fresh conversation object while the expensive engine remains reusable.
+`resident_engine.py` creates the LiteRT-LM engine on one dedicated worker thread, not Textual's event loop. Each assembled prompt receives a fresh conversation object while the expensive engine remains reusable. The optional E2B librarian and required E4B reasoning model are profiles of this single manager: switching closes the current engine before constructing the next one.
 
 The residency profile uses Android `MemAvailable`:
 

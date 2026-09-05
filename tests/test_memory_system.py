@@ -224,6 +224,20 @@ Provider: DuckDuckGo HTML
         self.assertIn("uncited answer will be discarded", prompt.text)
         self.assertLessEqual(prompt.estimated_tokens, INPUT_LIMIT_TOKENS)
 
+    def test_reasoning_handoff_can_delegate_memory_protocol(self):
+        current_id = self.store.append_message(
+            self.session["id"], "user", "Please compare the two designs."
+        )
+        prompt = build_prompt(
+            self.store,
+            session_id=self.session["id"],
+            current_user_message_id=current_id,
+            user_text="Please compare the two designs.",
+            include_memory_protocol=False,
+        )
+        self.assertNotIn("<MEMORY_UPDATE>", prompt.text)
+        self.assertNotIn("protocol", prompt.report["blocks"])
+
     def test_prompt_telemetry_is_scoped_to_the_active_session(self):
         self.store.record_prompt_report(
             self.session["id"],
