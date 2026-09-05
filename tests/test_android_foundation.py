@@ -27,11 +27,15 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("minSdk = 31", app_build)
         self.assertIn("compose-bom:2026.03.01", app_build)
 
-    def test_manifest_is_well_formed_and_requests_no_runtime_permission(self):
+    def test_manifest_requests_only_the_required_biometric_permission(self):
         manifest = APP / "src/main/AndroidManifest.xml"
         root = ET.parse(manifest).getroot()
         self.assertEqual(root.tag, "manifest")
-        self.assertEqual(root.findall("uses-permission"), [])
+        android_name = "{http://schemas.android.com/apk/res/android}name"
+        permissions = [
+            node.attrib[android_name] for node in root.findall("uses-permission")
+        ]
+        self.assertEqual(permissions, ["android.permission.USE_BIOMETRIC"])
 
     def test_composer_contract_is_native_multiline_and_visible_send(self):
         source = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
