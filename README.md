@@ -56,7 +56,7 @@ These are observations, not guarantees. Android memory pressure, other applicati
 
 Google's current Gemma 4 documentation includes E2B and E4B benchmarks on the Galaxy S26 Ultra, which makes it a compelling test target—not a verified Intermix device. LiteRT-LM itself supports Python on Android, Linux, macOS, and Windows, but each Intermix backend and interface path still needs its own report.
 
-See [the device matrix](docs/DEVICE_MATRIX.md) before making or repeating a compatibility claim, and [the installation guide](docs/INSTALLATION.md) before testing a new device.
+See [the device matrix](docs/DEVICE_MATRIX.md) before making or repeating a compatibility claim, [the installation guide](docs/INSTALLATION.md) before testing a new device, and the [Sovereign Glass design contract](docs/ANDROID_DESIGN.md) for the native Android interface direction.
 
 ## Install
 
@@ -212,7 +212,7 @@ flowchart TD
     C <--> M["SQLite memory + mission ledger"]
 ```
 
-The language model proposes prose, memories, and workspace actions. Deterministic controller code decides what can be displayed, stored, researched, or executed. See [architecture](docs/ARCHITECTURE.md).
+The language model proposes prose, memories, and workspace actions. Deterministic controller code decides what can be displayed, stored, researched, or executed. See [architecture](docs/ARCHITECTURE.md) and the [native Android design contract](docs/ANDROID_DESIGN.md).
 
 ## Key commands
 

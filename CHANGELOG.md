@@ -30,6 +30,9 @@ may still change.
 - An auto-growing chat composer with multiline paste, preserved paragraph
   spacing, `Enter` to send, `Shift+Enter` or `Ctrl+Enter` for a newline,
   seven-row capping, internal scrolling, and post-send collapse.
+- The Sovereign Glass native Android design contract, anchoring responsive
+  surfaces, state semantics, visual tokens, accessibility, privacy, motion, and
+  thermal fallbacks before APK implementation.
 
 ### Preserved
 
