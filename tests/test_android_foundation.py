@@ -25,13 +25,20 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("compileSdk = 36", app_build)
         self.assertIn("targetSdk = 36", app_build)
         self.assertIn("minSdk = 31", app_build)
-        self.assertIn("versionCode = 3", app_build)
-        self.assertIn('versionName = "0.3.0-cockpit-convergence"', app_build)
+        self.assertIn("versionCode = 4", app_build)
+        self.assertIn('versionName = "0.3.1-runtime-compat"', app_build)
         self.assertIn("compose-bom:2026.03.01", app_build)
         self.assertIn('abiFilters += "arm64-v8a"', app_build)
         self.assertIn(
             'com.google.ai.edge.litertlm:litertlm-android:0.16.1', app_build
         )
+        self.assertIn(
+            'kotlinx-coroutines-android:1.9.0', app_build
+        )
+        self.assertIn(
+            'kotlinx-coroutines-core-jvm:1.9.0', app_build
+        )
+        self.assertNotIn('kotlinx-coroutines-android:1.10.2', app_build)
 
     def test_manifest_declares_biometric_and_visible_inference_service(self):
         manifest = APP / "src/main/AndroidManifest.xml"

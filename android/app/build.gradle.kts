@@ -11,8 +11,8 @@ android {
         applicationId = "dev.anicloud.sovereign.prototype"
         minSdk = 31
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.3.0-cockpit-convergence"
+        versionCode = 4
+        versionName = "0.3.1-runtime-compat"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -64,7 +64,15 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    // LiteRT-LM 0.16.1 is compiled against coroutines 1.9.0. Keep both
+    // artifacts strict: newer runtimes remove SendChannel.close$default,
+    // which otherwise crashes the process when generation completes.
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0") {
+        version { strictly("1.9.0") }
+    }
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.9.0") {
+        version { strictly("1.9.0") }
+    }
     implementation("com.google.ai.edge.litertlm:litertlm-android:0.16.1")
 
     testImplementation("junit:junit:4.13.2")
