@@ -33,6 +33,7 @@ enum class FoundationLayout {
 enum class Destination(val label: String) {
     Home("Home"),
     Chat("Chat"),
+    Workspace("Workspace"),
     Agents("Agents"),
     System("System"),
 }

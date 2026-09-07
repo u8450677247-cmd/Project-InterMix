@@ -20,6 +20,12 @@ class FoundationContractTest {
     }
 
     @Test
+    fun workspaceRemainsAFirstClassDestination() {
+        assertTrue(Destination.entries.contains(Destination.Workspace))
+        assertEquals("Workspace", Destination.Workspace.label)
+    }
+
+    @Test
     fun explicitLayoutChoiceWinsAtAnyWidth() {
         assertEquals(
             FoundationLayout.Desktop,

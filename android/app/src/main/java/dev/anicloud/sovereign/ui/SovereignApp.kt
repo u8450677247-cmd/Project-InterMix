@@ -13,6 +13,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -90,6 +91,9 @@ import dev.anicloud.sovereign.prototype.LayoutPreference
 import dev.anicloud.sovereign.prototype.ModelStage
 import dev.anicloud.sovereign.prototype.RuntimePhase
 import dev.anicloud.sovereign.prototype.SovereignViewModel
+import dev.anicloud.sovereign.prototype.WorkspaceEntry
+import dev.anicloud.sovereign.prototype.WorkspaceState
+import dev.anicloud.sovereign.prototype.WorkspaceViewModel
 import dev.anicloud.sovereign.prototype.allowsAmbientMotion
 import dev.anicloud.sovereign.prototype.resolveFoundationLayout
 import dev.anicloud.sovereign.prototype.thermalStatusLabel
@@ -145,6 +149,7 @@ fun AniCloudApp(
     SovereignTheme(appearance) {
         Surface(
             color = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.onBackground,
             modifier = Modifier
                 .fillMaxSize()
                 .windowInsetsPadding(WindowInsets.safeDrawing),
@@ -424,6 +429,7 @@ private fun DestinationContent(
             cockpit = cockpit,
             cockpitActions = cockpitActions,
         )
+        Destination.Workspace -> WorkspaceSurface()
         Destination.Agents -> AgentSurface()
         Destination.System -> SystemSurface(
             defaultMode = defaultMode,
@@ -923,7 +929,7 @@ private fun MessageBlock(message: ChatMessage) {
             fontWeight = FontWeight.Bold,
         )
         Spacer(Modifier.height(6.dp))
-        Text(message.text, lineHeight = 21.sp)
+        Text(message.text, color = MaterialTheme.colorScheme.onSurface, lineHeight = 21.sp)
     }
 }
 
@@ -1001,6 +1007,153 @@ private fun Composer(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontFamily = FontFamily.Monospace,
                 fontSize = 11.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun WorkspaceSurface(workspaceViewModel: WorkspaceViewModel = viewModel()) {
+    val state by workspaceViewModel.state.collectAsStateWithLifecycle()
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        uri?.let(workspaceViewModel::attachRoot)
+    }
+
+    Column(
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(20.dp),
+    ) {
+        PageHeading("Workspace Lens", "A user-granted project tree with reviewable, versioned writes")
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+        ) {
+            Button(onClick = { picker.launch(null) }, enabled = !state.busy) {
+                Text(if (state.rootUri == null) "CONNECT PROJECT" else "CHANGE PROJECT")
+            }
+            OutlinedButton(
+                onClick = workspaceViewModel::returnToRoot,
+                enabled = state.rootUri != null && state.currentUri != state.rootUri && !state.busy,
+            ) { Text("ROOT") }
+            OutlinedButton(
+                onClick = workspaceViewModel::refresh,
+                enabled = state.rootUri != null && !state.busy,
+            ) { Text("REFRESH") }
+            Text(
+                state.detail,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+            )
+        }
+
+        if (state.rootUri == null) {
+            OutlinedCard(
+                border = BorderStroke(1.dp, CognitionViolet.copy(alpha = 0.6f)),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("THE OPEN FORGE", color = SoftViolet, fontWeight = FontWeight.Bold)
+                    Text(
+                        "Choose a project folder. AniCloudAI receives persistent read/write access " +
+                            "inside that tree only; Android keeps every other location sealed.",
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        "Deletion is intentionally unavailable in this build. Every SAVE retains the previous bytes first.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        } else {
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                val wide = maxWidth >= 840.dp
+                if (wide) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        modifier = Modifier.fillMaxSize(),
+                    ) {
+                        WorkspaceBrowser(state, workspaceViewModel::open, Modifier.width(300.dp))
+                        WorkspaceEditor(state, workspaceViewModel, Modifier.weight(1f))
+                    }
+                } else {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxSize(),
+                    ) {
+                        WorkspaceBrowser(state, workspaceViewModel::open, Modifier.weight(0.38f))
+                        WorkspaceEditor(state, workspaceViewModel, Modifier.weight(0.62f))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkspaceBrowser(
+    state: WorkspaceState,
+    onOpen: (WorkspaceEntry) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    OutlinedCard(modifier = modifier.fillMaxHeight()) {
+        Column(Modifier.fillMaxSize().padding(12.dp)) {
+            Text(state.currentLabel.uppercase(), color = HorizonCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.fillMaxSize()) {
+                items(state.entries, key = { it.uri }) { entry ->
+                    TextButton(
+                        onClick = { onOpen(entry) },
+                        enabled = !state.busy,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            (if (entry.isDirectory) "▸  " else "·  ") + entry.displayName,
+                            color = if (entry.isDirectory) SoftViolet else MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkspaceEditor(
+    state: WorkspaceState,
+    workspaceViewModel: WorkspaceViewModel,
+    modifier: Modifier = Modifier,
+) {
+    OutlinedCard(modifier = modifier.fillMaxHeight()) {
+        Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    state.selected?.displayName ?: "SELECT A TEXT FILE",
+                    color = if (state.isDirty) WaitingAmber else ResonanceMint,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedButton(onClick = workspaceViewModel::revert, enabled = state.isDirty && !state.busy) {
+                    Text("REVERT")
+                }
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = workspaceViewModel::save, enabled = state.isDirty && !state.busy) {
+                    Text("SAVE")
+                }
+            }
+            OutlinedTextField(
+                value = state.editorText,
+                onValueChange = workspaceViewModel::updateEditor,
+                enabled = state.selected != null && !state.busy,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                placeholder = { Text("Open a project file to begin co-creation.") },
+                modifier = Modifier.fillMaxSize(),
             )
         }
     }
@@ -1203,7 +1356,13 @@ private fun StatusCard(
     OutlinedCard(modifier = modifier, border = BorderStroke(1.dp, accent.copy(alpha = 0.45f))) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(title.uppercase(), color = accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            Text(value, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                value,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
             Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
         }
     }
@@ -1245,7 +1404,12 @@ private fun ContractCard(title: String, lines: List<String>) {
 @Composable
 private fun PageHeading(title: String, detail: String) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Text(
+            title,
+            color = MaterialTheme.colorScheme.onBackground,
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+        )
         Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontStyle = FontStyle.Italic)
     }
 }
@@ -1258,6 +1422,7 @@ private fun SectionTitle(title: String) {
 private fun destinationGlyph(destination: Destination): String = when (destination) {
     Destination.Home -> "⌂"
     Destination.Chat -> "◈"
+    Destination.Workspace -> "⌘"
     Destination.Agents -> "▸"
     Destination.System -> "◎"
 }

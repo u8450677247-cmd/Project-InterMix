@@ -1,11 +1,15 @@
 package dev.anicloud.sovereign.prototype
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.hardware.biometrics.BiometricManager
 import android.hardware.biometrics.BiometricPrompt
+import android.os.Build
 import android.os.Bundle
 import android.os.CancellationSignal
 import android.os.SystemClock
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -24,6 +28,10 @@ class MainActivity : ComponentActivity() {
     private val grace = AuthenticationGrace()
     private var authenticationState: AuthenticationState by mutableStateOf(AuthenticationState.Locked)
     private var cancellationSignal: CancellationSignal? = null
+
+    private val notificationPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,6 +61,7 @@ class MainActivity : ComponentActivity() {
             window.decorView.post(::requestAuthentication)
         } else {
             authenticationState = AuthenticationState.Unlocked
+            requestNotificationPermissionIfNeeded()
         }
     }
 
@@ -104,6 +113,7 @@ class MainActivity : ComponentActivity() {
                     ) {
                         grace.markAuthenticated()
                         authenticationState = AuthenticationState.Unlocked
+                        requestNotificationPermissionIfNeeded()
                     }
 
                     override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
@@ -111,5 +121,14 @@ class MainActivity : ComponentActivity() {
                     }
                 },
             )
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (
+            Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 }

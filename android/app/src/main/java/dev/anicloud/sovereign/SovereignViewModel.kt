@@ -8,6 +8,7 @@ import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
@@ -15,6 +16,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -23,20 +26,27 @@ private class QuarantinedGeneration(val violation: IntegrityViolation) : Runtime
 
 private const val FirstTokenTimeoutMillis = 180_000L
 private const val InterChunkTimeoutMillis = 60_000L
+private const val StreamUiPublishMillis = 90L
 
 /** Owns the one-resident native model across rotation and window resizing. */
 class SovereignViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = ModelRepository(application)
+    private val conversationRepository = ConversationRepository(application)
     private val runtime = LiteRtModelRuntime(application)
     private val powerManager = application.getSystemService(PowerManager::class.java)
     private val activityManager = application.getSystemService(ActivityManager::class.java)
-    private val _state = MutableStateFlow(CockpitState())
+    private val restoredMessages = conversationRepository.load()
+    private val _state = MutableStateFlow(
+        CockpitState(
+            messages = restoredMessages.ifEmpty { CockpitState().messages },
+        ),
+    )
     val state: StateFlow<CockpitState> = _state.asStateFlow()
 
     private var importJob: Job? = null
     private var generationJob: Job? = null
     private var generationSerial = 0L
-    private var nextMessageId = 2L
+    private var nextMessageId = (_state.value.messages.maxOfOrNull(ChatMessage::id) ?: 0L) + 1L
 
     private val thermalListener = PowerManager.OnThermalStatusChangedListener { status ->
         recordThermalStatus(status)
@@ -46,6 +56,11 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     init {
+        viewModelScope.launch(Dispatchers.IO) {
+            state.map { it.messages }
+                .distinctUntilChanged()
+                .collect { messages -> runCatching { conversationRepository.save(messages) } }
+        }
         refreshMemory()
         recordThermalStatus(powerManager.currentThermalStatus)
         powerManager.addThermalStatusListener(application.mainExecutor, thermalListener)
@@ -96,24 +111,33 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         val serial = ++generationSerial
         val route = routeLabel(mode)
         _state.update {
+            val userMessage = ChatMessage(nextMessageId++, ChatSpeaker.User, prompt)
             it.copy(
                 stage = ModelStage.Generating,
                 detail = "$route · cancellable native stream",
                 routeLabel = route,
                 streamText = "",
-                messages = it.messages + ChatMessage(nextMessageId++, ChatSpeaker.User, prompt),
+                messages = it.messages + userMessage,
             )
+        }
+        runCatching {
+            InferenceForegroundService.begin(getApplication()) {
+                stopGeneration("Stopped from the Android generation notification.")
+            }
+        }.onFailure { failure ->
+            _state.update { it.copy(detail = "$route · foreground notice unavailable: ${safeFailure(failure)}") }
         }
 
         generationJob = viewModelScope.launch {
-            var accumulated = ""
+            val accumulated = StringBuilder()
             val startedAt = SystemClock.elapsedRealtime()
             var lastProgressAt = startedAt
+            var lastUiPublishAt = startedAt
             var receivedFirstChunk = false
             try {
                 coroutineScope {
                     val chunks = Channel<String>(Channel.BUFFERED)
-                    val collector = launch {
+                    val collector = launch(Dispatchers.Default) {
                         try {
                             runtime.stream(prompt, mode).collect { chunk -> chunks.send(chunk) }
                             chunks.close()
@@ -159,12 +183,17 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                                     }
                                 }
                             }
-                            accumulated += chunk
-                            GenerationIntegrityGuard.inspectStreamingText(accumulated)?.let {
-                                throw QuarantinedGeneration(it)
-                            }
-                            if (serial == generationSerial) {
-                                _state.update { it.copy(streamText = accumulated) }
+                            accumulated.append(chunk)
+                            val now = SystemClock.elapsedRealtime()
+                            if (now - lastUiPublishAt >= StreamUiPublishMillis) {
+                                val visibleSnapshot = accumulated.toString()
+                                GenerationIntegrityGuard.inspectStreamingText(visibleSnapshot)?.let {
+                                    throw QuarantinedGeneration(it)
+                                }
+                                if (serial == generationSerial) {
+                                    _state.update { it.copy(streamText = visibleSnapshot) }
+                                }
+                                lastUiPublishAt = now
                             }
                         }
                     } finally {
@@ -172,14 +201,18 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                         chunks.cancel()
                     }
                 }
-                if (accumulated.isBlank()) {
+                val completedResponse = accumulated.toString()
+                if (completedResponse.isBlank()) {
                     throw QuarantinedGeneration(
                         IntegrityViolation("empty-output", "The native stream completed without text."),
                     )
                 }
+                GenerationIntegrityGuard.inspectStreamingText(completedResponse)?.let {
+                    throw QuarantinedGeneration(it)
+                }
                 val missingNumbers = GenerationIntegrityGuard.missingExactNumericAnchors(
                     prompt = prompt,
-                    response = accumulated,
+                    response = completedResponse,
                 )
                 if (missingNumbers.isNotEmpty()) {
                     throw QuarantinedGeneration(
@@ -200,7 +233,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                             messages = it.messages + ChatMessage(
                                 nextMessageId++,
                                 ChatSpeaker.Core,
-                                accumulated,
+                                completedResponse,
                             ),
                         )
                     }
@@ -224,6 +257,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                 }
             } finally {
+                InferenceForegroundService.finish(getApplication())
                 if (serial == generationSerial) generationJob = null
             }
         }
@@ -413,6 +447,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         generationJob?.cancel()
         runtime.cancelProcess()
         runtime.close()
+        InferenceForegroundService.finish(getApplication())
         super.onCleared()
     }
 }

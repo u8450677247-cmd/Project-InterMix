@@ -11,8 +11,8 @@ android {
         applicationId = "dev.anicloud.sovereign.prototype"
         minSdk = 31
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.2.0-e4b-cockpit"
+        versionCode = 3
+        versionName = "0.3.0-cockpit-convergence"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

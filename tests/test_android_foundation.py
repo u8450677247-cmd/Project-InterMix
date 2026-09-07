@@ -25,23 +25,37 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("compileSdk = 36", app_build)
         self.assertIn("targetSdk = 36", app_build)
         self.assertIn("minSdk = 31", app_build)
-        self.assertIn("versionCode = 2", app_build)
-        self.assertIn('versionName = "0.2.0-e4b-cockpit"', app_build)
+        self.assertIn("versionCode = 3", app_build)
+        self.assertIn('versionName = "0.3.0-cockpit-convergence"', app_build)
         self.assertIn("compose-bom:2026.03.01", app_build)
         self.assertIn('abiFilters += "arm64-v8a"', app_build)
         self.assertIn(
             'com.google.ai.edge.litertlm:litertlm-android:0.16.1', app_build
         )
 
-    def test_manifest_requests_only_the_required_biometric_permission(self):
+    def test_manifest_declares_biometric_and_visible_inference_service(self):
         manifest = APP / "src/main/AndroidManifest.xml"
         root = ET.parse(manifest).getroot()
         self.assertEqual(root.tag, "manifest")
         android_name = "{http://schemas.android.com/apk/res/android}name"
-        permissions = [
+        permissions = {
             node.attrib[android_name] for node in root.findall("uses-permission")
-        ]
-        self.assertEqual(permissions, ["android.permission.USE_BIOMETRIC"])
+        }
+        self.assertEqual(
+            permissions,
+            {
+                "android.permission.USE_BIOMETRIC",
+                "android.permission.POST_NOTIFICATIONS",
+                "android.permission.FOREGROUND_SERVICE",
+                "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
+            },
+        )
+        services = root.findall("application/service")
+        self.assertEqual(len(services), 1)
+        self.assertEqual(
+            services[0].attrib[android_name],
+            ".InferenceForegroundService",
+        )
 
     def test_composer_contract_is_native_multiline_and_visible_send(self):
         source = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
@@ -92,6 +106,42 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("lastResponseMillis", view_model)
         self.assertNotIn("Backend.NPU", combined)
         self.assertNotIn("GOOGLE_TENSOR", combined)
+
+    def test_generation_survives_window_switches_without_token_rate_recomposition(self):
+        service = (SOURCE / "InferenceForegroundService.kt").read_text(encoding="utf-8")
+        view_model = (SOURCE / "SovereignViewModel.kt").read_text(encoding="utf-8")
+        self.assertIn("FOREGROUND_SERVICE_TYPE_SPECIAL_USE", service)
+        self.assertIn("GenerationStopBridge.requestStop()", service)
+        self.assertIn("generation continues across windows", service)
+        self.assertIn("StreamUiPublishMillis = 90L", view_model)
+        self.assertIn("launch(Dispatchers.Default)", view_model)
+        self.assertIn("StringBuilder()", view_model)
+
+    def test_workspace_uses_persisted_tree_access_and_prewrite_snapshots(self):
+        ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
+        repository = (SOURCE / "WorkspaceRepository.kt").read_text(encoding="utf-8")
+        view_model = (SOURCE / "WorkspaceViewModel.kt").read_text(encoding="utf-8")
+        self.assertIn("ActivityResultContracts.OpenDocumentTree", ui)
+        self.assertIn("takePersistableUriPermission", repository)
+        self.assertIn('File(context.filesDir, "workspace_snapshots")', repository)
+        self.assertIn('openFileDescriptor(uri, "rwt")', repository)
+        self.assertIn("Save or revert the current draft", view_model)
+        self.assertNotIn("deleteDocument", repository + view_model)
+
+    def test_obsidian_root_establishes_a_readable_content_color(self):
+        ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
+        self.assertIn("contentColor = MaterialTheme.colorScheme.onBackground", ui)
+        self.assertIn("color = MaterialTheme.colorScheme.onSurface, lineHeight", ui)
+
+    def test_committed_conversation_history_is_atomic_and_app_private(self):
+        repository = (SOURCE / "ConversationRepository.kt").read_text(encoding="utf-8")
+        view_model = (SOURCE / "SovereignViewModel.kt").read_text(encoding="utf-8")
+        self.assertIn('File(context.filesDir, HistoryFileName)', repository)
+        self.assertIn("StandardCopyOption.ATOMIC_MOVE", repository)
+        self.assertIn("MaxHistoryMessages = 200", repository)
+        self.assertIn("quarantineCorruptHistory()", repository)
+        self.assertIn("conversationRepository.load()", view_model)
+        self.assertIn("distinctUntilChanged()", view_model)
 
     def test_generation_guard_and_visual_truth_are_wired(self):
         ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
