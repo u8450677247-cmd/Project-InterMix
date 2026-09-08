@@ -8,13 +8,16 @@ import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.LogSeverity
+import com.google.ai.edge.litertlm.Message
+import com.google.ai.edge.litertlm.MessageCallback
 import com.google.ai.edge.litertlm.NoRepeatNgramConfig
 import com.google.ai.edge.litertlm.RepetitionPenaltyConfig
 import com.google.ai.edge.litertlm.SamplerConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -64,18 +67,38 @@ class LiteRtModelRuntime(private val context: Context) {
             AnswerMode.Adaptive -> AdaptiveOutputTokens
             AnswerMode.Quality -> QualityOutputTokens
         }
-        return activeConversation.sendMessageAsync(
-            text = prompt,
-            repetitionPenaltyConfig = RepetitionPenaltyConfig(
-                repetitionPenalty = 1.12f,
-                windowSize = 512,
-            ),
-            noRepeatNgramConfig = NoRepeatNgramConfig(
-                noRepeatNgramSize = 4,
-                windowSize = 512,
-            ),
-            maxOutputToken = outputLimit,
-        ).map { message -> message.toString() }
+        // Do not use LiteRT-LM 0.16.1's Flow overload here. Its precompiled
+        // callbackFlow adapter invokes SendChannel.close$default, which is not
+        // present in the Android coroutines runtime and terminates the process.
+        // The callback overload stays below that incompatible adapter.
+        return callbackFlow {
+            activeConversation.sendMessageAsync(
+                text = prompt,
+                callback = object : MessageCallback {
+                    override fun onMessage(message: Message) {
+                        trySend(message.toString())
+                    }
+
+                    override fun onDone() {
+                        close(null)
+                    }
+
+                    override fun onError(throwable: Throwable) {
+                        close(throwable)
+                    }
+                },
+                repetitionPenaltyConfig = RepetitionPenaltyConfig(
+                    repetitionPenalty = 1.12f,
+                    windowSize = 512,
+                ),
+                noRepeatNgramConfig = NoRepeatNgramConfig(
+                    noRepeatNgramSize = 4,
+                    windowSize = 512,
+                ),
+                maxOutputToken = outputLimit,
+            )
+            awaitClose {}
+        }
     }
 
     /** JNI cancellation is intentionally separate from coroutine cancellation. */
