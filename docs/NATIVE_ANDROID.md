@@ -5,8 +5,9 @@ The implementation-facing product decisions are frozen in the
 `android/` module began as a deliberately disconnected native shell. That shell
 has now passed its first Pixel test. The current candidate adds one-file model
 import, SHA-256 fingerprinting, a pinned LiteRT-LM E4B runtime, guarded native
-streaming, measured GPU-to-CPU fallback, and explicit STOP recovery. Memory,
-grounding, voice, Termux synchronization, agents, and E2B remain disconnected.
+streaming, measured GPU-to-CPU fallback, explicit STOP recovery, an app-private
+SQLite Memory Matrix, and a controller-mediated SAF workspace. Grounding,
+voice, Termux synchronization, long-running agents, and E2B remain disconnected.
 
 ## Verdict
 
@@ -52,17 +53,20 @@ assemble entirely on the phone.
   **E4B candidate implemented; Pixel compile/runtime evidence pending.**
 - Foreground, user-visible inference lifecycle with native cancellation and
   conversation-state reset after STOP. **Candidate implemented.**
-- Existing SQLite schema migration or reviewed export/import.
-- Storage Access Framework workspace selected by the user.
+- Native SQLite/WAL memory, validated recall, and legacy JSON migration.
+  **Implemented; device durability and retrieval evidence pending.**
+- Storage Access Framework workspace selected by the user, with automatic
+  reads and approval-gated snapshotted writes. **Implemented; device evidence pending.**
 - Android Keystore-backed provider vault.
 - User-selected external model file; no multi-gigabyte model inside the base APK.
 - Backend telemetry matching the Termux cold/warm measurements.
 
 This milestone reproduces known behavior before redesigning memory or autonomy.
 The E4B candidate reports Android `MemAvailable`, categorical thermal pressure,
-model hash, backend, model-load time, first-token latency, and total latency. It
-does not claim database, network-grounding, voice, or E2B integration; those
-signals stay visibly disconnected until their adapters are measured.
+model hash, backend, model-load time, first-token latency, total latency, Matrix
+row counts, and FTS availability. It does not claim network grounding, voice,
+Termux synchronization, or E2B integration; those signals stay visibly
+disconnected until their adapters are measured.
 
 ### Milestone 2 — native Android integration
 

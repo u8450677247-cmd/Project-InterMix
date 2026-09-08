@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -89,6 +88,8 @@ import dev.anicloud.sovereign.prototype.FoundationLayout
 import dev.anicloud.sovereign.prototype.FoundationPreferenceStore
 import dev.anicloud.sovereign.prototype.LayoutPreference
 import dev.anicloud.sovereign.prototype.ModelStage
+import dev.anicloud.sovereign.prototype.MatrixMemory
+import dev.anicloud.sovereign.prototype.PendingWorkspaceAction
 import dev.anicloud.sovereign.prototype.RuntimePhase
 import dev.anicloud.sovereign.prototype.SovereignViewModel
 import dev.anicloud.sovereign.prototype.WorkspaceEntry
@@ -104,6 +105,10 @@ private data class CockpitActions(
     val onRetryModel: () -> Unit,
     val onSend: (String, AnswerMode) -> Unit,
     val onStop: () -> Unit,
+    val onApproveWorkspaceAction: (Long) -> Unit,
+    val onDenyWorkspaceAction: (Long) -> Unit,
+    val onForgetMemory: (Long) -> Unit,
+    val onSetMemoryPinned: (Long, Boolean) -> Unit,
 )
 
 @Composable
@@ -123,6 +128,10 @@ fun AniCloudApp(
         onRetryModel = sovereignViewModel::retryModel,
         onSend = sovereignViewModel::send,
         onStop = sovereignViewModel::stopGeneration,
+        onApproveWorkspaceAction = sovereignViewModel::approveWorkspaceAction,
+        onDenyWorkspaceAction = sovereignViewModel::denyWorkspaceAction,
+        onForgetMemory = sovereignViewModel::forgetMemory,
+        onSetMemoryPinned = sovereignViewModel::setMemoryPinned,
     )
     val displayId = context.display?.displayId ?: 0
     val preferenceStore = remember(context.applicationContext) {
@@ -331,7 +340,7 @@ private fun PhoneShell(
                 NavigationBarItem(
                     selected = destination == item,
                     onClick = { onDestination(item) },
-                    icon = { Text(destinationGlyph(item)) },
+                    icon = { DestinationIcon(item, selected = destination == item) },
                     label = { Text(item.label) },
                 )
             }
@@ -429,8 +438,12 @@ private fun DestinationContent(
             cockpit = cockpit,
             cockpitActions = cockpitActions,
         )
+        Destination.Memory -> MemoryMatrixSurface(
+            cockpit = cockpit,
+            actions = cockpitActions,
+        )
         Destination.Workspace -> WorkspaceSurface()
-        Destination.Agents -> AgentSurface()
+        Destination.Agents -> AgentSurface(cockpit = cockpit, actions = cockpitActions)
         Destination.System -> SystemSurface(
             defaultMode = defaultMode,
             appearance = appearance,
@@ -491,7 +504,8 @@ private fun NavigationPane(
             FilterChip(
                 selected = destination == item,
                 onClick = { onDestination(item) },
-                label = { Text("${destinationGlyph(item)}  ${item.label}") },
+                leadingIcon = { DestinationIcon(item, selected = destination == item) },
+                label = { Text(item.label) },
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -567,20 +581,35 @@ private fun HomeDashboard(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.horizontalScroll(rememberScrollState()),
             ) {
-                ActionCard("VOICE", "Conversation shortcut", HorizonCyan)
-                ActionCard("AGENTS", "Foreground service pending", CognitionViolet)
+                ActionCard("VOICE", "Conversation shortcut", HorizonCyan, "PLANNED")
+                ActionCard(
+                    "AGENTS",
+                    "${cockpit.pendingActions.size} approval${if (cockpit.pendingActions.size == 1) "" else "s"} waiting",
+                    CognitionViolet,
+                    if (cockpit.pendingActions.isEmpty()) "QUEUE CLEAR" else "REVIEW",
+                )
+                ActionCard(
+                    "MEMORY MATRIX",
+                    "${cockpit.memoryMatrix.memoryCount} durable memories",
+                    SoftViolet,
+                    "ACTIVE",
+                )
                 ActionCard(
                     "MODELS",
                     cockpit.model?.displayName ?: "Local import ready",
                     modelVitalityColor(cockpit),
+                    if (cockpit.model == null) "DISCONNECTED" else "CONNECTED",
                 )
             }
         }
         item {
             SectionTitle("Recent conversations")
             Spacer(Modifier.height(8.dp))
-            ConversationRow("Current native session", "In memory · persistence adapter pending")
-            ConversationRow("Termux history", "Not imported")
+            ConversationRow(
+                "Current native session",
+                "${cockpit.memoryMatrix.messageCount} committed messages · SQLite WAL",
+            )
+            ConversationRow("Termux history", "Separate until reviewed bridge import")
         }
         item {
             StatusCard(
@@ -615,10 +644,18 @@ private fun HealthStrip(cockpit: CockpitState) {
             modifier = Modifier.width(190.dp),
         )
         StatusCard(
-            title = "Memory",
+            title = "Device RAM",
             value = cockpit.availableMemoryBytes?.let(::formatBytes) ?: "Unavailable",
             detail = "Android MemAvailable · measured now",
             accent = CognitionViolet,
+            modifier = Modifier.width(190.dp),
+        )
+        StatusCard(
+            title = "Memory Matrix",
+            value = "${cockpit.memoryMatrix.memoryCount} memories",
+            detail = "${cockpit.memoryMatrix.messageCount} messages · " +
+                if (cockpit.memoryMatrix.ftsAvailable) "FTS5 ready" else "salience fallback",
+            accent = SoftViolet,
             modifier = Modifier.width(190.dp),
         )
         StatusCard(
@@ -647,7 +684,7 @@ private fun ResumeCard(onOpenChat: () -> Unit) {
                 Spacer(Modifier.height(6.dp))
                 Text("Current native session", fontWeight = FontWeight.Bold)
                 Text(
-                    "In-memory only · durable history adapter pending",
+                    "App-private SQLite continuity · bounded recall on every turn",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 14.sp,
                 )
@@ -1013,6 +1050,120 @@ private fun Composer(
 }
 
 @Composable
+private fun MemoryMatrixSurface(cockpit: CockpitState, actions: CockpitActions) {
+    LazyColumn(
+        contentPadding = PaddingValues(20.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        item {
+            PageHeading(
+                "Memory Matrix",
+                "App-private continuity with explicit provenance and bounded recall",
+            )
+        }
+        item {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+            ) {
+                StatusCard(
+                    "Committed history",
+                    "${cockpit.memoryMatrix.messageCount} messages",
+                    "SQLite WAL · restored after process death",
+                    HorizonCyan,
+                    Modifier.width(220.dp),
+                )
+                StatusCard(
+                    "Durable memory",
+                    "${cockpit.memoryMatrix.memoryCount} active",
+                    if (cockpit.memoryMatrix.ftsAvailable) "FTS5 recall ready" else "Salience fallback active",
+                    SoftViolet,
+                    Modifier.width(220.dp),
+                )
+                StatusCard(
+                    "Local footprint",
+                    formatBytes(cockpit.memoryMatrix.databaseBytes),
+                    "App-private database · never shared live",
+                    ResonanceMint,
+                    Modifier.width(220.dp),
+                )
+            }
+        }
+        item {
+            ContractCard(
+                "Memory controls",
+                listOf(
+                    "Use /remember <fact> for an exact durable memory",
+                    "Model suggestions require an exact quote from your current message",
+                    "Credentials and sensitive inferred traits are rejected",
+                    "Pin or forget any active memory below",
+                ),
+            )
+        }
+        if (cockpit.memoryMatrix.recentMemories.isEmpty()) {
+            item {
+                StatusCard(
+                    "MATRIX READY",
+                    "No durable memories yet",
+                    "Conversation history is already committed. Add a fact with /remember when you want durable recall.",
+                    ResonanceMint,
+                )
+            }
+        } else {
+            items(cockpit.memoryMatrix.recentMemories, key = { it.id }) { memory ->
+                MemoryCard(memory = memory, actions = actions)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MemoryCard(memory: MatrixMemory, actions: CockpitActions) {
+    OutlinedCard(
+        border = BorderStroke(
+            1.dp,
+            if (memory.pinned) ResonanceMint.copy(alpha = 0.75f) else SoftViolet.copy(alpha = 0.38f),
+        ),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "${if (memory.pinned) "PINNED · " else ""}${memory.kind.uppercase()} · #${memory.id}",
+                    color = if (memory.pinned) ResonanceMint else SoftViolet,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    "${(memory.confidence * 100).toInt()}% confidence",
+                    color = MutedText,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
+            Text(memory.value, color = MaterialTheme.colorScheme.onSurface, lineHeight = 21.sp)
+            Text(
+                "KEY ${memory.key} · UPDATED ${memory.updatedAt}",
+                color = MutedText,
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { actions.onSetMemoryPinned(memory.id, !memory.pinned) }) {
+                    Text(if (memory.pinned) "UNPIN" else "PIN")
+                }
+                TextButton(onClick = { actions.onForgetMemory(memory.id) }) {
+                    Text("FORGET", color = InterventionCoral)
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun WorkspaceSurface(workspaceViewModel: WorkspaceViewModel = viewModel()) {
     val state by workspaceViewModel.state.collectAsStateWithLifecycle()
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -1025,7 +1176,7 @@ private fun WorkspaceSurface(workspaceViewModel: WorkspaceViewModel = viewModel(
             .fillMaxSize()
             .padding(20.dp),
     ) {
-        PageHeading("Workspace Lens", "A user-granted project tree with reviewable, versioned writes")
+        PageHeading("Workspace Lens", "A user-granted project tree with controller-mediated co-creation")
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1046,6 +1197,15 @@ private fun WorkspaceSurface(workspaceViewModel: WorkspaceViewModel = viewModel(
                 state.detail,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+            )
+        }
+
+        if (state.rootUri != null) {
+            Text(
+                "CHAT TOOLS · LIST/READ AUTO · CREATE/WRITE/MKDIR REQUIRE AGENTS APPROVAL · DELETE DISABLED",
+                color = ResonanceMint,
+                fontSize = 11.sp,
                 fontFamily = FontFamily.Monospace,
             )
         }
@@ -1160,20 +1320,38 @@ private fun WorkspaceEditor(
 }
 
 @Composable
-private fun AgentSurface() {
+private fun AgentSurface(cockpit: CockpitState, actions: CockpitActions) {
     LazyColumn(
         contentPadding = PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
         modifier = Modifier.fillMaxSize(),
     ) {
         item { PageHeading("Agents", "Checkpointed work that never hides its state") }
-        item {
-            StatusCard(
-                "DESIGN PLACEHOLDER",
-                "No agent runtime connected",
-                "0 writes · foreground service adapter pending",
-                CognitionViolet,
-            )
+        if (cockpit.pendingActions.isEmpty()) {
+            item {
+                StatusCard(
+                    "APPROVAL QUEUE",
+                    "No pending writes",
+                    "Workspace list/read tools run automatically. Mutating actions stop here for your decision.",
+                    ResonanceMint,
+                )
+            }
+        } else {
+            item {
+                StatusCard(
+                    "APPROVAL QUEUE",
+                    "${cockpit.pendingActions.size} action${if (cockpit.pendingActions.size == 1) "" else "s"} waiting",
+                    "Nothing below has executed yet.",
+                    WaitingAmber,
+                )
+            }
+            items(cockpit.pendingActions, key = { it.id }) { pending ->
+                PendingActionCard(
+                    pending = pending,
+                    busy = cockpit.activeAgentActionId != null,
+                    actions = actions,
+                )
+            }
         }
         item {
             ContractCard(
@@ -1186,6 +1364,62 @@ private fun AgentSurface() {
                     "Thermal severity can reduce or pause work",
                 ),
             )
+        }
+    }
+}
+
+@Composable
+private fun PendingActionCard(
+    pending: PendingWorkspaceAction,
+    busy: Boolean,
+    actions: CockpitActions,
+) {
+    OutlinedCard(border = BorderStroke(1.dp, WaitingAmber.copy(alpha = 0.68f))) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "ACTION #${pending.id} · ${pending.kind.wireName.uppercase()}",
+                    color = WaitingAmber,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                )
+                Text("PENDING", color = WaitingAmber, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+            }
+            Text(pending.path, color = HorizonCyan, fontFamily = FontFamily.Monospace)
+            if (pending.reason.isNotBlank()) {
+                Text(pending.reason, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (pending.content.isNotBlank()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.46f),
+                    shape = RoundedCornerShape(8.dp),
+                ) {
+                    Text(
+                        pending.content.take(1_500) + if (pending.content.length > 1_500) "\n…preview clipped" else "",
+                        modifier = Modifier.padding(12.dp),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        maxLines = 12,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = { actions.onApproveWorkspaceAction(pending.id) },
+                    enabled = !busy,
+                ) {
+                    Text("APPROVE")
+                }
+                OutlinedButton(
+                    onClick = { actions.onDenyWorkspaceAction(pending.id) },
+                    enabled = !busy,
+                ) {
+                    Text("DENY")
+                }
+            }
         }
     }
 }
@@ -1242,9 +1476,14 @@ private fun SystemLens(cockpit: CockpitState, modifier: Modifier = Modifier) {
             modelVitalityColor(cockpit),
         )
         LensValue(
-            "MEMORY",
+            "DEVICE RAM",
             cockpit.availableMemoryBytes?.let(::formatBytes)?.uppercase() ?: "UNAVAILABLE",
             CognitionViolet,
+        )
+        LensValue(
+            "MEMORY MATRIX",
+            "${cockpit.memoryMatrix.memoryCount} MEMORIES · ${cockpit.memoryMatrix.messageCount} MESSAGES",
+            if (cockpit.memoryMatrix.ftsAvailable) ResonanceMint else WaitingAmber,
         )
         LensValue(
             "THERMAL",
@@ -1269,8 +1508,8 @@ private fun SystemLens(cockpit: CockpitState, modifier: Modifier = Modifier) {
         LensValue("ROUTE", cockpit.routeLabel.uppercase(), modelVitalityColor(cockpit))
         HorizontalDivider(color = MaterialTheme.colorScheme.outline)
         Text(
-            "Memory is Android MemAvailable. Thermal history contains categorical Android " +
-                "status events—not an invented temperature.",
+            "Device RAM is Android MemAvailable. Memory Matrix is the app-private SQLite store. " +
+                "Thermal history contains categorical Android status events—not an invented temperature.",
             color = MutedText,
             fontSize = 13.sp,
         )
@@ -1324,7 +1563,7 @@ private fun ThermalSparkline(history: List<Int>, current: Int?) {
 private fun PrivacyStateCard() {
     val entries = listOf(
         Triple("⌁", "Authentication", "Android biometric or device credential"),
-        Triple("▣", "Ordinary history", "App-private persistence adapter pending"),
+        Triple("▣", "Ordinary history", "App-private SQLite WAL + FTS5 recall"),
         Triple("◇", "Sanctuary", "Ciphertext vault adapter pending"),
         Triple("↗", "Diagnostics", "Manual local export only"),
         Triple("◉", "Screen privacy", "User-controlled concealment toggle pending"),
@@ -1369,8 +1608,8 @@ private fun StatusCard(
 }
 
 @Composable
-private fun ActionCard(title: String, detail: String, accent: Color) {
-    StatusCard(title, "Available later", detail, accent, Modifier.width(210.dp))
+private fun ActionCard(title: String, detail: String, accent: Color, value: String) {
+    StatusCard(title, value, detail, accent, Modifier.width(210.dp))
 }
 
 @Composable
@@ -1419,12 +1658,82 @@ private fun SectionTitle(title: String) {
     Text(title.uppercase(), color = SoftViolet, fontSize = 13.sp, fontWeight = FontWeight.Bold)
 }
 
-private fun destinationGlyph(destination: Destination): String = when (destination) {
-    Destination.Home -> "⌂"
-    Destination.Chat -> "◈"
-    Destination.Workspace -> "⌘"
-    Destination.Agents -> "▸"
-    Destination.System -> "◎"
+@Composable
+private fun DestinationIcon(destination: Destination, selected: Boolean) {
+    val color = if (selected) ResonanceMint else HorizonCyan.copy(alpha = 0.82f)
+    Canvas(Modifier.size(20.dp)) {
+        val stroke = Stroke(width = 1.8.dp.toPx(), cap = StrokeCap.Round)
+        val cx = size.width / 2f
+        val cy = size.height / 2f
+        val pad = 3.dp.toPx()
+        when (destination) {
+            Destination.Home -> {
+                val roof = Path().apply {
+                    moveTo(pad, cy)
+                    lineTo(cx, pad)
+                    lineTo(size.width - pad, cy)
+                }
+                drawPath(roof, color, style = stroke)
+                drawLine(color, Offset(pad + 2f, cy - 1f), Offset(pad + 2f, size.height - pad), stroke.width)
+                drawLine(color, Offset(size.width - pad - 2f, cy - 1f), Offset(size.width - pad - 2f, size.height - pad), stroke.width)
+                drawLine(color, Offset(pad + 2f, size.height - pad), Offset(size.width - pad - 2f, size.height - pad), stroke.width)
+            }
+            Destination.Chat -> {
+                drawCircle(color, radius = size.minDimension * 0.34f, center = Offset(cx, cy - 1f), style = stroke)
+                drawLine(color, Offset(cx - 1f, cy + size.height * 0.3f), Offset(cx - size.width * 0.24f, size.height - pad), stroke.width)
+                drawCircle(color, radius = 1.2.dp.toPx(), center = Offset(cx - 4.dp.toPx(), cy - 1f))
+                drawCircle(color, radius = 1.2.dp.toPx(), center = Offset(cx + 4.dp.toPx(), cy - 1f))
+            }
+            Destination.Memory -> {
+                drawCircle(color, radius = size.minDimension * 0.37f, center = Offset(cx, cy), style = stroke)
+                drawCircle(color, radius = size.minDimension * 0.19f, center = Offset(cx, cy), style = stroke)
+                drawCircle(color, radius = 1.7.dp.toPx(), center = Offset(cx, cy))
+                drawLine(color, Offset(cx, pad), Offset(cx, cy - size.minDimension * 0.19f), stroke.width)
+            }
+            Destination.Workspace -> {
+                drawLine(color, Offset(pad, pad), Offset(pad, size.height - pad), stroke.width)
+                drawLine(color, Offset(pad, pad), Offset(cx - 2f, pad), stroke.width)
+                drawLine(color, Offset(pad, size.height - pad), Offset(cx - 2f, size.height - pad), stroke.width)
+                drawLine(color, Offset(size.width - pad, pad), Offset(size.width - pad, size.height - pad), stroke.width)
+                drawLine(color, Offset(cx + 2f, pad), Offset(size.width - pad, pad), stroke.width)
+                drawLine(color, Offset(cx + 2f, size.height - pad), Offset(size.width - pad, size.height - pad), stroke.width)
+                drawLine(color, Offset(cx, cy - 4.dp.toPx()), Offset(cx, cy + 4.dp.toPx()), stroke.width)
+                drawLine(color, Offset(cx - 4.dp.toPx(), cy), Offset(cx + 4.dp.toPx(), cy), stroke.width)
+            }
+            Destination.Agents -> {
+                val top = Offset(cx, pad)
+                val left = Offset(pad, size.height - pad)
+                val right = Offset(size.width - pad, size.height - pad)
+                drawLine(color, top, left, stroke.width)
+                drawLine(color, top, right, stroke.width)
+                drawLine(color, left, right, stroke.width)
+                drawCircle(color, radius = 2.dp.toPx(), center = top)
+                drawCircle(color, radius = 2.dp.toPx(), center = left)
+                drawCircle(color, radius = 2.dp.toPx(), center = right)
+            }
+            Destination.System -> {
+                drawCircle(color, radius = size.minDimension * 0.31f, center = Offset(cx, cy), style = stroke)
+                drawCircle(color, radius = 2.dp.toPx(), center = Offset(cx, cy))
+                listOf(0f, 90f, 180f, 270f).forEach { degrees ->
+                    val radians = Math.toRadians(degrees.toDouble())
+                    val inner = size.minDimension * 0.35f
+                    val outer = size.minDimension * 0.47f
+                    drawLine(
+                        color,
+                        Offset(
+                            cx + kotlin.math.cos(radians).toFloat() * inner,
+                            cy + kotlin.math.sin(radians).toFloat() * inner,
+                        ),
+                        Offset(
+                            cx + kotlin.math.cos(radians).toFloat() * outer,
+                            cy + kotlin.math.sin(radians).toFloat() * outer,
+                        ),
+                        stroke.width,
+                    )
+                }
+            }
+        }
+    }
 }
 
 private fun runtimePhase(stage: ModelStage): RuntimePhase = when (stage) {

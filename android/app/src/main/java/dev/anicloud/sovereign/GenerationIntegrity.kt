@@ -120,11 +120,14 @@ data class CockpitState(
     val lastFirstTokenMillis: Long? = null,
     val lastResponseMillis: Long? = null,
     val routeLabel: String = "No model route",
+    val memoryMatrix: MemoryMatrixSnapshot = MemoryMatrixSnapshot(),
+    val pendingActions: List<PendingWorkspaceAction> = emptyList(),
+    val activeAgentActionId: Long? = null,
     val messages: List<ChatMessage> = listOf(
         ChatMessage(
-            id = 1,
+            id = -100,
             speaker = ChatSpeaker.Core,
-            text = "Native cockpit ready. Import an E4B .litertlm package to connect Sovereign Core.",
+            text = "Native cockpit ready. Connect a model, Memory Matrix, and a project workspace to begin.",
         ),
     ),
     val streamText: String = "",

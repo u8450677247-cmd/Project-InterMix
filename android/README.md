@@ -2,8 +2,8 @@
 
 This module is the private Pixel 10 Pro reference cockpit for Project Intermix.
 The original disconnected shell has passed its first device test. The current
-candidate adds the first real E4B LiteRT-LM boundary without pretending that
-memory, grounding, voice, agents, or E2B routing are already native.
+candidate combines the stable E4B LiteRT-LM boundary with the first native
+Memory Matrix and controller-mediated project workspace.
 
 ## What runs in this candidate
 
@@ -20,12 +20,19 @@ memory, grounding, voice, agents, or E2B routing are already native.
 - STOP recovery that cancels JNI inference, discards partial output, and
   rebuilds conversation state before the next turn;
 - deterministic repetition, Unicode, output-length, and exact-number guards;
+- app-private SQLite/WAL conversation and durable-memory tables with FTS5
+  retrieval, provenance, revision records, and one-time JSON-history migration;
+- bounded context rehydration before each model turn;
+- a persisted Storage Access Framework project tree with automatic list/read
+  tools, approval-gated create/write/mkdir actions, and pre-write snapshots;
+- a real Agents approval queue plus pin/forget controls in the Matrix surface;
+- custom destination icons that preserve the cyan-purple cockpit language;
 - actual Android `MemAvailable` and categorical thermal-pressure signals; and
 - thermal-aware visual motion and model initialization.
 
-The app still has no native durable-memory database, online grounding,
-Termux bridge, Kokoro voice, foreground agent service, E2B model, or release
-update channel. Those surfaces say so explicitly.
+The app still has no online grounding, Android provider vault, Termux command
+bridge, Kokoro voice, long-running foreground agent service, or E2B model.
+Those surfaces remain visibly unavailable instead of simulating success.
 
 ## Model import and storage
 
@@ -33,6 +40,11 @@ The APK requests no broad storage permission. Android's Storage Access
 Framework grants access to one selected file, which AniCloudAI copies before
 initializing. The copied file is named by its SHA-256 digest and stored beneath
 `noBackupFilesDir/models`; the external source is never executed in place.
+
+Workspace access uses a separate persisted SAF tree chosen in Workspace Lens.
+Choosing an Internal Storage folder grants reach only within that tree. Reads
+can be controller-executed; file creation, replacement, and directory creation
+must be approved in Agents. Deletion remains disabled in this candidate.
 
 For the current Termux E4B package, make a temporary picker-visible copy:
 
@@ -122,7 +134,12 @@ bash tools/termux_dogfood_update.sh --open
 7. Rotate, resize, and enter desktop mode before, during, and after generation.
 8. Repeat one response in Performance, Adaptive, and Quality. Until E2B exists,
    Performance and Adaptive must honestly show an E4B fallback route.
+9. Use `/remember`, close and reopen the app, then verify the fact is visible in
+   Matrix and influences a relevant later turn.
+10. Connect a disposable project tree, ask chat to list and read a file, then
+    request an edit and verify no bytes change before approval in Agents.
 
-Do not import the Termux memory database yet. The next gate after this smoke
-test is durable local conversation storage, followed by the versioned Termux
-bridge. Dual-model routing begins only after a compatible E2B package exists.
+Do not import a live Termux SQLite database. A later bridge must use a reviewed
+export so two runtimes never concurrently open the same database. The next
+native gates are provider grounding and a Keystore-backed credential vault;
+dual-model routing begins only after a compatible E2B package exists.

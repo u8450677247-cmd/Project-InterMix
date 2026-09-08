@@ -25,8 +25,8 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("compileSdk = 36", app_build)
         self.assertIn("targetSdk = 36", app_build)
         self.assertIn("minSdk = 31", app_build)
-        self.assertIn("versionCode = 5", app_build)
-        self.assertIn('versionName = "0.3.2-callback-stream"', app_build)
+        self.assertIn("versionCode = 6", app_build)
+        self.assertIn('versionName = "0.4.0-memory-forge"', app_build)
         self.assertIn("compose-bom:2026.03.01", app_build)
         self.assertIn('abiFilters += "arm64-v8a"', app_build)
         self.assertIn(
@@ -145,15 +145,52 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("contentColor = MaterialTheme.colorScheme.onBackground", ui)
         self.assertIn("color = MaterialTheme.colorScheme.onSurface, lineHeight", ui)
 
-    def test_committed_conversation_history_is_atomic_and_app_private(self):
-        repository = (SOURCE / "ConversationRepository.kt").read_text(encoding="utf-8")
+    def test_memory_matrix_is_app_private_searchable_and_migrates_history(self):
+        repository = (SOURCE / "MemoryMatrixRepository.kt").read_text(encoding="utf-8")
         view_model = (SOURCE / "SovereignViewModel.kt").read_text(encoding="utf-8")
-        self.assertIn('File(context.filesDir, HistoryFileName)', repository)
-        self.assertIn("StandardCopyOption.ATOMIC_MOVE", repository)
-        self.assertIn("MaxHistoryMessages = 200", repository)
-        self.assertIn("quarantineCorruptHistory()", repository)
-        self.assertIn("conversationRepository.load()", view_model)
-        self.assertIn("distinctUntilChanged()", view_model)
+        self.assertIn("SQLiteOpenHelper", repository)
+        self.assertIn("setWriteAheadLoggingEnabled(true)", repository)
+        for table in (
+            "sessions", "messages", "memories", "memory_revisions",
+            "project_events", "agent_actions",
+        ):
+            self.assertIn(f"CREATE TABLE {table}", repository)
+        self.assertIn("USING fts5", repository)
+        self.assertIn("migrateLegacyHistory()", repository)
+        self.assertIn("LegacyHistoryName.migrated", repository)
+        self.assertIn("memoryMatrix.loadMessages()", view_model)
+        self.assertIn("memoryMatrix.recallContext", view_model)
+
+    def test_model_tools_are_controller_owned_and_writes_wait_for_approval(self):
+        protocol = (SOURCE / "ControllerProtocol.kt").read_text(encoding="utf-8")
+        runtime = (SOURCE / "LiteRtModelRuntime.kt").read_text(encoding="utf-8")
+        view_model = (SOURCE / "SovereignViewModel.kt").read_text(encoding="utf-8")
+        workspace = (SOURCE / "WorkspaceRepository.kt").read_text(encoding="utf-8")
+        ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
+        self.assertIn("visibleStreamingText", protocol)
+        self.assertIn("<INTERMIX_ACTION>", protocol)
+        self.assertIn('ListFiles("list_files", false)', protocol)
+        self.assertIn('WriteFile("write_file", true)', protocol)
+        self.assertIn("automaticToolCalling = false", runtime)
+        self.assertIn("queueWorkspaceAction", view_model)
+        self.assertIn("executeReadOnly", view_model)
+        self.assertIn("executeApproved", view_model)
+        self.assertIn("DocumentsContract.createDocument", workspace)
+        self.assertNotIn("deleteDocument", workspace)
+        self.assertIn("PendingActionCard", ui)
+        self.assertIn('Text("APPROVE")', ui)
+        self.assertIn('Text("DENY")', ui)
+
+    def test_matrix_and_custom_destination_icons_are_real_surfaces(self):
+        ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
+        contract = (SOURCE / "FoundationContract.kt").read_text(encoding="utf-8")
+        self.assertIn('Memory("Matrix")', contract)
+        self.assertIn("MemoryMatrixSurface", ui)
+        self.assertIn("MemoryCard", ui)
+        self.assertIn("DestinationIcon", ui)
+        self.assertNotIn("destinationGlyph", ui)
+        self.assertIn('"DEVICE RAM"', ui)
+        self.assertIn('"MEMORY MATRIX"', ui)
 
     def test_generation_guard_and_visual_truth_are_wired(self):
         ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")

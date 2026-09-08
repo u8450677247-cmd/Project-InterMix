@@ -37,11 +37,17 @@ may still change.
   display-specific phone/desktop layouts, answer-mode controls, native
   multiline composition, cancellable synthetic streaming, truthful adapter
   states, a pinned Android CI gate, and the private-dogfood product contract.
+- The native Android Memory Forge: app-private SQLite/WAL history and durable
+  memory with FTS5 recall, validated model proposals, legacy JSON migration,
+  persisted SAF project access, automatic read tools, approval-gated
+  create/write/mkdir actions, pre-write snapshots, a real Agents approval
+  queue, and custom destination icons.
 
 ### Preserved
 
-- Python remains the authority for memory validation, model routing, grounding,
-  numeric integrity, workspace permissions, and persistence.
+- Python remains the terminal reference authority for advanced routing,
+  grounding, and synchronization. Android now independently enforces its native
+  memory, numeric-integrity, and scoped-workspace boundaries.
 - E4B remains the automatic fallback when the optional E2B asset is absent or
   its resident backend becomes unavailable.
 
