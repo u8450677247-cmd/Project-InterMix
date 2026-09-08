@@ -51,9 +51,11 @@ light-surface variants where required for contrast.
 
 ## Material and depth
 
-- The conversation canvas remains nearly opaque and visually quiet.
+- The conversation canvas remains visually quiet. Low-elevation translucent
+  message planes may reveal the living-void atmosphere, but never use live blur,
+  shimmer, or per-token animation.
 - Blur is reserved for navigation chrome, the composer, bottom sheets, and
-  short-lived overlays. Message content does not become a stack of glass cards.
+  short-lived overlays. Static translucency is the inference-safe fallback.
 - The balanced default uses a dark translucent tint over a deterministic opaque
   fallback. Reduce-transparency, battery, accessibility, or thermal signals may
   select that fallback without removing information.
@@ -76,14 +78,14 @@ light-surface variants where required for contrast.
 
 | Surface | Contract |
 |---|---|
-| Conversation stream | Full-height reading surface with restrained speaker accents and preserved Markdown structure |
+| Conversation stream | Full-height reading surface with restrained speaker accents, semantic status colors, preserved Markdown structure, and language-labelled highlighted code fences |
 | Sovereign Composer | Grows from one to seven visible lines, scrolls after the cap, supports multiline paste, and exposes an immediate STOP state during generation |
 | Truth Thread | Compact phase strip for recalling, grounding, reasoning, verifying, degradation, and recovery; expands into evidence details |
 | System Lens | Full-height destination below large width and a side rail in the large desktop cockpit for runtime, memory, providers, thermals, and model state |
 | Memory Matrix | Searchable, provenance-aware view with review, correction, expiry, and conflict controls |
 | Model Handoff | Inspectable E2B/E4B route, handoff reason, resident model, and fallback outcome without exposing internal chain-of-thought |
 | Sanctuary Gate | Biometric entry surface backed by Android Keystore; sensitive content is concealed in recents when the user enables that policy |
-| Workspace Lens | User-scoped document tree with explicit write state and destructive-action review |
+| Workspace Lens | User-scoped document tree with editable syntax highlighting, explicit write state, pre-write snapshots, and destructive-action review |
 
 ### Expanded cockpit hierarchy
 
@@ -146,6 +148,10 @@ the same semantic navigation destinations.
 
 - Standard transitions target roughly 120–220 ms and never block input.
 - Streaming text does not pulse, shimmer, or reflow unrelated content.
+- Syntax highlighting uses an identity offset map so typing, cursor movement,
+  selection, and hardware-keyboard shortcuts remain native and predictable.
+- Whole-document coloring is bounded; unusually large files remain editable in
+  fast monochrome mode instead of paying repeated regex cost on every keystroke.
 - Send, successful verification, STOP, and destructive confirmation may use
   distinct, user-disableable haptics.
 - Reduced-motion disables decorative interpolation and retains direct state

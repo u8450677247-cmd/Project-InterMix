@@ -70,6 +70,24 @@ streams trigger recovery: preserve the user message, quarantine unsafe partial
 output, report what happened, and offer a clean retry. A partial or interrupted
 response cannot become canonical memory or voice output.
 
+Visible model output uses a deterministic semantic Markdown renderer. Headings,
+lists, blockquotes, emphasis, inline code, status badges, and language-labelled
+code fences map to the reviewed cyan–purple palette. Models never receive raw
+HTML, arbitrary color, or executable UI authority. Workspace text editing uses
+syntax coloring without changing source bytes, cursor offsets, or save behavior.
+
+The Agents destination exposes a compact Memory Matrix context capsule for
+pinned goals, project facts, decisions, and communication preferences. Relevant
+memory can guide a plan, but it never expands the selected workspace tree,
+authorizes a tool, or bypasses mutation approval. Pending code writes use the
+same deterministic syntax palette as the editor so review remains legible.
+
+Sovereign Core keeps the established Intermix voice across terminal and Android:
+warm, continuous, emotionally intelligent, and technically precise rather than
+generic-assistant prose. Ordinary conversation may use one purposeful emoji as
+a visual anchor, but code, commands, paths, protocol payloads, quotations, and
+citations remain untouched. Structure and decoration never outrank the answer.
+
 ## Grounding contract
 
 Difficult questions may launch adaptive grounding automatically while online.

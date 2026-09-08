@@ -2,15 +2,18 @@ package dev.anicloud.sovereign.prototype.ui
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import dev.anicloud.sovereign.prototype.Appearance
 
 val Obsidian = Color(0xFF070A12)
-val Smoked = Color(0xFF0C1422)
-val SmokedDeep = Color(0xFF09101C)
+val Smoked = Color(0xD90C1422)
+val SmokedDeep = Color(0xCC09101C)
 val HorizonCyan = Color(0xFF39D5FF)
 val CognitionViolet = Color(0xFFA970FF)
 val SoftViolet = Color(0xFFC39AFF)
@@ -34,7 +37,15 @@ private val SovereignDarkScheme = darkColorScheme(
     onSurfaceVariant = MutedText,
     error = InterventionCoral,
     onError = Obsidian,
-    outline = Color(0xFF263854),
+    outline = Color(0x993A5477),
+)
+
+private val SovereignShapes = Shapes(
+    extraSmall = RoundedCornerShape(8.dp),
+    small = RoundedCornerShape(11.dp),
+    medium = RoundedCornerShape(17.dp),
+    large = RoundedCornerShape(24.dp),
+    extraLarge = RoundedCornerShape(30.dp),
 )
 
 private val SovereignLightScheme = lightColorScheme(
@@ -66,6 +77,7 @@ fun SovereignTheme(
     }
     MaterialTheme(
         colorScheme = if (useDark) SovereignDarkScheme else SovereignLightScheme,
+        shapes = SovereignShapes,
         content = content,
     )
 }

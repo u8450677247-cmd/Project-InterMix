@@ -184,7 +184,9 @@ class MemoryMatrixRepository(private val context: Context) :
 
     @Synchronized
     fun loadMessages(limit: Int = 200): List<ChatMessage> {
-        val sessionId = activeSessionId(writableDatabase)
+        val db = writableDatabase
+        collapseDuplicateRuntimeMessages(db)
+        val sessionId = activeSessionId(db)
         val rows = readableDatabase.rawQuery(
             "SELECT id, speaker, content FROM messages WHERE session_id=? ORDER BY id DESC LIMIT ?",
             arrayOf(sessionId, limit.coerceIn(1, 500).toString()),
@@ -198,6 +200,20 @@ class MemoryMatrixRepository(private val context: Context) :
             }
         }
         return rows.asReversed()
+    }
+
+    /** Removes repeated model-ready cards caused by process recreation; chat content is untouched. */
+    private fun collapseDuplicateRuntimeMessages(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            DELETE FROM messages
+            WHERE source='runtime' AND id NOT IN (
+                SELECT MAX(id) FROM messages
+                WHERE source='runtime'
+                GROUP BY session_id, content
+            )
+            """.trimIndent(),
+        )
     }
 
     @Synchronized

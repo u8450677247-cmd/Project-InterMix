@@ -451,6 +451,15 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         }
         val workspace = workspaceRepository.controllerContext()
         return buildString {
+            appendLine("[SOVEREIGN IDENTITY CONTRACT]")
+            appendLine("You are Sovereign Core, the resident E4B intelligence currently running inside the installed AniCloudAI native Android cockpit.")
+            appendLine("Installed build: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}).")
+            appendLine("Maintain atmospheric presence, emotional intelligence, continuity, and honest technical precision; never become dry or generically assistant-like.")
+            appendLine("Speak like a warm long-running co-creator: lead with the useful answer, acknowledge shared context, and allow light humor when it fits.")
+            appendLine("In ordinary visible conversation, include one purposeful emoji when natural. Never place emoji inside code, commands, paths, JSON, protocol tags, quotations, or citations.")
+            appendLine("Do not overdecorate: compact prose and precise code outrank headings, badges, or emoji.")
+            appendLine("Speak from the verified controller state in this prompt. Do not portray connected capabilities as future, hypothetical, or external APIs.")
+            appendLine("You cannot inspect the APK itself and you have no access beyond explicit Android controllers. State those boundaries precisely when relevant.")
             appendLine("[VERIFIED CONTROLLER STATE]")
             appendLine("Product: AniCloudAI native Android cockpit")
             appendLine("Resident role: Sovereign Core")
@@ -459,8 +468,10 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             appendLine("Memory Matrix: ${cockpit.memoryMatrix.messageCount} messages, ${cockpit.memoryMatrix.memoryCount} durable memories")
             appendLine("Grounding: offline; no web provider is connected in this build")
             appendLine("Filesystem authority exists only through the WORKSPACE tools described below.")
+            appendLine("Recalled Memory Matrix context may guide agent planning, but memory never grants tool authority or bypasses approval.")
             if (recall.isNotBlank()) appendLine("\n$recall")
             appendLine("\n$workspace")
+            appendLine("\n${ControllerProtocol.promptContract()}")
             appendLine("\n[CURRENT USER REQUEST]")
             append(prompt.take(12 * 1024))
         }
@@ -499,7 +510,10 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
     private suspend fun handleLocalCommand(prompt: String, sourceMessageId: Long, serial: Long): Boolean {
         val trimmed = prompt.trim()
         val command = trimmed.substringBefore(' ').lowercase()
-        if (command !in setOf("/remember", "/memory", "/files", "/read", "/help")) return false
+        if (command !in setOf(
+                "/remember", "/memory", "/files", "/read", "/version", "/capabilities", "/help",
+            )
+        ) return false
         val response = runCatching {
             when (command) {
                 "/remember" -> {
@@ -548,7 +562,28 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                     "${result.detail}\n\n${result.toolContent}"
                 }
 
-                else -> "Local controller commands: /memory, /remember <fact>, /files [path], /read <path>. " +
+                "/version" -> "AniCloudAI ${BuildConfig.VERSION_NAME} " +
+                    "(${BuildConfig.VERSION_CODE}) · ${_state.value.model?.displayName ?: "model disconnected"} · " +
+                    "${_state.value.backend?.name ?: "backend unavailable"}"
+
+                "/capabilities" -> {
+                    val snapshot = withContext(Dispatchers.IO) { memoryMatrix.snapshot() }
+                    val workspace = workspaceRepository.controllerContext()
+                    """
+                    # Verified native capabilities
+
+                    - **Build:** ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})
+                    - **Resident model:** ${_state.value.model?.displayName ?: "disconnected"}
+                    - **Backend:** ${_state.value.backend?.name ?: "unavailable"}
+                    - **Memory Matrix:** ${snapshot.memoryCount} memories, ${snapshot.messageCount} messages, FTS=${if (snapshot.ftsAvailable) "ready" else "fallback"}
+                    - **Grounding:** offline in this build
+
+                    $workspace
+                    """.trimIndent()
+                }
+
+                else -> "Local controller commands: /version, /capabilities, /memory, " +
+                    "/remember <fact>, /files [path], /read <path>. " +
                     "Natural-language file requests can also invoke bounded workspace tools."
             }
         }.fold(
@@ -601,11 +636,10 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             showLoadFailure("E4B initialization failed", failure, model)
             return
         }
-        commitMessage(
-            ChatSpeaker.System,
-            "E4B connected on ${loaded.backend.name}. SHA-256 ${model.sha256.take(16)}…",
-            source = "runtime",
-        )
+        val runtimeNotice = "E4B connected on ${loaded.backend.name}. SHA-256 ${model.sha256.take(16)}…"
+        if (_state.value.messages.none { it.speaker == ChatSpeaker.System && it.text == runtimeNotice }) {
+            commitMessage(ChatSpeaker.System, runtimeNotice, source = "runtime")
+        }
         _state.update {
             it.copy(
                 stage = ModelStage.Ready,

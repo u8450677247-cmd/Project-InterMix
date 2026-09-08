@@ -79,6 +79,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.anicloud.sovereign.prototype.AnswerMode
 import dev.anicloud.sovereign.prototype.AnswerModeSelection
 import dev.anicloud.sovereign.prototype.Appearance
+import dev.anicloud.sovereign.prototype.BuildConfig
 import dev.anicloud.sovereign.prototype.ChatMessage
 import dev.anicloud.sovereign.prototype.ChatSpeaker
 import dev.anicloud.sovereign.prototype.CockpitState
@@ -89,6 +90,7 @@ import dev.anicloud.sovereign.prototype.FoundationPreferenceStore
 import dev.anicloud.sovereign.prototype.LayoutPreference
 import dev.anicloud.sovereign.prototype.ModelStage
 import dev.anicloud.sovereign.prototype.MatrixMemory
+import dev.anicloud.sovereign.prototype.MemoryMatrixSnapshot
 import dev.anicloud.sovereign.prototype.PendingWorkspaceAction
 import dev.anicloud.sovereign.prototype.RuntimePhase
 import dev.anicloud.sovereign.prototype.SovereignViewModel
@@ -268,36 +270,85 @@ fun LockedSurface(
 
 @Composable
 private fun LivingVoid(cockpit: CockpitState, content: @Composable () -> Unit) {
+    val motionAllowed = allowsAmbientMotion(cockpit.thermalStatus, cockpit.stage)
+    val pulse = if (motionAllowed) {
+        val transition = rememberInfiniteTransition(label = "living-void")
+        val animated by transition.animateFloat(
+            initialValue = 0.055f,
+            targetValue = 0.105f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 9_000),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "void-breath",
+        )
+        animated
+    } else {
+        0.055f
+    }
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
     ) {
-        if (allowsAmbientMotion(cockpit.thermalStatus, cockpit.stage)) {
-            val transition = rememberInfiniteTransition(label = "living-void")
-            val pulse by transition.animateFloat(
-                initialValue = 0.035f,
-                targetValue = 0.085f,
-                animationSpec = infiniteRepeatable(
-                    animation = tween(durationMillis = 9_000),
-                    repeatMode = RepeatMode.Reverse,
-                ),
-                label = "void-breath",
-            )
-            Canvas(Modifier.fillMaxSize()) {
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            HorizonCyan.copy(alpha = pulse),
-                            CognitionViolet.copy(alpha = pulse * 0.35f),
-                            Color.Transparent,
-                        ),
-                        center = Offset(size.width * 0.62f, size.height * 0.42f),
-                        radius = size.minDimension * 0.58f,
+        Canvas(Modifier.fillMaxSize()) {
+            drawRect(
+                brush = Brush.linearGradient(
+                    colors = listOf(
+                        Obsidian,
+                        Color(0xFF080C18),
+                        CognitionViolet.copy(alpha = 0.075f),
                     ),
-                    radius = size.minDimension * 0.58f,
-                    center = Offset(size.width * 0.62f, size.height * 0.42f),
+                    start = Offset.Zero,
+                    end = Offset(size.width, size.height),
+                ),
+            )
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        HorizonCyan.copy(alpha = pulse),
+                        HorizonCyan.copy(alpha = pulse * 0.24f),
+                        Color.Transparent,
+                    ),
+                    center = Offset(size.width * 0.72f, size.height * 0.28f),
+                    radius = size.minDimension * 0.70f,
+                ),
+                radius = size.minDimension * 0.70f,
+                center = Offset(size.width * 0.72f, size.height * 0.28f),
+            )
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        CognitionViolet.copy(alpha = pulse * 0.92f),
+                        CognitionViolet.copy(alpha = pulse * 0.18f),
+                        Color.Transparent,
+                    ),
+                    center = Offset(size.width * 0.22f, size.height * 0.82f),
+                    radius = size.minDimension * 0.62f,
+                ),
+                radius = size.minDimension * 0.62f,
+                center = Offset(size.width * 0.22f, size.height * 0.82f),
+            )
+            val grid = 72.dp.toPx()
+            var x = 0f
+            while (x <= size.width) {
+                drawLine(
+                    HorizonCyan.copy(alpha = 0.026f),
+                    Offset(x, 0f),
+                    Offset(x, size.height),
+                    1f,
                 )
+                x += grid
+            }
+            var y = 0f
+            while (y <= size.height) {
+                drawLine(
+                    SoftViolet.copy(alpha = 0.022f),
+                    Offset(0f, y),
+                    Offset(size.width, y),
+                    1f,
+                )
+                y += grid
             }
         }
         content()
@@ -463,7 +514,11 @@ private fun TopRail(destination: Destination, cockpit: CockpitState, onLock: () 
         modifier = Modifier
             .fillMaxWidth()
             .height(58.dp)
-            .background(SmokedDeep)
+            .background(
+                Brush.horizontalGradient(
+                    listOf(SmokedDeep, CognitionViolet.copy(alpha = 0.11f), SmokedDeep),
+                ),
+            )
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -493,7 +548,11 @@ private fun NavigationPane(
     Column(
         modifier = modifier
             .fillMaxHeight()
-            .background(SmokedDeep)
+            .background(
+                Brush.verticalGradient(
+                    listOf(SmokedDeep, CognitionViolet.copy(alpha = 0.07f), SmokedDeep),
+                ),
+            )
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -910,19 +969,19 @@ private fun ChatSurface(
 
 @Composable
 private fun TruthThread(phase: RuntimePhase, detail: String, active: Boolean) {
+    val color = when (phase) {
+        RuntimePhase.Ready -> ResonanceMint
+        RuntimePhase.Recovering, RuntimePhase.Degraded -> InterventionCoral
+        RuntimePhase.Grounding, RuntimePhase.Verifying -> HorizonCyan
+        else -> CognitionViolet
+    }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .sovereignGlass(color, radius = 12.dp, depth = 0.64f, elevation = 2.dp)
             .padding(horizontal = 16.dp, vertical = 10.dp),
     ) {
-        val color = when (phase) {
-            RuntimePhase.Ready -> ResonanceMint
-            RuntimePhase.Recovering, RuntimePhase.Degraded -> InterventionCoral
-            RuntimePhase.Grounding, RuntimePhase.Verifying -> HorizonCyan
-            else -> CognitionViolet
-        }
         Text("● ${phase.label.uppercase()}", color = color, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.width(12.dp))
         Text(
@@ -948,10 +1007,11 @@ private fun MessageBlock(message: ChatMessage) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(
-                if (isUser) MaterialTheme.colorScheme.secondary.copy(alpha = 0.08f) else
-                    MaterialTheme.colorScheme.surface,
-                RoundedCornerShape(4.dp),
+            .sovereignGlass(
+                accent = accent,
+                radius = 16.dp,
+                depth = if (isUser) 0.69f else 0.80f,
+                elevation = 2.dp,
             )
             .padding(start = 12.dp, top = 10.dp, end = 12.dp, bottom = 12.dp),
     ) {
@@ -966,7 +1026,7 @@ private fun MessageBlock(message: ChatMessage) {
             fontWeight = FontWeight.Bold,
         )
         Spacer(Modifier.height(6.dp))
-        Text(message.text, color = MaterialTheme.colorScheme.onSurface, lineHeight = 21.sp)
+        SovereignMarkdown(message.text)
     }
 }
 
@@ -987,7 +1047,13 @@ private fun Composer(
     onSend: () -> Unit,
     onStop: () -> Unit,
 ) {
-    Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 3.dp) {
+    Surface(
+        color = Color.Transparent,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .sovereignGlass(HorizonCyan, radius = 18.dp, depth = 0.88f, elevation = 10.dp),
+    ) {
         Column(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.padding(12.dp),
@@ -1259,7 +1325,13 @@ private fun WorkspaceBrowser(
     onOpen: (WorkspaceEntry) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    OutlinedCard(modifier = modifier.fillMaxHeight()) {
+    OutlinedCard(
+        colors = CardDefaults.outlinedCardColors(containerColor = Color.Transparent),
+        border = null,
+        modifier = modifier
+            .fillMaxHeight()
+            .sovereignGlass(HorizonCyan, radius = 16.dp, depth = 0.78f, elevation = 2.dp),
+    ) {
         Column(Modifier.fillMaxSize().padding(12.dp)) {
             Text(state.currentLabel.uppercase(), color = HorizonCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
@@ -1290,7 +1362,19 @@ private fun WorkspaceEditor(
     workspaceViewModel: WorkspaceViewModel,
     modifier: Modifier = Modifier,
 ) {
-    OutlinedCard(modifier = modifier.fillMaxHeight()) {
+    val editorLanguage = remember(state.selected?.displayName) {
+        languageForFile(state.selected?.displayName)
+    }
+    val codeTransformation = remember(editorLanguage) {
+        SovereignCodeTransformation(editorLanguage)
+    }
+    OutlinedCard(
+        colors = CardDefaults.outlinedCardColors(containerColor = Color.Transparent),
+        border = null,
+        modifier = modifier
+            .fillMaxHeight()
+            .sovereignGlass(CognitionViolet, radius = 16.dp, depth = 0.78f, elevation = 2.dp),
+    ) {
         Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -1299,6 +1383,15 @@ private fun WorkspaceEditor(
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f),
                 )
+                if (state.selected != null) {
+                    Text(
+                        editorLanguage.uppercase(),
+                        color = HorizonCyan,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                }
                 OutlinedButton(onClick = workspaceViewModel::revert, enabled = state.isDirty && !state.busy) {
                     Text("REVERT")
                 }
@@ -1312,6 +1405,7 @@ private fun WorkspaceEditor(
                 onValueChange = workspaceViewModel::updateEditor,
                 enabled = state.selected != null && !state.busy,
                 textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                visualTransformation = codeTransformation,
                 placeholder = { Text("Open a project file to begin co-creation.") },
                 modifier = Modifier.fillMaxSize(),
             )
@@ -1327,6 +1421,7 @@ private fun AgentSurface(cockpit: CockpitState, actions: CockpitActions) {
         modifier = Modifier.fillMaxSize(),
     ) {
         item { PageHeading("Agents", "Checkpointed work that never hides its state") }
+        item { AgentMemoryContext(cockpit.memoryMatrix) }
         if (cockpit.pendingActions.isEmpty()) {
             item {
                 StatusCard(
@@ -1358,12 +1453,92 @@ private fun AgentSurface(cockpit: CockpitState, actions: CockpitActions) {
                 "Execution contract",
                 listOf(
                     "Runs in bounded, restartable cycles",
+                    "Relevant Matrix context guides planning without granting authority",
                     "Writes create versioned snapshots",
-                    "Deletion always requires confirmation",
+                    "Deletion remains unavailable in this build",
                     "External actions require batch preview and approval",
                     "Thermal severity can reduce or pause work",
                 ),
             )
+        }
+    }
+}
+
+@Composable
+private fun AgentMemoryContext(matrix: MemoryMatrixSnapshot) {
+    val planningContext = matrix.recentMemories
+        .filter {
+            it.pinned || it.kind in setOf(
+                "user_goal",
+                "project_fact",
+                "decision",
+                "user_preference",
+            )
+        }
+        .take(5)
+    Column(
+        verticalArrangement = Arrangement.spacedBy(9.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .sovereignGlass(SoftViolet, radius = 16.dp, depth = 0.75f, elevation = 2.dp)
+            .padding(16.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "MEMORY CONTEXT",
+                color = SoftViolet,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                "${matrix.memoryCount} ACTIVE · ${if (matrix.ftsAvailable) "FTS" else "FALLBACK"}",
+                color = ResonanceMint,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+            )
+        }
+        Text(
+            "Relevant Matrix entries inform each plan; they never approve a write or expand workspace access.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 12.sp,
+        )
+        if (planningContext.isEmpty()) {
+            Text(
+                "No pinned goals, project facts, decisions, or communication preferences yet.",
+                color = MutedText,
+                fontStyle = FontStyle.Italic,
+                fontSize = 12.sp,
+            )
+        } else {
+            planningContext.forEach { memory ->
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(9.dp),
+                    verticalAlignment = Alignment.Top,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        if (memory.pinned) "◆" else "·",
+                        color = if (memory.pinned) ResonanceMint else HorizonCyan,
+                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "${memory.kind.replace('_', ' ').uppercase()} · #${memory.id}",
+                            color = if (memory.pinned) ResonanceMint else HorizonCyan,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                        )
+                        Text(
+                            memory.value,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -1374,7 +1549,16 @@ private fun PendingActionCard(
     busy: Boolean,
     actions: CockpitActions,
 ) {
-    OutlinedCard(border = BorderStroke(1.dp, WaitingAmber.copy(alpha = 0.68f))) {
+    OutlinedCard(
+        colors = CardDefaults.outlinedCardColors(containerColor = Color.Transparent),
+        border = null,
+        modifier = Modifier.sovereignGlass(
+            WaitingAmber,
+            radius = 16.dp,
+            depth = 0.80f,
+            elevation = 2.dp,
+        ),
+    ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -1396,7 +1580,11 @@ private fun PendingActionCard(
                     shape = RoundedCornerShape(8.dp),
                 ) {
                     Text(
-                        pending.content.take(1_500) + if (pending.content.length > 1_500) "\n…preview clipped" else "",
+                        text = highlightCode(
+                            pending.content.take(1_500) +
+                                if (pending.content.length > 1_500) "\n…preview clipped" else "",
+                            languageForFile(pending.path),
+                        ),
                         modifier = Modifier.padding(12.dp),
                         color = MaterialTheme.colorScheme.onSurface,
                         fontFamily = FontFamily.Monospace,
@@ -1465,7 +1653,11 @@ private fun SystemLens(cockpit: CockpitState, modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(14.dp),
         modifier = modifier
             .fillMaxHeight()
-            .background(SmokedDeep)
+            .background(
+                Brush.verticalGradient(
+                    listOf(SmokedDeep, HorizonCyan.copy(alpha = 0.045f), SmokedDeep),
+                ),
+            )
             .padding(16.dp),
     ) {
         Text("SYSTEM LENS", color = HorizonCyan, fontSize = 13.sp, fontWeight = FontWeight.Bold)
@@ -1475,6 +1667,7 @@ private fun SystemLens(cockpit: CockpitState, modifier: Modifier = Modifier) {
                 ?: "NOT CONNECTED",
             modelVitalityColor(cockpit),
         )
+        LensValue("BUILD", BuildConfig.VERSION_NAME.uppercase(), HorizonCyan)
         LensValue(
             "DEVICE RAM",
             cockpit.availableMemoryBytes?.let(::formatBytes)?.uppercase() ?: "UNAVAILABLE",
