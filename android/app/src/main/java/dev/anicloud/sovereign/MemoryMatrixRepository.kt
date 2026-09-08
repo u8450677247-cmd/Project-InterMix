@@ -610,13 +610,22 @@ class MemoryMatrixRepository(private val context: Context) :
                     UPDATE memories SET confidence=?,salience=max(salience,?),
                     explicitly_stated=1,updated_at=?,source_message_id=? WHERE id=?
                     """.trimIndent(),
-                    arrayOf(maxOf(existing.confidence, confidence), salience, now, sourceMessageId, existing.id),
+                    arrayOf<Any?>(
+                        maxOf(existing.confidence, confidence),
+                        salience,
+                        now,
+                        sourceMessageId,
+                        existing.id,
+                    ),
                 )
                 db.setTransactionSuccessful()
                 return existing.id
             }
             existing?.let {
-                db.execSQL("UPDATE memories SET active=0,updated_at=? WHERE id=?", arrayOf(now, it.id))
+                db.execSQL(
+                    "UPDATE memories SET active=0,updated_at=? WHERE id=?",
+                    arrayOf<Any?>(now, it.id),
+                )
             }
             val values = ContentValues().apply {
                 put("kind", kind)
@@ -640,7 +649,14 @@ class MemoryMatrixRepository(private val context: Context) :
                     INSERT INTO memory_revisions(memory_id,old_value,new_value,reason,source_message_id,created_at)
                     VALUES(?,?,?,?,?,?)
                     """.trimIndent(),
-                    arrayOf(newId, it.value, value, "validated memory proposal", sourceMessageId, now),
+                    arrayOf<Any?>(
+                        newId,
+                        it.value,
+                        value,
+                        "validated memory proposal",
+                        sourceMessageId,
+                        now,
+                    ),
                 )
             }
             db.setTransactionSuccessful()
