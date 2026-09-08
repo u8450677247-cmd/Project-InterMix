@@ -187,7 +187,7 @@ class AndroidFoundationTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, contract)
 
-    def test_android_workflow_retains_a_debug_apk(self):
+    def test_android_workflow_retains_debug_and_persistent_dogfood_apks(self):
         workflow = (ROOT / ".github/workflows/android-foundation.yml").read_text(
             encoding="utf-8"
         )
@@ -200,17 +200,28 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("actions/upload-artifact@v7", workflow)
         self.assertIn("AniCloudAI-e4b-cockpit-debug", workflow)
         self.assertIn("app-debug.apk", workflow)
+        self.assertIn("ANICLOUD_DOGFOOD_PRIVATE_KEY_B64", workflow)
+        self.assertIn("ANICLOUD_DOGFOOD_CERTIFICATE_B64", workflow)
+        self.assertIn('"$signer" sign', workflow)
+        self.assertIn('"$signer" verify --verbose --print-certs', workflow)
+        self.assertIn("AniCloudAI-e4b-cockpit-dogfood", workflow)
 
     def test_termux_dogfood_channel_keeps_signing_material_private(self):
         updater = (ROOT / "tools/termux_dogfood_update.sh").read_text(
             encoding="utf-8"
         )
         self.assertIn("--initialize-key", updater)
-        self.assertIn("apksigner sign", updater)
-        self.assertIn("apksigner verify --verbose --print-certs", updater)
+        self.assertIn("openssl genpkey", updater)
+        self.assertIn("openssl pkcs8", updater)
+        self.assertIn("gh secret set ANICLOUD_DOGFOOD_PRIVATE_KEY_B64", updater)
+        self.assertIn("gh secret set ANICLOUD_DOGFOOD_CERTIFICATE_B64", updater)
+        self.assertIn("AniCloudAI-e4b-cockpit-dogfood", updater)
         self.assertIn("--status success", updater)
+        self.assertIn("sha256sum -c", updater)
         self.assertIn("termux-open --content-type", updater)
         self.assertNotIn("adb install", updater)
+        self.assertNotIn("keytool", updater)
+        self.assertNotIn("apksigner", updater)
         self.assertNotIn("storepass pass:", updater)
 
 

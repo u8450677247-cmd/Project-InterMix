@@ -66,6 +66,70 @@ jobs:
           --no-daemon
           --stacktrace
 
+      - name: Detect persistent dogfood signing identity
+        id: dogfood-signing
+        shell: bash
+        env:
+          DOGFOOD_PRIVATE_KEY_B64: ${{ secrets.ANICLOUD_DOGFOOD_PRIVATE_KEY_B64 }}
+          DOGFOOD_CERTIFICATE_B64: ${{ secrets.ANICLOUD_DOGFOOD_CERTIFICATE_B64 }}
+        run: |
+          if [[ -n "$DOGFOOD_PRIVATE_KEY_B64" && -n "$DOGFOOD_CERTIFICATE_B64" ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Persistent dogfood signing secrets are not configured; retaining only the CI debug artifact."
+          fi
+
+      - name: Sign the persistent dogfood APK
+        if: steps.dogfood-signing.outputs.configured == 'true'
+        shell: bash
+        env:
+          DOGFOOD_PRIVATE_KEY_B64: ${{ secrets.ANICLOUD_DOGFOOD_PRIVATE_KEY_B64 }}
+          DOGFOOD_CERTIFICATE_B64: ${{ secrets.ANICLOUD_DOGFOOD_CERTIFICATE_B64 }}
+        run: |
+          set -euo pipefail
+          signing_root="$(mktemp -d "$RUNNER_TEMP/anicloud-signing.XXXXXX")"
+          private_key="$signing_root/anicloud-dogfood.pk8"
+          certificate="$signing_root/anicloud-dogfood-cert.pem"
+          cleanup_signing() {
+            rm -f -- "$private_key" "$certificate"
+            rmdir -- "$signing_root" 2>/dev/null || true
+          }
+          trap cleanup_signing EXIT HUP INT TERM
+
+          printf '%s' "$DOGFOOD_PRIVATE_KEY_B64" | base64 --decode > "$private_key"
+          printf '%s' "$DOGFOOD_CERTIFICATE_B64" | base64 --decode > "$certificate"
+          chmod 600 "$private_key" "$certificate"
+
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          signer="$sdk_root/build-tools/36.0.0/apksigner"
+          test -x "$signer"
+
+          source_apk="$GITHUB_WORKSPACE/android/app/build/outputs/apk/debug/app-debug.apk"
+          output_root="$GITHUB_WORKSPACE/android/app/build/outputs/apk/dogfood"
+          output_name="AniCloudAI-Sovereign-dogfood.apk"
+          output_apk="$output_root/$output_name"
+          mkdir -p "$output_root"
+
+          "$signer" sign \
+            --key "$private_key" \
+            --cert "$certificate" \
+            --out "$output_apk" \
+            "$source_apk"
+          "$signer" verify --verbose --print-certs "$output_apk"
+
+          certificate_sha="$(
+            "$signer" verify --print-certs "$output_apk" |
+              awk -F': ' '/Signer #1 certificate SHA-256 digest:/ {print $2; exit}'
+          )"
+          test -n "$certificate_sha"
+          (
+            cd "$output_root"
+            sha256sum "$output_name" > "$output_name.sha256"
+          )
+          printf '%s\n' "$certificate_sha" > "$output_root/certificate-sha256.txt"
+          printf '%s\n' "$GITHUB_SHA" > "$output_root/commit.txt"
+
       - name: Retain the E4B cockpit debug APK
         uses: actions/upload-artifact@v7
         with:
@@ -73,3 +137,16 @@ jobs:
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 7
+
+      - name: Retain the persistently signed dogfood APK
+        if: steps.dogfood-signing.outputs.configured == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: AniCloudAI-e4b-cockpit-dogfood
+          path: |
+            android/app/build/outputs/apk/dogfood/AniCloudAI-Sovereign-dogfood.apk
+            android/app/build/outputs/apk/dogfood/AniCloudAI-Sovereign-dogfood.apk.sha256
+            android/app/build/outputs/apk/dogfood/certificate-sha256.txt
+            android/app/build/outputs/apk/dogfood/commit.txt
+          if-no-files-found: error
+          retention-days: 30
