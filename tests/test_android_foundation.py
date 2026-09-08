@@ -238,6 +238,7 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("Relevant Matrix entries inform each plan", ui)
         self.assertIn("languageForFile(pending.path)", ui)
         self.assertIn("memory never grants tool authority", view_model)
+        self.assertNotIn("border = null", ui)
 
     def test_runtime_cards_are_deduplicated_without_touching_chat(self):
         repository = (SOURCE / "MemoryMatrixRepository.kt").read_text(encoding="utf-8")

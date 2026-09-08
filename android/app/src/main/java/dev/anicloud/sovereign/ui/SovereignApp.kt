@@ -1327,7 +1327,7 @@ private fun WorkspaceBrowser(
 ) {
     OutlinedCard(
         colors = CardDefaults.outlinedCardColors(containerColor = Color.Transparent),
-        border = null,
+        border = BorderStroke(1.dp, Color.Transparent),
         modifier = modifier
             .fillMaxHeight()
             .sovereignGlass(HorizonCyan, radius = 16.dp, depth = 0.78f, elevation = 2.dp),
@@ -1370,7 +1370,7 @@ private fun WorkspaceEditor(
     }
     OutlinedCard(
         colors = CardDefaults.outlinedCardColors(containerColor = Color.Transparent),
-        border = null,
+        border = BorderStroke(1.dp, Color.Transparent),
         modifier = modifier
             .fillMaxHeight()
             .sovereignGlass(CognitionViolet, radius = 16.dp, depth = 0.78f, elevation = 2.dp),
@@ -1551,7 +1551,7 @@ private fun PendingActionCard(
 ) {
     OutlinedCard(
         colors = CardDefaults.outlinedCardColors(containerColor = Color.Transparent),
-        border = null,
+        border = BorderStroke(1.dp, Color.Transparent),
         modifier = Modifier.sovereignGlass(
             WaitingAmber,
             radius = 16.dp,
