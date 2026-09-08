@@ -54,7 +54,7 @@ class WorkspaceRepository(private val context: Context) {
     }
 
     suspend fun rootLabel(root: Uri): String = withContext(Dispatchers.IO) {
-        queryDisplayName(root) ?: "Sovereign Workspace"
+        runCatching { queryDisplayName(root) }.getOrNull() ?: fallbackRootLabel(root)
     }
 
     suspend fun listChildren(root: Uri, directory: Uri): List<WorkspaceEntry> =
@@ -73,7 +73,7 @@ class WorkspaceRepository(private val context: Context) {
         if (root == null) {
             "[WORKSPACE]\nDisconnected. Ask the user to open Workspace and CONNECT PROJECT."
         } else {
-            val label = queryDisplayName(root) ?: "Sovereign Workspace"
+            val label = runCatching { queryDisplayName(root) }.getOrNull() ?: fallbackRootLabel(root)
             "[WORKSPACE]\nConnected root: $label\n" +
                 "Tools: list_files and read_file run inside this root. " +
                 "create_file, write_file, and create_directory require visible approval. " +
@@ -190,11 +190,7 @@ class WorkspaceRepository(private val context: Context) {
     }
 
     private fun listChildrenNow(root: Uri, directory: Uri): List<WorkspaceEntry> {
-        val documentId = if (DocumentsContract.isTreeUri(directory)) {
-            DocumentsContract.getTreeDocumentId(directory)
-        } else {
-            DocumentsContract.getDocumentId(directory)
-        }
+        val documentId = documentIdFor(directory)
         val children = DocumentsContract.buildChildDocumentsUriUsingTree(root, documentId)
         val projection = arrayOf(
             DocumentsContract.Document.COLUMN_DOCUMENT_ID,
@@ -300,11 +296,31 @@ class WorkspaceRepository(private val context: Context) {
     }
 
     private fun queryDisplayName(uri: Uri): String? {
+        // OpenDocumentTree returns a tree URI. ExternalStorageProvider accepts
+        // document queries, not a query against the bare tree URI itself.
+        val queryUri = documentUriForQuery(uri)
         val projection = arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-        return context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+        return context.contentResolver.query(queryUri, projection, null, null, null)?.use { cursor ->
             if (!cursor.moveToFirst()) null else cursor.getString(0)
         }
     }
+
+    private fun documentUriForQuery(uri: Uri): Uri = if (DocumentsContract.isTreeUri(uri)) {
+        DocumentsContract.buildDocumentUriUsingTree(uri, documentIdFor(uri))
+    } else {
+        uri
+    }
+
+    private fun documentIdFor(uri: Uri): String =
+        runCatching { DocumentsContract.getDocumentId(uri) }
+            .getOrElse { DocumentsContract.getTreeDocumentId(uri) }
+
+    private fun fallbackRootLabel(root: Uri): String = runCatching {
+        DocumentsContract.getTreeDocumentId(root)
+            .substringAfterLast(':')
+            .substringAfterLast('/')
+            .ifBlank { "Sovereign Workspace" }
+    }.getOrDefault("Sovereign Workspace")
 
     private fun isEditableText(entry: WorkspaceEntry): Boolean {
         if (entry.mimeType.startsWith("text/")) return true
