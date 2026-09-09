@@ -15,7 +15,7 @@
 
 Project Intermix runs the language model, inference controller, SQLite memory, Textual interface, grounding router, and fixed workspace locally. It is designed to make an 8K physical context feel much larger by retrieving durable facts, recent decisions, task state, and verified project history on demand instead of replaying an ever-growing transcript.
 
-This repository is a developer preview, not a polished Android application. The reference build is end-to-end verified on one Pixel 10 Pro; every other device remains a candidate until a reproducible community report says otherwise.
+This repository is a developer preview with a functional native Android dogfood APK and the established Termux cockpit. It is not a stable store release. The reference path is owner-tested on one Pixel 10 Pro; every other device remains a candidate until a reproducible community report says otherwise.
 
 ## Why it exists
 
@@ -35,8 +35,8 @@ This repository is a developer preview, not a polished Android application. The 
 |---|---|
 | Device | Google Pixel 10 Pro, Tensor G5, 16 GB RAM |
 | OS / shell | Android 17, Termux |
-| Runtime | Python 3.13.13, LiteRT-LM 0.16.1, GPU/OpenCL |
-| Model | Gemma 4 E4B-it `.litertlm`; optional E2B librarian supplied separately |
+| Runtime | Termux: Python 3.13.13 + LiteRT-LM 0.16.1 GPU/OpenCL. Native dogfood: Kotlin/Compose + LiteRT-LM 0.16.1 |
+| Model | Proven E4B GPU route; fingerprint-locked Tensor G5 E2B NPU route awaiting on-device validation |
 | Physical context | 8,000 tokens |
 | Cold/idle available memory | Approximately 7.0–7.6 GiB in the owner's test environment |
 | Resident-hot available memory | Approximately 2.6–3.7 GiB in the owner's test environment |
@@ -56,7 +56,7 @@ These are observations, not guarantees. Android memory pressure, other applicati
 
 Google's current Gemma 4 documentation includes E2B and E4B benchmarks on the Galaxy S26 Ultra, which makes it a compelling test target—not a verified Intermix device. LiteRT-LM itself supports Python on Android, Linux, macOS, and Windows, but each Intermix backend and interface path still needs its own report.
 
-See [the device matrix](docs/DEVICE_MATRIX.md) before making or repeating a compatibility claim, [the installation guide](docs/INSTALLATION.md) before testing a new device, the [Sovereign Glass design contract](docs/ANDROID_DESIGN.md), and the [AniCloudAI product contract](docs/ANDROID_PRODUCT_CONTRACT.md) for the native Android direction.
+See [the device matrix](docs/DEVICE_MATRIX.md) before making or repeating a compatibility claim, [the installation guide](docs/INSTALLATION.md) before testing a new device, the [Tensor G5 NPU adapter](docs/ANDROID_TENSOR_NPU.md), the [Sovereign Glass design contract](docs/ANDROID_DESIGN.md), and the [AniCloudAI product contract](docs/ANDROID_PRODUCT_CONTRACT.md) for the native Android direction.
 
 ## Install
 
@@ -76,6 +76,18 @@ E4B remains the required reasoning model. An E2B file is optional: when present,
 the deterministic controller routes ordinary conversation through it and uses a
 bounded E2B intent/memory handoff before difficult E4B turns. The engine closes
 one profile before loading the other; this is not a simultaneous two-model RAM load.
+
+The native Android `0.6.0-adaptive-tensor` candidate has separate import slots:
+
+- **E2B conversation + Memory Matrix:** only the reviewed
+  `gemma-4-E2B-it_Google_Tensor_G5.litertlm` fingerprint may use the Google
+  Tensor NPU path. It never silently falls back to GPU.
+- **E4B reasoning + coding:** uses the proven GPU-first route with a measured
+  CPU fallback.
+
+Only one native engine is resident at a time. System Lens → Device Check-up
+shows the SoC, hardware codename, dispatcher, model fingerprint, Android
+`MemAvailable`, thermal state, and exact eligibility reason before NPU loading.
 
 Google documents current LiteRT-LM models and conversion paths in the [Gemma 4 deployment guide](https://developers.google.com/edge/litert-lm/models/gemma-4).
 

@@ -233,8 +233,10 @@ The design is implemented only when a prototype can:
 4. render every runtime state with text, icon, and accessible semantics;
 5. pass contrast, large-text, TalkBack, reduced-motion, and opaque-mode checks;
 6. survive process recreation without inventing request or memory state; and
-7. show an honest GPU/CPU and E2B/E4B route based on measured runtime data,
-   while leaving NPU unavailable until a supported runtime proves it.
+7. show an honest NPU/GPU/CPU and E2B/E4B route based on measured runtime data;
+   NPU may become ready only when the exact Tensor G5 package fingerprint,
+   checksum-pinned dispatcher, device identity, memory floor, and thermal gate
+   all pass.
 
 This contract deliberately anchors behavior before high-fidelity decoration.
 Reference mockups may evolve, but they may not hide truth, privacy, cancellation,

@@ -25,8 +25,8 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("compileSdk = 36", app_build)
         self.assertIn("targetSdk = 36", app_build)
         self.assertIn("minSdk = 31", app_build)
-        self.assertIn("versionCode = 8", app_build)
-        self.assertIn('versionName = "0.5.1-sovereign-glass"', app_build)
+        self.assertIn("versionCode = 9", app_build)
+        self.assertIn('versionName = "0.6.0-adaptive-tensor"', app_build)
         self.assertIn("compose-bom:2026.03.01", app_build)
         self.assertIn('abiFilters += "arm64-v8a"', app_build)
         self.assertIn(
@@ -73,6 +73,9 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("ImeAction.Default", source)
         self.assertIn('Text("SEND"', source)
         self.assertIn('Text("STOP"', source)
+        self.assertIn("SlashCommandPalette", source)
+        self.assertIn('SlashCommand("/device"', source)
+        self.assertIn("CONTROLLER COMMANDS · TAP TO INSERT", source)
 
     def test_cockpit_uses_measured_android_health_signals(self):
         ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
@@ -93,6 +96,21 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn('MessageDigest.getInstance("SHA-256")', repository)
         self.assertIn('endsWith(".litertlm")', repository)
         self.assertIn("target.fd.sync()", repository)
+
+    def test_adaptive_tensor_route_is_fingerprint_locked_and_visible(self):
+        policy = (SOURCE / "AdaptiveRuntimePolicy.kt").read_text(encoding="utf-8")
+        repository = (SOURCE / "ModelRepository.kt").read_text(encoding="utf-8")
+        ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
+        self.assertIn("TensorG5E2BSha256", policy)
+        self.assertIn(
+            "af1082986639ecde7db95d91be6fe54f8b6b458104734c5bafc204e69d6852dc",
+            policy,
+        )
+        self.assertIn("RuntimeBackendPreference.NpuOnly", policy)
+        self.assertIn("role: ModelRole", repository)
+        self.assertIn("DEVICE CHECK-UP", ui)
+        self.assertIn("IMPORT E2B · TENSOR G5", ui)
+        self.assertIn("E2B must match the reviewed Tensor G5 fingerprint", ui)
 
     def test_native_runtime_is_cancellable_and_has_measured_fallback(self):
         runtime = (SOURCE / "LiteRtModelRuntime.kt").read_text(encoding="utf-8")
@@ -116,7 +134,9 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn('code = "stalled-stream"', view_model)
         self.assertIn("lastFirstTokenMillis", view_model)
         self.assertIn("lastResponseMillis", view_model)
-        self.assertNotIn("Backend.NPU", combined)
+        self.assertIn("Backend.NPU", combined)
+        self.assertIn("RuntimeBackendPreference.NpuOnly", combined)
+        self.assertIn("E2B GPU fallback is disabled", runtime)
         self.assertNotIn("GOOGLE_TENSOR", combined)
 
     def test_generation_survives_window_switches_without_token_rate_recomposition(self):
@@ -287,6 +307,16 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn('"$signer" sign', workflow)
         self.assertIn('"$signer" verify --verbose --print-certs', workflow)
         self.assertIn("AniCloudAI-e4b-cockpit-dogfood", workflow)
+        self.assertIn("fetch_tensor_dispatcher.sh", workflow)
+        dispatcher = (ROOT / "tools/fetch_tensor_dispatcher.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("v${VERSION}/litert_npu_runtime_libraries.zip", dispatcher)
+        self.assertIn(
+            "98aabbdce8607f6dc6ab7cb92217326eef24a8c97b973b69e62bd0ce14b7495b",
+            dispatcher,
+        )
+        self.assertIn("libLiteRtDispatch_GoogleTensor.so", dispatcher)
 
     def test_termux_dogfood_channel_keeps_signing_material_private(self):
         updater = (ROOT / "tools/termux_dogfood_update.sh").read_text(
@@ -298,6 +328,8 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("gh secret set ANICLOUD_DOGFOOD_PRIVATE_KEY_B64", updater)
         self.assertIn("gh secret set ANICLOUD_DOGFOOD_CERTIFICATE_B64", updater)
         self.assertIn("AniCloudAI-e4b-cockpit-dogfood", updater)
+        self.assertIn("symbolic-ref --quiet --short HEAD", updater)
+        self.assertIn("ANICLOUD_DOGFOOD_BRANCH", updater)
         self.assertIn("--status success", updater)
         self.assertIn("sha256sum -c", updater)
         self.assertIn("termux-open --content-type", updater)

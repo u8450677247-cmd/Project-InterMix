@@ -321,23 +321,29 @@ Model inference, Room migration, the event bridge, foreground agents,
 Keystore-backed Sanctuary storage, grounding, voice, and release signing are
 subsequent gated adapters—not simulated capabilities in the foundation APK.
 
-## E4B cockpit adapter gate
+## Adaptive E2B/E4B cockpit adapter gate
 
 The first native-intelligence candidate passes only when it can:
 
-1. select exactly one `.litertlm` package through Android's file picker;
+1. select E2B conversation/memory and E4B reasoning/coding `.litertlm`
+   packages through separate Android file-picker grants;
 2. copy and SHA-256 fingerprint it in app-private no-backup storage without a
    broad storage permission;
-3. initialize the pinned LiteRT-LM runtime away from the UI thread, attempting
-   GPU first and reporting a measured CPU fallback;
+3. initialize the pinned LiteRT-LM runtime away from the UI thread: exact
+   Tensor G5 E2B fingerprint on the checksum-pinned Google Tensor dispatcher,
+   or E4B GPU first with a measured CPU fallback;
 4. stream a real response while remaining responsive to resize and STOP;
 5. explicitly cancel native processing, discard the partial answer, and rebuild
    conversation state before accepting a turn after STOP;
 6. quarantine repetition, invalid Unicode, runaway output, and missing exact
    numeric anchors before they become a completed message;
-7. show actual Android `MemAvailable`, categorical thermal pressure, active
-   backend, route, and model fingerprint; and
+7. show actual Android `MemAvailable`, SoC/hardware identity, dispatcher
+   presence, categorical thermal pressure, active backend, route, and model
+   fingerprint; and
 8. pass the exact-number and stop/recovery smoke tests on the Pixel 10 Pro.
 
-This gate does not imply native memory, grounding, E2B routing, voice, agent
-services, or NPU/TPU acceleration. Each requires its own measured adapter.
+Memory Matrix, SAF workspace access, approval-gated file writes, E2B/E4B
+routing, foreground generation, and syntax-coloured editing are implemented.
+Tensor G5 NPU remains a candidate until the fingerprint-locked path completes
+the on-device check-up, initialization, first-token, STOP, and warm-turn tests.
+Grounding, voice, and general agent execution retain their own measured gates.

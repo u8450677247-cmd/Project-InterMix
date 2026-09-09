@@ -62,7 +62,9 @@ officially advertise a compatible backend for the selected model. The app will:
 1. enumerate supported backends without loading user data;
 2. run a bounded local benchmark after consent;
 3. retain the measured working profile per model/device/runtime version;
-4. fall back to GPU, then CPU, on initialization failure; and
+4. keep Tensor-compiled E2B fail-closed on NPU initialization failure (never
+   silently spending GPU memory), while E4B retains its measured GPU-then-CPU
+   fallback; and
 5. label the result as measured, never inferred from the marketing name.
 
 Pixel AICore/Gemini Nano and a general LiteRT-LM NPU backend are not assumed to

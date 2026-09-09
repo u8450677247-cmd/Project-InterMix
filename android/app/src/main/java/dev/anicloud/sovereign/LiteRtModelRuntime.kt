@@ -31,15 +31,34 @@ data class RuntimeLoadResult(
     val fallbackDetail: String? = null,
 )
 
-/** One resident LiteRT-LM engine with a measured GPU -> CPU fallback. */
+/** One resident LiteRT-LM engine; NPU never silently falls back to GPU. */
 class LiteRtModelRuntime(private val context: Context) {
     @Volatile
     private var conversation: Conversation? = null
     private var engine: Engine? = null
+    private var activeRole: ModelRole = ModelRole.Reasoning
 
-    suspend fun load(model: ImportedModel): RuntimeLoadResult = withContext(Dispatchers.IO) {
+    suspend fun load(
+        model: ImportedModel,
+        preference: RuntimeBackendPreference = RuntimeBackendPreference.GpuThenCpu,
+    ): RuntimeLoadResult = withContext(Dispatchers.IO) {
         close()
         Engine.setNativeMinLogSeverity(LogSeverity.ERROR)
+
+        if (preference == RuntimeBackendPreference.NpuOnly) {
+            try {
+                start(model, ActiveBackend.NPU)
+                return@withContext RuntimeLoadResult(backend = ActiveBackend.NPU)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                close()
+                error(
+                    "Tensor NPU initialization failed; E2B GPU fallback is disabled: " +
+                        sanitize(failure.message ?: failure::class.java.simpleName),
+                )
+            }
+        }
 
         val gpuFailure = try {
             start(model, ActiveBackend.GPU)
@@ -113,7 +132,7 @@ class LiteRtModelRuntime(private val context: Context) {
     suspend fun resetConversation() = withContext(Dispatchers.IO) {
         val activeEngine = engine ?: error("The model engine is not initialized.")
         runCatching { conversation?.close() }
-        conversation = activeEngine.createConversation(conversationConfig())
+        conversation = activeEngine.createConversation(conversationConfig(activeRole))
     }
 
     fun close() {
@@ -127,8 +146,12 @@ class LiteRtModelRuntime(private val context: Context) {
     }
 
     private fun start(model: ImportedModel, backend: ActiveBackend) {
-        val cacheDirectory = File(context.cacheDir, "litertlm").apply { mkdirs() }
+        val cacheDirectory = File(
+            context.cacheDir,
+            "litertlm/${model.role.name.lowercase()}/${model.sha256.take(16)}/${backend.name.lowercase()}",
+        ).apply { mkdirs() }
         val nativeBackend = when (backend) {
+            ActiveBackend.NPU -> Backend.NPU(context.applicationInfo.nativeLibraryDir)
             ActiveBackend.GPU -> Backend.GPU()
             ActiveBackend.CPU -> Backend.CPU()
         }
@@ -142,16 +165,17 @@ class LiteRtModelRuntime(private val context: Context) {
         )
         try {
             candidate.initialize()
-            val candidateConversation = candidate.createConversation(conversationConfig())
+            val candidateConversation = candidate.createConversation(conversationConfig(model.role))
             engine = candidate
             conversation = candidateConversation
+            activeRole = model.role
         } catch (failure: Throwable) {
             runCatching { candidate.close() }
             throw failure
         }
     }
 
-    private fun conversationConfig() = ConversationConfig(
+    private fun conversationConfig(role: ModelRole) = ConversationConfig(
         systemInstruction = Contents.of(
             "You are Sovereign Core, the resident local intelligence inside the AniCloudAI " +
                 "native Android cockpit for Project Intermix. That is your operational identity. " +
@@ -178,7 +202,15 @@ class LiteRtModelRuntime(private val context: Context) {
                 "\"key\":\"stable_key\",\"value\":\"concise fact\",\"explicit_quote\":\"exact words from the user\"," +
                 "\"confidence\":0.9,\"salience\":0.6}]}$MemoryUpdateCloseMarker. " +
                 "Never store credentials, health/legal/financial details, diagnoses, guesses, or " +
-                "transient conversation. Private blocks are controller protocol, not visible prose.",
+                "transient conversation. Private blocks are controller protocol, not visible prose.\n\n" +
+                if (role == ModelRole.Conversation) {
+                    "You are currently the fast E2B conversation and Memory Matrix librarian. " +
+                        "Be warm, concise, continuity-aware, and exact. Do not pretend to have " +
+                        "performed deep coding or research work that the controller did not provide."
+                } else {
+                    "You are currently the E4B reasoning and coding specialist. Prefer complete, " +
+                        "technically rigorous work while remaining warm and collaborative."
+                },
         ),
         samplerConfig = SamplerConfig(
             topK = 64,

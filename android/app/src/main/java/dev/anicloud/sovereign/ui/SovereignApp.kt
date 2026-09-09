@@ -78,6 +78,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.anicloud.sovereign.prototype.AnswerMode
 import dev.anicloud.sovereign.prototype.AnswerModeSelection
+import dev.anicloud.sovereign.prototype.AdaptiveRuntimePolicy
 import dev.anicloud.sovereign.prototype.Appearance
 import dev.anicloud.sovereign.prototype.BuildConfig
 import dev.anicloud.sovereign.prototype.ChatMessage
@@ -89,6 +90,7 @@ import dev.anicloud.sovereign.prototype.FoundationLayout
 import dev.anicloud.sovereign.prototype.FoundationPreferenceStore
 import dev.anicloud.sovereign.prototype.LayoutPreference
 import dev.anicloud.sovereign.prototype.ModelStage
+import dev.anicloud.sovereign.prototype.ModelRole
 import dev.anicloud.sovereign.prototype.MatrixMemory
 import dev.anicloud.sovereign.prototype.MemoryMatrixSnapshot
 import dev.anicloud.sovereign.prototype.PendingWorkspaceAction
@@ -103,7 +105,8 @@ import dev.anicloud.sovereign.prototype.thermalStatusLabel
 import java.util.Locale
 
 private data class CockpitActions(
-    val onImportModel: () -> Unit,
+    val onImportConversationModel: () -> Unit,
+    val onImportReasoningModel: () -> Unit,
     val onRetryModel: () -> Unit,
     val onSend: (String, AnswerMode) -> Unit,
     val onStop: () -> Unit,
@@ -113,6 +116,25 @@ private data class CockpitActions(
     val onSetMemoryPinned: (Long, Boolean) -> Unit,
 )
 
+private data class SlashCommand(
+    val command: String,
+    val next: String,
+    val description: String,
+    val acceptsArgument: Boolean = false,
+)
+
+private val SlashCommands = listOf(
+    SlashCommand("/help", "show the controller command map", "Open command discovery"),
+    SlashCommand("/device", "inspect NPU readiness", "Run the local device check-up"),
+    SlashCommand("/models", "inspect adaptive routing", "Show E2B/E4B roles and residency"),
+    SlashCommand("/capabilities", "show verified controllers", "List what this APK can really do"),
+    SlashCommand("/memory", "inspect Matrix state", "Show durable-memory health"),
+    SlashCommand("/remember", "enter the durable fact", "Store an explicit safe memory", true),
+    SlashCommand("/files", "enter an optional folder", "List the connected workspace", true),
+    SlashCommand("/read", "enter a relative file path", "Read a workspace text file", true),
+    SlashCommand("/version", "show build provenance", "Display the installed build and backend"),
+)
+
 @Composable
 fun AniCloudApp(
     onLock: () -> Unit,
@@ -120,12 +142,22 @@ fun AniCloudApp(
 ) {
     val context = LocalContext.current
     val cockpit by sovereignViewModel.state.collectAsStateWithLifecycle()
-    val modelPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let(sovereignViewModel::importModel)
+    val conversationModelPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        uri?.let { sovereignViewModel.importModel(it, ModelRole.Conversation) }
+    }
+    val reasoningModelPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        uri?.let { sovereignViewModel.importModel(it, ModelRole.Reasoning) }
     }
     val cockpitActions = CockpitActions(
-        onImportModel = {
-            modelPicker.launch(arrayOf("application/octet-stream", "*/*"))
+        onImportConversationModel = {
+            conversationModelPicker.launch(arrayOf("application/octet-stream", "*/*"))
+        },
+        onImportReasoningModel = {
+            reasoningModelPicker.launch(arrayOf("application/octet-stream", "*/*"))
         },
         onRetryModel = sovereignViewModel::retryModel,
         onSend = sovereignViewModel::send,
@@ -571,7 +603,8 @@ private fun NavigationPane(
         Spacer(Modifier.weight(1f))
         Text(
             if (cockpit.model == null) "FOUNDATION · NO MODEL LOADED" else
-                "E4B · ${cockpit.backend?.name ?: cockpit.stage.label.uppercase()}",
+                "${cockpit.activeModelRole?.shortLabel ?: "LOCAL"} · " +
+                    (cockpit.backend?.name ?: cockpit.stage.label.uppercase()),
             color = modelVitalityColor(cockpit),
             fontSize = 12.sp,
         )
@@ -728,6 +761,84 @@ private fun HealthStrip(cockpit: CockpitState) {
 }
 
 @Composable
+private fun DeviceCheckupCard(cockpit: CockpitState) {
+    val verdictColor = when {
+        cockpit.npuEligible -> ResonanceMint
+        cockpit.conversationModel == null -> MutedText
+        else -> WaitingAmber
+    }
+    OutlinedCard(
+        colors = CardDefaults.outlinedCardColors(containerColor = Color.Transparent),
+        border = BorderStroke(1.dp, Color.Transparent),
+        modifier = Modifier
+            .fillMaxWidth()
+            .sovereignGlass(verdictColor, radius = 16.dp, depth = 0.76f, elevation = 2.dp),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "DEVICE CHECK-UP",
+                    color = HorizonCyan,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    if (cockpit.npuEligible) "NPU READY" else "REVIEW",
+                    color = verdictColor,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                )
+            }
+            CheckupLine("SoC", cockpit.socModel, cockpit.socModel != "Unavailable")
+            CheckupLine("Hardware", cockpit.hardware, cockpit.hardware != "Unavailable")
+            CheckupLine(
+                "Dispatcher",
+                if (cockpit.tensorDispatcherPackaged) {
+                    "Google Tensor ${BuildConfig.TENSOR_DISPATCH_VERSION} · checksum pinned"
+                } else {
+                    "Not packaged in this APK"
+                },
+                cockpit.tensorDispatcherPackaged,
+            )
+            CheckupLine(
+                "E2B fingerprint",
+                cockpit.conversationModel?.sha256?.let {
+                    val match = it.equals(AdaptiveRuntimePolicy.TensorG5E2BSha256, ignoreCase = true)
+                    "${it.take(16)}… · ${if (match) "reviewed match" else "unrecognized"}"
+                } ?: "Not installed",
+                cockpit.conversationModel?.sha256?.equals(
+                    AdaptiveRuntimePolicy.TensorG5E2BSha256,
+                    ignoreCase = true,
+                ) == true,
+            )
+            CheckupLine(
+                "Memory / thermal",
+                "${cockpit.availableMemoryBytes?.let(::formatBytes) ?: "Unavailable"} available · " +
+                    thermalStatusLabel(cockpit.thermalStatus),
+                !dev.anicloud.sovereign.prototype.isSevereThermalStatus(cockpit.thermalStatus),
+            )
+            Text(cockpit.npuStatus, color = verdictColor, fontSize = 12.sp)
+        }
+    }
+}
+
+@Composable
+private fun CheckupLine(label: String, value: String, passed: Boolean) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+        Text(if (passed) "●" else "○", color = if (passed) ResonanceMint else WaitingAmber)
+        Text(label, color = MutedText, fontSize = 12.sp, modifier = Modifier.width(112.dp))
+        Text(
+            value,
+            color = MaterialTheme.colorScheme.onSurface,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.sp,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
 private fun ResumeCard(onOpenChat: () -> Unit) {
     Card(
         onClick = onOpenChat,
@@ -821,23 +932,29 @@ private fun ModelControlCard(cockpit: CockpitState, actions: CockpitActions) {
                 )
             }
 
-            cockpit.model?.let { model ->
-                Text(
-                    "SHA-256  ${model.sha256}\nSIZE     ${formatBytes(model.byteSize)}\n" +
-                        "BACKEND  ${cockpit.backend?.name ?: "NOT ACTIVE"}",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    lineHeight = 18.sp,
-                )
-            }
+            ModelSlotSummary(
+                label = "E2B · CONVERSATION / MEMORY",
+                model = cockpit.conversationModel,
+                status = cockpit.npuStatus,
+                active = cockpit.activeModelRole == ModelRole.Conversation,
+            )
+            ModelSlotSummary(
+                label = "E4B · REASONING / CODING",
+                model = cockpit.reasoningModel,
+                status = if (cockpit.activeModelRole == ModelRole.Reasoning) {
+                    "Active on ${cockpit.backend?.name ?: "initializing"}"
+                } else {
+                    "GPU first · measured CPU fallback"
+                },
+                active = cockpit.activeModelRole == ModelRole.Reasoning,
+            )
 
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.horizontalScroll(rememberScrollState()),
             ) {
                 OutlinedButton(
-                    onClick = actions.onImportModel,
+                    onClick = actions.onImportConversationModel,
                     enabled = cockpit.stage !in setOf(
                         ModelStage.Importing,
                         ModelStage.Initializing,
@@ -845,19 +962,79 @@ private fun ModelControlCard(cockpit: CockpitState, actions: CockpitActions) {
                         ModelStage.Recovering,
                     ) && (cockpit.thermalStatus == null || cockpit.thermalStatus < 3),
                 ) {
-                    Text(if (cockpit.model == null) "CHOOSE .LITERTLM" else "CHOOSE DIFFERENT MODEL")
+                    Text(if (cockpit.conversationModel == null) "IMPORT E2B · TENSOR G5" else "REPLACE E2B")
+                }
+                OutlinedButton(
+                    onClick = actions.onImportReasoningModel,
+                    enabled = cockpit.stage !in setOf(
+                        ModelStage.Importing,
+                        ModelStage.Initializing,
+                        ModelStage.Generating,
+                        ModelStage.Recovering,
+                    ) && (cockpit.thermalStatus == null || cockpit.thermalStatus < 3),
+                ) {
+                    Text(if (cockpit.reasoningModel == null) "IMPORT E4B" else "REPLACE E4B")
                 }
                 if (cockpit.stage == ModelStage.Error && cockpit.model != null) {
                     Button(onClick = actions.onRetryModel) { Text("RETRY LOAD") }
                 }
             }
             Text(
-                "The picker grants one file only. AniCloudAI copies it into app-private, " +
-                    "no-backup storage; no broad storage permission is requested.",
+                "Each picker grants one file only. AniCloudAI copies it into app-private, " +
+                    "no-backup storage. E2B must match the reviewed Tensor G5 fingerprint and " +
+                    "never silently falls back to GPU.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 12.sp,
             )
         }
+    }
+}
+
+@Composable
+private fun ModelSlotSummary(
+    label: String,
+    model: dev.anicloud.sovereign.prototype.ImportedModel?,
+    status: String,
+    active: Boolean,
+) {
+    Column(
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .sovereignGlass(
+                if (active) ResonanceMint else CognitionViolet,
+                radius = 12.dp,
+                depth = 0.62f,
+                elevation = 1.dp,
+            )
+            .padding(12.dp),
+    ) {
+        Text(
+            label + if (active) " · RESIDENT" else "",
+            color = if (active) ResonanceMint else SoftViolet,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            model?.displayName ?: "Not installed",
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (model != null) {
+            Text(
+                "${formatBytes(model.byteSize)} · SHA-256 ${model.sha256.take(16)}…",
+                color = MutedText,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+            )
+        }
+        Text(
+            status,
+            color = if (active) ResonanceMint else MutedText,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 10.sp,
+        )
     }
 }
 
@@ -1072,6 +1249,14 @@ private fun Composer(
                     )
                 }
             }
+            if (draft.startsWith("/") && !draft.contains('\n')) {
+                SlashCommandPalette(
+                    query = draft.substringBefore(' '),
+                    onSelect = { selected ->
+                        onDraft(selected.command + if (selected.acceptsArgument) " " else "")
+                    },
+                )
+            }
             Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = draft,
@@ -1111,6 +1296,46 @@ private fun Composer(
                 fontFamily = FontFamily.Monospace,
                 fontSize = 11.sp,
             )
+        }
+    }
+}
+
+@Composable
+private fun SlashCommandPalette(
+    query: String,
+    onSelect: (SlashCommand) -> Unit,
+) {
+    val normalized = query.lowercase(Locale.ROOT)
+    val matches = SlashCommands.filter { it.command.startsWith(normalized) }.take(6)
+    if (matches.isEmpty()) return
+    OutlinedCard(
+        colors = CardDefaults.outlinedCardColors(containerColor = Color.Transparent),
+        border = BorderStroke(1.dp, Color.Transparent),
+        modifier = Modifier
+            .fillMaxWidth()
+            .sovereignGlass(CognitionViolet, radius = 12.dp, depth = 0.92f, elevation = 6.dp),
+    ) {
+        Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                "CONTROLLER COMMANDS · TAP TO INSERT",
+                color = SoftViolet,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            )
+            matches.forEach { item ->
+                TextButton(onClick = { onSelect(item) }, modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.fillMaxWidth()) {
+                        Text(
+                            "${item.command}  →  ${item.next}",
+                            color = HorizonCyan,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                        )
+                        Text(item.description, color = MutedText, fontSize = 11.sp)
+                    }
+                }
+            }
         }
     }
 }
@@ -1630,6 +1855,7 @@ private fun SystemSurface(
     ) {
         item { PageHeading("System Lens", "Measured truth, capability, and control") }
         item { HealthStrip(cockpit) }
+        item { DeviceCheckupCard(cockpit) }
         item { ModelControlCard(cockpit = cockpit, actions = cockpitActions) }
         item {
             QuickPreferences(
@@ -1663,11 +1889,19 @@ private fun SystemLens(cockpit: CockpitState, modifier: Modifier = Modifier) {
         Text("SYSTEM LENS", color = HorizonCyan, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         LensValue(
             "MODEL",
-            cockpit.model?.let { "E4B · ${cockpit.backend?.name ?: cockpit.stage.label.uppercase()}" }
+            cockpit.model?.let {
+                "${cockpit.activeModelRole?.shortLabel ?: "LOCAL"} · " +
+                    (cockpit.backend?.name ?: cockpit.stage.label.uppercase())
+            }
                 ?: "NOT CONNECTED",
             modelVitalityColor(cockpit),
         )
         LensValue("BUILD", BuildConfig.VERSION_NAME.uppercase(), HorizonCyan)
+        LensValue(
+            "TENSOR G5 NPU",
+            if (cockpit.npuEligible) "READY" else cockpit.npuStatus.uppercase(),
+            if (cockpit.npuEligible) ResonanceMint else WaitingAmber,
+        )
         LensValue(
             "DEVICE RAM",
             cockpit.availableMemoryBytes?.let(::formatBytes)?.uppercase() ?: "UNAVAILABLE",

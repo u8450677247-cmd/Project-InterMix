@@ -83,6 +83,7 @@ enum class ModelStage(val label: String) {
 }
 
 enum class ActiveBackend {
+    NPU,
     GPU,
     CPU,
 }
@@ -92,6 +93,7 @@ data class ImportedModel(
     val absolutePath: String,
     val byteSize: Long,
     val sha256: String,
+    val role: ModelRole = ModelRole.Reasoning,
 )
 
 enum class ChatSpeaker {
@@ -110,7 +112,15 @@ data class CockpitState(
     val stage: ModelStage = ModelStage.Empty,
     val detail: String = "Choose a local .litertlm model to begin.",
     val model: ImportedModel? = null,
+    val conversationModel: ImportedModel? = null,
+    val reasoningModel: ImportedModel? = null,
+    val activeModelRole: ModelRole? = null,
     val backend: ActiveBackend? = null,
+    val npuStatus: String = "E2B package not installed",
+    val npuEligible: Boolean = false,
+    val socModel: String = "Unavailable",
+    val hardware: String = "Unavailable",
+    val tensorDispatcherPackaged: Boolean = false,
     val importBytesCopied: Long = 0,
     val importBytesTotal: Long? = null,
     val availableMemoryBytes: Long? = null,

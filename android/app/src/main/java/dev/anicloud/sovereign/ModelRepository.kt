@@ -29,6 +29,7 @@ class ModelRepository(private val context: Context) {
 
     suspend fun importModel(
         uri: Uri,
+        role: ModelRole = ModelRole.Reasoning,
         onProgress: (copied: Long, total: Long?) -> Unit,
     ): ImportedModel = withContext(Dispatchers.IO) {
         modelDirectory.mkdirs()
@@ -47,7 +48,7 @@ class ModelRepository(private val context: Context) {
             }
         }
 
-        val partial = File.createTempFile("e4b-import-", ".partial", modelDirectory)
+        val partial = File.createTempFile("${role.name.lowercase()}-import-", ".partial", modelDirectory)
         try {
             val digest = MessageDigest.getInstance("SHA-256")
             var copied = 0L
@@ -103,6 +104,7 @@ class ModelRepository(private val context: Context) {
                 absolutePath = installedFile.absolutePath,
                 byteSize = copied,
                 sha256 = sha256,
+                role = role,
             ).also(::remember)
         } catch (failure: Throwable) {
             partial.delete()
@@ -110,11 +112,24 @@ class ModelRepository(private val context: Context) {
         }
     }
 
-    fun installedModel(): ImportedModel? {
-        val path = preferences.getString(ModelPathKey, null) ?: return null
-        val name = preferences.getString(ModelNameKey, null) ?: return null
-        val sha = preferences.getString(ModelShaKey, null) ?: return null
-        val bytes = preferences.getLong(ModelBytesKey, -1L)
+    fun installedModel(role: ModelRole = ModelRole.Reasoning): ImportedModel? {
+        val prefix = role.name.lowercase()
+        val legacy = role == ModelRole.Reasoning
+        val path = preferences.getString("${prefix}_model_path", null)
+            ?: if (legacy) preferences.getString(ModelPathKey, null) else null
+            ?: return null
+        val name = preferences.getString("${prefix}_model_name", null)
+            ?: if (legacy) preferences.getString(ModelNameKey, null) else null
+            ?: return null
+        val sha = preferences.getString("${prefix}_model_sha256", null)
+            ?: if (legacy) preferences.getString(ModelShaKey, null) else null
+            ?: return null
+        val roleBytes = preferences.getLong("${prefix}_model_bytes", -1L)
+        val bytes = if (roleBytes > 0) roleBytes else if (legacy) {
+            preferences.getLong(ModelBytesKey, -1L)
+        } else {
+            -1L
+        }
         if (bytes <= 0) return null
 
         val file = File(path)
@@ -123,17 +138,25 @@ class ModelRepository(private val context: Context) {
         }.getOrDefault(false)
         if (!insidePrivateModelDirectory || !file.isFile || file.length() != bytes) return null
         if (file.name != "$sha.litertlm") return null
-        return ImportedModel(name, file.absolutePath, bytes, sha)
+        return ImportedModel(name, file.absolutePath, bytes, sha, role)
     }
 
     private fun remember(model: ImportedModel) {
-        check(
-            preferences.edit()
+        val prefix = model.role.name.lowercase()
+        val editor = preferences.edit()
+            .putString("${prefix}_model_name", model.displayName)
+            .putString("${prefix}_model_path", model.absolutePath)
+            .putLong("${prefix}_model_bytes", model.byteSize)
+            .putString("${prefix}_model_sha256", model.sha256)
+        if (model.role == ModelRole.Reasoning) {
+            editor
                 .putString(ModelNameKey, model.displayName)
                 .putString(ModelPathKey, model.absolutePath)
                 .putLong(ModelBytesKey, model.byteSize)
                 .putString(ModelShaKey, model.sha256)
-                .commit(),
+        }
+        check(
+            editor.commit(),
         ) { "Could not retain the imported model fingerprint." }
     }
 

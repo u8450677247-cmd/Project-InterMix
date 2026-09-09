@@ -3,6 +3,7 @@ package dev.anicloud.sovereign.prototype
 import android.app.ActivityManager
 import android.app.Application
 import android.net.Uri
+import android.os.Build
 import android.os.PowerManager
 import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
@@ -20,6 +21,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.io.File
 
 private class QuarantinedGeneration(val violation: IntegrityViolation) : RuntimeException()
 
@@ -37,11 +39,15 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
     private val powerManager = application.getSystemService(PowerManager::class.java)
     private val activityManager = application.getSystemService(ActivityManager::class.java)
     private val restoredMessages = memoryMatrix.loadMessages()
+    private val restoredConversationModel = modelRepository.installedModel(ModelRole.Conversation)
+    private val restoredReasoningModel = modelRepository.installedModel(ModelRole.Reasoning)
     private val _state = MutableStateFlow(
         CockpitState(
             messages = restoredMessages.ifEmpty { CockpitState().messages },
             memoryMatrix = memoryMatrix.snapshot(),
             pendingActions = memoryMatrix.pendingWorkspaceActions(),
+            conversationModel = restoredConversationModel,
+            reasoningModel = restoredReasoningModel,
         ),
     )
     val state: StateFlow<CockpitState> = _state.asStateFlow()
@@ -62,10 +68,10 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         refreshRuntimeState()
         recordThermalStatus(powerManager.currentThermalStatus)
         powerManager.addThermalStatusListener(application.mainExecutor, thermalListener)
-        modelRepository.installedModel()?.let(::loadModel)
+        (restoredReasoningModel ?: restoredConversationModel)?.let(::loadModel)
     }
 
-    fun importModel(uri: Uri) {
+    fun importModel(uri: Uri, role: ModelRole = ModelRole.Reasoning) {
         if (_state.value.isGenerating || importJob?.isActive == true) return
         if (isSevereThermalStatus(_state.value.thermalStatus)) {
             _state.update {
@@ -84,7 +90,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                 )
             }
             val imported = try {
-                modelRepository.importModel(uri) { copied, total ->
+                modelRepository.importModel(uri, role) { copied, total ->
                     _state.update { state ->
                         state.copy(importBytesCopied = copied, importBytesTotal = total)
                     }
@@ -101,13 +107,23 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun retryModel() {
         if (_state.value.isGenerating || importJob?.isActive == true) return
-        (_state.value.model ?: modelRepository.installedModel())?.let(::loadModel)
+        (_state.value.model ?: _state.value.reasoningModel ?: _state.value.conversationModel)
+            ?.let(::loadModel)
     }
 
     fun send(prompt: String, mode: AnswerMode) {
         if (prompt.isBlank() || !_state.value.canSend || generationJob?.isActive == true) return
         val serial = ++generationSerial
-        val route = routeLabel(mode)
+        val requestedRoute = selectRoute(mode, prompt) ?: run {
+            _state.update {
+                it.copy(
+                    stage = ModelStage.Error,
+                    detail = "No usable model route. Import E4B, or the exact Tensor G5 E2B package.",
+                )
+            }
+            return
+        }
+        val route = requestedRoute.label
         generationJob = viewModelScope.launch {
             val userMessage = commitMessage(ChatSpeaker.User, prompt)
             if (serial != generationSerial) return@launch
@@ -137,6 +153,14 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
 
             val startedAt = SystemClock.elapsedRealtime()
             try {
+                val activeRoute = ensureRoute(requestedRoute, mode)
+                _state.update {
+                    it.copy(
+                        stage = ModelStage.Generating,
+                        detail = "${activeRoute.label} · ${activeRoute.reason} · assembling verified context",
+                        routeLabel = "${activeRoute.label} · ${it.backend?.name ?: "loading"}",
+                    )
+                }
                 runtime.resetConversation()
                 var request = buildTurnPrompt(prompt, userMessage.id, mode)
                 var controllerCycle = 0
@@ -452,7 +476,10 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         val workspace = workspaceRepository.controllerContext()
         return buildString {
             appendLine("[SOVEREIGN IDENTITY CONTRACT]")
-            appendLine("You are Sovereign Core, the resident E4B intelligence currently running inside the installed AniCloudAI native Android cockpit.")
+            appendLine(
+                "You are Sovereign Core, the resident ${cockpit.activeModelRole?.shortLabel ?: "local"} " +
+                    "intelligence currently running inside the installed AniCloudAI native Android cockpit.",
+            )
             appendLine("Installed build: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}).")
             appendLine("Maintain atmospheric presence, emotional intelligence, continuity, and honest technical precision; never become dry or generically assistant-like.")
             appendLine("Speak like a warm long-running co-creator: lead with the useful answer, acknowledge shared context, and allow light humor when it fits.")
@@ -464,7 +491,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             appendLine("Product: AniCloudAI native Android cockpit")
             appendLine("Resident role: Sovereign Core")
             appendLine("Project: Project Intermix")
-            appendLine("Model route: ${routeLabel(mode)}")
+            appendLine("Model route: ${cockpit.routeLabel}")
             appendLine("Memory Matrix: ${cockpit.memoryMatrix.messageCount} messages, ${cockpit.memoryMatrix.memoryCount} durable memories")
             appendLine("Grounding: offline; no web provider is connected in this build")
             appendLine("Filesystem authority exists only through the WORKSPACE tools described below.")
@@ -511,7 +538,8 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         val trimmed = prompt.trim()
         val command = trimmed.substringBefore(' ').lowercase()
         if (command !in setOf(
-                "/remember", "/memory", "/files", "/read", "/version", "/capabilities", "/help",
+                "/remember", "/memory", "/files", "/read", "/version", "/capabilities",
+                "/models", "/device", "/help",
             )
         ) return false
         val response = runCatching {
@@ -566,6 +594,47 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                     "(${BuildConfig.VERSION_CODE}) · ${_state.value.model?.displayName ?: "model disconnected"} · " +
                     "${_state.value.backend?.name ?: "backend unavailable"}"
 
+                "/models" -> buildString {
+                    val cockpit = _state.value
+                    appendLine("# Adaptive model vault")
+                    appendLine()
+                    appendLine(
+                        "- **E2B conversation/memory:** " +
+                            (cockpit.conversationModel?.displayName ?: "not installed"),
+                    )
+                    appendLine("- **Tensor NPU:** ${if (cockpit.npuEligible) "ready" else cockpit.npuStatus}")
+                    appendLine(
+                        "- **E4B reasoning/coding:** " +
+                            (cockpit.reasoningModel?.displayName ?: "not installed"),
+                    )
+                    appendLine(
+                        "- **Resident:** ${cockpit.activeModelRole?.shortLabel ?: "none"} · " +
+                            (cockpit.backend?.name ?: "no backend"),
+                    )
+                    append("Only one engine is resident. E2B never falls back from NPU to GPU.")
+                }
+
+                "/device" -> buildString {
+                    val cockpit = _state.value
+                    appendLine("# Device check-up")
+                    appendLine()
+                    appendLine("- **SoC:** ${cockpit.socModel}")
+                    appendLine("- **Hardware:** ${cockpit.hardware}")
+                    appendLine(
+                        "- **Tensor dispatcher:** " + if (cockpit.tensorDispatcherPackaged) {
+                            "Google Tensor ${BuildConfig.TENSOR_DISPATCH_VERSION}, packaged"
+                        } else {
+                            "missing"
+                        },
+                    )
+                    appendLine(
+                        "- **Available RAM:** " +
+                            (cockpit.availableMemoryBytes?.let { "${it / (1024 * 1024)} MiB" } ?: "unavailable"),
+                    )
+                    appendLine("- **Thermal:** ${thermalStatusLabel(cockpit.thermalStatus)}")
+                    append("- **E2B NPU verdict:** ${if (cockpit.npuEligible) "READY" else cockpit.npuStatus}")
+                }
+
                 "/capabilities" -> {
                     val snapshot = withContext(Dispatchers.IO) { memoryMatrix.snapshot() }
                     val workspace = workspaceRepository.controllerContext()
@@ -574,7 +643,9 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
 
                     - **Build:** ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})
                     - **Resident model:** ${_state.value.model?.displayName ?: "disconnected"}
+                    - **Resident role:** ${_state.value.activeModelRole?.label ?: "unavailable"}
                     - **Backend:** ${_state.value.backend?.name ?: "unavailable"}
+                    - **Tensor G5 E2B:** ${if (_state.value.npuEligible) "NPU ready" else _state.value.npuStatus}
                     - **Memory Matrix:** ${snapshot.memoryCount} memories, ${snapshot.messageCount} messages, FTS=${if (snapshot.ftsAvailable) "ready" else "fallback"}
                     - **Grounding:** offline in this build
 
@@ -582,8 +653,8 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                     """.trimIndent()
                 }
 
-                else -> "Local controller commands: /version, /capabilities, /memory, " +
-                    "/remember <fact>, /files [path], /read <path>. " +
+                else -> "Local controller commands: /version, /capabilities, /models, /device, " +
+                    "/memory, /remember <fact>, /files [path], /read <path>. " +
                     "Natural-language file requests can also invoke bounded workspace tools."
             }
         }.fold(
@@ -606,6 +677,34 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
 
     private suspend fun loadModelNow(model: ImportedModel) {
         refreshRuntimeState()
+        val preference = if (model.role == ModelRole.Conversation) {
+            RuntimeBackendPreference.NpuOnly
+        } else {
+            RuntimeBackendPreference.GpuThenCpu
+        }
+        val modelLabel = model.role.shortLabel
+        _state.update {
+            it.copy(
+                conversationModel = if (model.role == ModelRole.Conversation) model else it.conversationModel,
+                reasoningModel = if (model.role == ModelRole.Reasoning) model else it.reasoningModel,
+            )
+        }
+        if (model.role == ModelRole.Conversation) {
+            val eligibility = AdaptiveRuntimePolicy.npuEligibility(model, deviceRuntimeFacts())
+            if (!eligibility.eligible) {
+                val hasResidentModel = _state.value.backend != null && _state.value.model != null
+                _state.update {
+                    it.copy(
+                        stage = if (hasResidentModel) ModelStage.Ready else ModelStage.Empty,
+                        detail = "E2B retained but NPU is locked: ${eligibility.detail}",
+                        npuStatus = eligibility.detail,
+                        importBytesCopied = model.byteSize,
+                        importBytesTotal = model.byteSize,
+                    )
+                }
+                return
+            }
+        }
         if (isSevereThermalStatus(_state.value.thermalStatus)) {
             _state.update {
                 it.copy(
@@ -619,37 +718,132 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         _state.update {
             it.copy(
                 stage = ModelStage.Initializing,
-                detail = "Initializing E4B with GPU first and measured CPU fallback…",
+                detail = if (model.role == ModelRole.Conversation) {
+                    "Initializing fingerprint-locked E2B on Tensor NPU…"
+                } else {
+                    "Initializing E4B with GPU first and measured CPU fallback…"
+                },
                 model = model,
                 backend = null,
                 importBytesCopied = model.byteSize,
                 importBytesTotal = model.byteSize,
-                routeLabel = "E4B initialization",
+                routeLabel = "$modelLabel initialization",
             )
         }
         val loadStartedAt = SystemClock.elapsedRealtime()
         val loaded = try {
-            runtime.load(model)
+            runtime.load(model, preference)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Throwable) {
-            showLoadFailure("E4B initialization failed", failure, model)
+            if (model.role == ModelRole.Conversation && recoverReasoningAfterNpuFailure(failure)) return
+            showLoadFailure("$modelLabel initialization failed", failure, model)
             return
         }
-        val runtimeNotice = "E4B connected on ${loaded.backend.name}. SHA-256 ${model.sha256.take(16)}…"
+        val runtimeNotice = "$modelLabel connected on ${loaded.backend.name}. SHA-256 ${model.sha256.take(16)}…"
         if (_state.value.messages.none { it.speaker == ChatSpeaker.System && it.text == runtimeNotice }) {
             commitMessage(ChatSpeaker.System, runtimeNotice, source = "runtime")
         }
         _state.update {
             it.copy(
                 stage = ModelStage.Ready,
-                detail = loaded.fallbackDetail ?: "E4B initialized on ${loaded.backend.name}",
+                detail = loaded.fallbackDetail ?: "$modelLabel initialized on ${loaded.backend.name}",
                 backend = loaded.backend,
+                activeModelRole = model.role,
                 modelLoadMillis = SystemClock.elapsedRealtime() - loadStartedAt,
-                routeLabel = "E4B · ${loaded.backend.name}",
+                routeLabel = "$modelLabel · ${loaded.backend.name}",
             )
         }
         refreshRuntimeState()
+    }
+
+    private suspend fun recoverReasoningAfterNpuFailure(npuFailure: Throwable): Boolean {
+        val reasoning = _state.value.reasoningModel ?: return false
+        val startedAt = SystemClock.elapsedRealtime()
+        return try {
+            val loaded = runtime.load(reasoning, RuntimeBackendPreference.GpuThenCpu)
+            _state.update {
+                it.copy(
+                    stage = ModelStage.Ready,
+                    model = reasoning,
+                    activeModelRole = ModelRole.Reasoning,
+                    backend = loaded.backend,
+                    modelLoadMillis = SystemClock.elapsedRealtime() - startedAt,
+                    detail = "E2B NPU load failed safely; E4B restored on ${loaded.backend.name}: " +
+                        safeFailure(npuFailure),
+                    routeLabel = "E4B recovery · ${loaded.backend.name}",
+                )
+            }
+            true
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun selectRoute(mode: AnswerMode, prompt: String): AdaptiveModelRoute? =
+        AdaptiveRuntimePolicy.select(
+            mode = mode,
+            prompt = prompt,
+            conversationModel = _state.value.conversationModel,
+            reasoningModel = _state.value.reasoningModel,
+            facts = deviceRuntimeFacts(),
+        )
+
+    private suspend fun ensureRoute(
+        requested: AdaptiveModelRoute,
+        mode: AnswerMode,
+    ): AdaptiveModelRoute {
+        val current = _state.value
+        val alreadyResident = current.model?.sha256 == requested.model.sha256 &&
+            current.activeModelRole == requested.model.role && current.backend != null
+        if (alreadyResident) return requested
+
+        _state.update {
+            it.copy(
+                stage = ModelStage.Generating,
+                detail = "Releasing ${it.activeModelRole?.shortLabel ?: "inactive model"} and loading " +
+                    "${requested.model.role.shortLabel}…",
+                streamText = "",
+            )
+        }
+        val startedAt = SystemClock.elapsedRealtime()
+        val loaded = try {
+            runtime.load(requested.model, requested.backendPreference)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            if (requested.model.role != ModelRole.Conversation) throw failure
+            val fallback = _state.value.reasoningModel ?: throw failure
+            val fallbackLoaded = runtime.load(fallback, RuntimeBackendPreference.GpuThenCpu)
+            val fallbackRoute = AdaptiveModelRoute(
+                model = fallback,
+                backendPreference = RuntimeBackendPreference.GpuThenCpu,
+                label = "E4B · ${mode.label}",
+                reason = "E2B NPU load failed safely; GPU fallback was refused: ${safeFailure(failure)}",
+            )
+            _state.update {
+                it.copy(
+                    model = fallback,
+                    activeModelRole = ModelRole.Reasoning,
+                    backend = fallbackLoaded.backend,
+                    modelLoadMillis = SystemClock.elapsedRealtime() - startedAt,
+                    routeLabel = "${fallbackRoute.label} · ${fallbackLoaded.backend.name}",
+                )
+            }
+            return fallbackRoute
+        }
+        _state.update {
+            it.copy(
+                model = requested.model,
+                activeModelRole = requested.model.role,
+                backend = loaded.backend,
+                modelLoadMillis = SystemClock.elapsedRealtime() - startedAt,
+                routeLabel = "${requested.label} · ${loaded.backend.name}",
+            )
+        }
+        return requested
     }
 
     private suspend fun recoverFromGeneration(serial: Long, message: String) {
@@ -718,25 +912,36 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         refreshRuntimeState()
     }
 
-    private fun routeLabel(mode: AnswerMode): String {
-        val backend = _state.value.backend?.name ?: "backend unavailable"
-        return when (mode) {
-            AnswerMode.Quality -> "E4B Quality · $backend"
-            AnswerMode.Adaptive -> "E4B Adaptive fallback · E2B not installed · $backend"
-            AnswerMode.Performance -> "E4B Performance fallback · E2B not installed · $backend"
-        }
+    private fun deviceRuntimeFacts(): DeviceRuntimeFacts {
+        val info = ActivityManager.MemoryInfo()
+        activityManager.getMemoryInfo(info)
+        val dispatcher = File(
+            getApplication<Application>().applicationInfo.nativeLibraryDir,
+            AdaptiveRuntimePolicy.GoogleTensorDispatcher,
+        )
+        return DeviceRuntimeFacts(
+            socModel = Build.SOC_MODEL.orEmpty(),
+            hardware = Build.HARDWARE.orEmpty(),
+            dispatcherAvailable = dispatcher.isFile && dispatcher.length() > 0L,
+            availableMemoryBytes = info.availMem,
+        )
     }
 
     private fun refreshRuntimeState() {
-        val info = ActivityManager.MemoryInfo()
-        activityManager.getMemoryInfo(info)
+        val facts = deviceRuntimeFacts()
         val matrix = runCatching { memoryMatrix.snapshot() }.getOrDefault(_state.value.memoryMatrix)
         val pending = runCatching { memoryMatrix.pendingWorkspaceActions() }.getOrDefault(_state.value.pendingActions)
+        val npu = AdaptiveRuntimePolicy.npuEligibility(_state.value.conversationModel, facts)
         _state.update {
             it.copy(
-                availableMemoryBytes = info.availMem,
+                availableMemoryBytes = facts.availableMemoryBytes,
                 memoryMatrix = matrix,
                 pendingActions = pending,
+                npuStatus = npu.detail,
+                npuEligible = npu.eligible,
+                socModel = facts.socModel.ifBlank { "Unavailable" },
+                hardware = facts.hardware.ifBlank { "Unavailable" },
+                tensorDispatcherPackaged = facts.dispatcherAvailable,
             )
         }
     }

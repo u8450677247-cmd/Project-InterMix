@@ -7,7 +7,13 @@ set -euo pipefail
 # never committed, printed, or placed in Android shared storage.
 
 repo="${ANICLOUD_GITHUB_REPOSITORY:-u8450677247-cmd/Project-InterMix}"
-branch="${ANICLOUD_DOGFOOD_BRANCH:-feature/anicloud-cockpit-convergence-20260907}"
+script_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+checkout_root="$(git -C "$script_root/.." rev-parse --show-toplevel 2>/dev/null || true)"
+detected_branch=""
+if [[ -n "$checkout_root" ]]; then
+    detected_branch="$(git -C "$checkout_root" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+fi
+branch="${ANICLOUD_DOGFOOD_BRANCH:-${detected_branch:-feature/anicloud-cockpit-convergence-20260907}}"
 workflow="${ANICLOUD_ANDROID_WORKFLOW:-android-foundation.yml}"
 artifact="${ANICLOUD_ANDROID_ARTIFACT:-AniCloudAI-e4b-cockpit-dogfood}"
 key_root="${ANICLOUD_DOGFOOD_KEY_DIR:-$HOME/.local/share/anicloud-dogfood-signing}"

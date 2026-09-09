@@ -8,12 +8,14 @@ on:
       - "android/**"
       - "docs/ANDROID_DESIGN.md"
       - "docs/ANDROID_PRODUCT_CONTRACT.md"
+      - "docs/ANDROID_TENSOR_NPU.md"
       - ".github/workflows/android-foundation.yml"
   pull_request:
     paths:
       - "android/**"
       - "docs/ANDROID_DESIGN.md"
       - "docs/ANDROID_PRODUCT_CONTRACT.md"
+      - "docs/ANDROID_TENSOR_NPU.md"
       - ".github/workflows/android-foundation.yml"
   workflow_dispatch:
 
@@ -58,7 +60,10 @@ jobs:
           yes 2>/dev/null | sdkmanager --licenses >/dev/null
           sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
-      - name: Test and assemble the native E4B cockpit
+      - name: Package checksum-pinned Tensor G5 NPU dispatcher
+        run: bash tools/fetch_tensor_dispatcher.sh
+
+      - name: Test and assemble the adaptive Tensor cockpit
         run: >-
           gradle -p android
           :app:testDebugUnitTest
@@ -130,7 +135,7 @@ jobs:
           printf '%s\n' "$certificate_sha" > "$output_root/certificate-sha256.txt"
           printf '%s\n' "$GITHUB_SHA" > "$output_root/commit.txt"
 
-      - name: Retain the E4B cockpit debug APK
+      - name: Retain the adaptive cockpit debug APK
         uses: actions/upload-artifact@v7
         with:
           name: AniCloudAI-e4b-cockpit-debug

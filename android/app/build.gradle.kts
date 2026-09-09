@@ -11,8 +11,15 @@ android {
         applicationId = "dev.anicloud.sovereign.prototype"
         minSdk = 31
         targetSdk = 36
-        versionCode = 8
-        versionName = "0.5.1-sovereign-glass"
+        versionCode = 9
+        versionName = "0.6.0-adaptive-tensor"
+
+        buildConfigField("String", "TENSOR_DISPATCH_VERSION", "\"2.1.6\"")
+        buildConfigField(
+            "String",
+            "TENSOR_DISPATCH_ARCHIVE_SHA256",
+            "\"98aabbdce8607f6dc6ab7cb92217326eef24a8c97b973b69e62bd0ce14b7495b\"",
+        )
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
