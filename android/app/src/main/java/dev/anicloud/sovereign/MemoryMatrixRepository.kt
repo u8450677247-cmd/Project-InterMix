@@ -10,10 +10,11 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.time.Instant
+import java.util.Locale
 import java.util.UUID
 
 private const val MatrixDatabaseName = "sovereign_memory_v1.db"
-private const val MatrixSchemaVersion = 1
+private const val MatrixSchemaVersion = 2
 private const val LegacyHistoryName = "conversation_history_v1.json"
 private const val MaxStoredMessageCharacters = 32 * 1024
 private const val MaxMemoryValueCharacters = 4 * 1024
@@ -37,6 +38,7 @@ data class MemoryMatrixSnapshot(
     val databaseBytes: Long = 0,
     val ftsAvailable: Boolean = false,
     val recentMemories: List<MatrixMemory> = emptyList(),
+    val interactionProfile: InteractionProfile = InteractionProfile(),
 )
 
 data class PendingWorkspaceAction(
@@ -51,6 +53,13 @@ data class PendingWorkspaceAction(
 data class MemoryProposalResult(
     val stored: Int = 0,
     val skipped: Int = 0,
+)
+
+data class ProfileUpdateResult(
+    val changed: Boolean = false,
+    val applied: Int = 0,
+    val skipped: Int = 0,
+    val profile: InteractionProfile = InteractionProfile(),
 )
 
 /**
@@ -176,11 +185,14 @@ class MemoryMatrixRepository(private val context: Context) :
             """.trimIndent(),
         )
         db.execSQL("CREATE INDEX idx_agent_actions_status ON agent_actions(status, id DESC)")
+        installInteractionProfile(db)
         installFts(db)
         ensureSession(db)
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) installInteractionProfile(db)
+    }
 
     @Synchronized
     fun loadMessages(limit: Int = 200): List<ChatMessage> {
@@ -241,15 +253,19 @@ class MemoryMatrixRepository(private val context: Context) :
     }
 
     @Synchronized
-    fun recallContext(query: String, beforeMessageId: Long, characterBudget: Int = 10_000): String {
-        val budget = characterBudget.coerceIn(2_000, 16_000)
-        val memories = searchMemories(query, 8)
-        val recent = recentMessages(beforeMessageId, 10)
-        val archived = searchArchivedMessages(query, beforeMessageId, 4)
+    fun recallContext(
+        query: String,
+        beforeMessageId: Long,
+        decision: ContextDecision,
+    ): String {
+        val budget = decision.characterBudget.coerceIn(2_000, 16_000)
+        val memories = searchMemories(query, decision.memoryLimit, decision.allowMemoryFallback)
+        val recent = recentMessages(beforeMessageId, decision.recentMessageLimit)
+        val archived = searchArchivedMessages(query, beforeMessageId, decision.archivedMessageLimit)
         val session = activeSession(writableDatabase)
 
         val blocks = mutableListOf<String>()
-        if (session != null) {
+        if (session != null && decision.scope != ContextScope.General) {
             val sessionLines = buildList {
                 session.getString("summary").takeIf(String::isNotBlank)?.let { add("Summary: $it") }
                 session.getString("current_task").takeIf(String::isNotBlank)?.let { add("Task: $it") }
@@ -378,7 +394,215 @@ class MemoryMatrixRepository(private val context: Context) :
             databaseBytes = databaseFootprint(),
             ftsAvailable = ftsAvailable(db),
             recentMemories = listMemories(12),
+            interactionProfile = interactionProfile(),
         )
+    }
+
+    @Synchronized
+    fun interactionProfile(): InteractionProfile {
+        val db = readableDatabase
+        return db.rawQuery(
+            """
+            SELECT warmth,directness,detail,emoji,initiative,context_precision,
+                   automatic_adaptation,revision,updated_at,last_reason,last_evidence
+            FROM interaction_profile WHERE id=1
+            """.trimIndent(),
+            null,
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) InteractionProfile() else InteractionProfile(
+                warmth = cursor.getDouble(0),
+                directness = cursor.getDouble(1),
+                detail = cursor.getDouble(2),
+                emoji = cursor.getDouble(3),
+                initiative = cursor.getDouble(4),
+                contextPrecision = cursor.getDouble(5),
+                automaticAdaptation = cursor.getInt(6) != 0,
+                revision = cursor.getInt(7),
+                updatedAt = cursor.getString(8),
+                lastReason = cursor.getString(9),
+                lastEvidence = cursor.getString(10),
+            ).normalized()
+        }
+    }
+
+    @Synchronized
+    fun applyExplicitProfileAdjustments(
+        adjustments: List<ProfileAdjustment>,
+        sourceMessageId: Long,
+    ): ProfileUpdateResult {
+        val current = interactionProfile()
+        if (!current.automaticAdaptation || adjustments.isEmpty()) {
+            return ProfileUpdateResult(profile = current, skipped = adjustments.size)
+        }
+        val unique = adjustments.distinctBy(ProfileAdjustment::trait).take(4)
+        val proposed = InteractionProfilePolicy.apply(current, unique)
+        val evidence = unique.joinToString(" · ") { it.evidence }.take(500)
+        return persistProfileChange(
+            current = current,
+            proposed = proposed,
+            sourceKind = "explicit-cue",
+            reason = "Applied an explicit interaction preference",
+            evidence = evidence,
+            sourceMessageId = sourceMessageId,
+            applied = unique.size,
+            skipped = adjustments.size - unique.size,
+        )
+    }
+
+    @Synchronized
+    fun applyProfileProposal(
+        payload: JSONObject?,
+        userPrompt: String,
+        sourceMessageId: Long,
+    ): ProfileUpdateResult {
+        val current = interactionProfile()
+        val proposals = payload?.optJSONArray("adjustments")
+            ?: return ProfileUpdateResult(profile = current)
+        if (!current.automaticAdaptation) {
+            return ProfileUpdateResult(profile = current, skipped = proposals.length())
+        }
+
+        val normalizedPrompt = normalized(userPrompt)
+        val adjustments = mutableListOf<ProfileAdjustment>()
+        var skipped = 0
+        for (index in 0 until minOf(proposals.length(), 4)) {
+            val item = proposals.optJSONObject(index)
+            val trait = item?.let { InteractionTrait.fromWireName(it.optString("trait")) }
+            val quote = item?.optString("explicit_quote").orEmpty()
+                .replace("\u0000", "").trim().take(500)
+            val verified = normalized(quote).let { it.isNotBlank() && normalizedPrompt.contains(it) }
+            val direction = item?.optString("direction").orEmpty().lowercase()
+            val requestedAmount = item?.optDouble("amount", 0.04) ?: 0.04
+            val amount = requestedAmount.takeIf { it.isFinite() }?.coerceIn(0.02, 0.08) ?: 0.04
+            val delta = when (direction) {
+                "increase", "more" -> amount
+                "decrease", "less" -> -amount
+                else -> 0.0
+            }
+            if (trait == null || !verified || delta == 0.0 || containsCredentialShape(quote) ||
+                containsSensitiveProfileEvidence(quote) || adjustments.any { it.trait == trait }
+            ) {
+                skipped++
+                continue
+            }
+            adjustments += ProfileAdjustment(trait, delta, quote)
+        }
+        if (adjustments.isEmpty()) {
+            return ProfileUpdateResult(profile = current, skipped = skipped)
+        }
+        val proposed = InteractionProfilePolicy.apply(current, adjustments)
+        val reason = payload.optString("reason")
+            .replace("\u0000", "").trim().take(240)
+            .ifBlank { "Validated model-proposed interaction adjustment" }
+        return persistProfileChange(
+            current = current,
+            proposed = proposed,
+            sourceKind = "validated-model-proposal",
+            reason = reason,
+            evidence = adjustments.joinToString(" · ") { it.evidence }.take(500),
+            sourceMessageId = sourceMessageId,
+            applied = adjustments.size,
+            skipped = skipped,
+        )
+    }
+
+    @Synchronized
+    fun setProfileTrait(
+        trait: InteractionTrait,
+        value: Double,
+        sourceMessageId: Long,
+    ): ProfileUpdateResult {
+        require(value in 0.0..1.0) { "Profile values must be between 0 and 1." }
+        val current = interactionProfile()
+        return persistProfileChange(
+            current = current,
+            proposed = current.withValue(trait, value),
+            sourceKind = "manual-command",
+            reason = "Set ${trait.label.lowercase()} to ${InteractionProfilePolicy.percent(value)}%",
+            evidence = "/adapt ${trait.wireName} ${"%.2f".format(Locale.ROOT, value)}",
+            sourceMessageId = sourceMessageId,
+            applied = 1,
+        )
+    }
+
+    @Synchronized
+    fun setAutomaticAdaptation(enabled: Boolean, sourceMessageId: Long): ProfileUpdateResult {
+        val current = interactionProfile()
+        return persistProfileChange(
+            current = current,
+            proposed = current.copy(automaticAdaptation = enabled),
+            sourceKind = "manual-command",
+            reason = "Turned automatic interaction adaptation ${if (enabled) "on" else "off"}",
+            evidence = "/adapt ${if (enabled) "on" else "off"}",
+            sourceMessageId = sourceMessageId,
+            applied = 1,
+        )
+    }
+
+    @Synchronized
+    fun resetInteractionProfile(sourceMessageId: Long): ProfileUpdateResult {
+        val current = interactionProfile()
+        return persistProfileChange(
+            current = current,
+            proposed = InteractionProfile(),
+            sourceKind = "manual-command",
+            reason = "Reset interaction traits to the reviewed factory profile",
+            evidence = "/adapt reset",
+            sourceMessageId = sourceMessageId,
+            applied = 1,
+        )
+    }
+
+    @Synchronized
+    fun undoLatestProfileChange(sourceMessageId: Long): InteractionProfile? {
+        val db = writableDatabase
+        val target = db.rawQuery(
+            """
+            SELECT id,profile_revision,old_profile_json,reason
+            FROM interaction_profile_revisions
+            WHERE undone=0 AND source_kind!='undo'
+            ORDER BY id DESC LIMIT 1
+            """.trimIndent(),
+            null,
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) null else UndoTarget(
+                id = cursor.getLong(0),
+                revision = cursor.getInt(1),
+                oldProfileJson = cursor.getString(2),
+                reason = cursor.getString(3),
+            )
+        } ?: return null
+
+        val current = interactionProfile()
+        val restored = profileFromJson(target.oldProfileJson).copy(
+            revision = current.revision + 1,
+            updatedAt = now(),
+            lastReason = "Undid profile revision ${target.revision}: ${target.reason}",
+            lastEvidence = "/undo-adaptation",
+        ).normalized()
+        db.beginTransaction()
+        try {
+            db.execSQL(
+                "UPDATE interaction_profile_revisions SET undone=1 WHERE id=?",
+                arrayOf<Any?>(target.id),
+            )
+            writeProfileRow(db, restored)
+            insertProfileRevision(
+                db = db,
+                revision = restored.revision,
+                oldProfile = current,
+                newProfile = restored,
+                sourceKind = "undo",
+                reason = restored.lastReason,
+                evidence = restored.lastEvidence,
+                sourceMessageId = sourceMessageId,
+                undone = true,
+            )
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return restored
     }
 
     @Synchronized
@@ -453,6 +677,187 @@ class MemoryMatrixRepository(private val context: Context) :
         writableDatabase.insertOrThrow("project_events", null, values)
     }
 
+    private fun installInteractionProfile(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS interaction_profile (
+                id INTEGER PRIMARY KEY CHECK(id=1),
+                warmth REAL NOT NULL,
+                directness REAL NOT NULL,
+                detail REAL NOT NULL,
+                emoji REAL NOT NULL,
+                initiative REAL NOT NULL,
+                context_precision REAL NOT NULL,
+                automatic_adaptation INTEGER NOT NULL DEFAULT 1,
+                revision INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                last_reason TEXT NOT NULL,
+                last_evidence TEXT NOT NULL DEFAULT ''
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS interaction_profile_revisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                profile_revision INTEGER NOT NULL UNIQUE,
+                old_profile_json TEXT NOT NULL,
+                new_profile_json TEXT NOT NULL,
+                source_kind TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                evidence TEXT NOT NULL DEFAULT '',
+                source_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+                undone INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS idx_profile_revisions_undo " +
+                "ON interaction_profile_revisions(undone, id DESC)",
+        )
+        val defaults = InteractionProfile(updatedAt = now())
+        val values = profileValues(defaults).apply { put("id", 1) }
+        db.insertWithOnConflict(
+            "interaction_profile",
+            null,
+            values,
+            SQLiteDatabase.CONFLICT_IGNORE,
+        )
+    }
+
+    private fun persistProfileChange(
+        current: InteractionProfile,
+        proposed: InteractionProfile,
+        sourceKind: String,
+        reason: String,
+        evidence: String,
+        sourceMessageId: Long,
+        applied: Int,
+        skipped: Int = 0,
+    ): ProfileUpdateResult {
+        val normalized = proposed.normalized()
+        if (profilesEquivalent(current, normalized)) {
+            return ProfileUpdateResult(profile = current, skipped = skipped)
+        }
+        val next = normalized.copy(
+            revision = current.revision + 1,
+            updatedAt = now(),
+            lastReason = reason.take(240),
+            lastEvidence = evidence.take(500),
+        )
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            writeProfileRow(db, next)
+            insertProfileRevision(
+                db = db,
+                revision = next.revision,
+                oldProfile = current,
+                newProfile = next,
+                sourceKind = sourceKind,
+                reason = next.lastReason,
+                evidence = next.lastEvidence,
+                sourceMessageId = sourceMessageId,
+                undone = false,
+            )
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return ProfileUpdateResult(
+            changed = true,
+            applied = applied,
+            skipped = skipped,
+            profile = next,
+        )
+    }
+
+    private fun writeProfileRow(db: SQLiteDatabase, profile: InteractionProfile) {
+        db.update(
+            "interaction_profile",
+            profileValues(profile),
+            "id=1",
+            null,
+        ).also { require(it == 1) { "Interaction profile row is unavailable." } }
+    }
+
+    private fun profileValues(profile: InteractionProfile) = ContentValues().apply {
+        put("warmth", profile.warmth)
+        put("directness", profile.directness)
+        put("detail", profile.detail)
+        put("emoji", profile.emoji)
+        put("initiative", profile.initiative)
+        put("context_precision", profile.contextPrecision)
+        put("automatic_adaptation", if (profile.automaticAdaptation) 1 else 0)
+        put("revision", profile.revision)
+        put("updated_at", profile.updatedAt)
+        put("last_reason", profile.lastReason)
+        put("last_evidence", profile.lastEvidence)
+    }
+
+    private fun insertProfileRevision(
+        db: SQLiteDatabase,
+        revision: Int,
+        oldProfile: InteractionProfile,
+        newProfile: InteractionProfile,
+        sourceKind: String,
+        reason: String,
+        evidence: String,
+        sourceMessageId: Long,
+        undone: Boolean,
+    ) {
+        val values = ContentValues().apply {
+            put("profile_revision", revision)
+            put("old_profile_json", profileToJson(oldProfile).toString())
+            put("new_profile_json", profileToJson(newProfile).toString())
+            put("source_kind", sourceKind.take(60))
+            put("reason", reason.take(240))
+            put("evidence", evidence.take(500))
+            put("source_message_id", sourceMessageId)
+            put("undone", if (undone) 1 else 0)
+            put("created_at", now())
+        }
+        db.insertOrThrow("interaction_profile_revisions", null, values)
+    }
+
+    private fun profileToJson(profile: InteractionProfile): JSONObject = JSONObject()
+        .put("warmth", profile.warmth)
+        .put("directness", profile.directness)
+        .put("detail", profile.detail)
+        .put("emoji", profile.emoji)
+        .put("initiative", profile.initiative)
+        .put("context_precision", profile.contextPrecision)
+        .put("automatic_adaptation", profile.automaticAdaptation)
+        .put("revision", profile.revision)
+        .put("updated_at", profile.updatedAt)
+        .put("last_reason", profile.lastReason)
+        .put("last_evidence", profile.lastEvidence)
+
+    private fun profileFromJson(raw: String): InteractionProfile {
+        val payload = JSONObject(raw)
+        return InteractionProfile(
+            warmth = payload.optDouble("warmth", InteractionTrait.Warmth.defaultValue),
+            directness = payload.optDouble("directness", InteractionTrait.Directness.defaultValue),
+            detail = payload.optDouble("detail", InteractionTrait.Detail.defaultValue),
+            emoji = payload.optDouble("emoji", InteractionTrait.Emoji.defaultValue),
+            initiative = payload.optDouble("initiative", InteractionTrait.Initiative.defaultValue),
+            contextPrecision = payload.optDouble(
+                "context_precision",
+                InteractionTrait.ContextPrecision.defaultValue,
+            ),
+            automaticAdaptation = payload.optBoolean("automatic_adaptation", true),
+            revision = payload.optInt("revision", 0),
+            updatedAt = payload.optString("updated_at"),
+            lastReason = payload.optString("last_reason", "Factory interaction profile"),
+            lastEvidence = payload.optString("last_evidence"),
+        ).normalized()
+    }
+
+    private fun profilesEquivalent(left: InteractionProfile, right: InteractionProfile): Boolean =
+        InteractionTrait.entries.all { left.valueOf(it) == right.valueOf(it) } &&
+            left.automaticAdaptation == right.automaticAdaptation
+
     private fun installFts(db: SQLiteDatabase) {
         runCatching {
             db.execSQL(
@@ -523,6 +928,7 @@ class MemoryMatrixRepository(private val context: Context) :
     }
 
     private fun recentMessages(beforeMessageId: Long, limit: Int): List<String> {
+        if (limit <= 0) return emptyList()
         val sessionId = activeSessionId(writableDatabase)
         return readableDatabase.rawQuery(
             """
@@ -540,6 +946,7 @@ class MemoryMatrixRepository(private val context: Context) :
     }
 
     private fun searchArchivedMessages(query: String, beforeMessageId: Long, limit: Int): List<String> {
+        if (limit <= 0) return emptyList()
         val match = ftsQuery(query)
         if (match.isBlank() || !ftsAvailable(readableDatabase)) return emptyList()
         return runCatching {
@@ -563,7 +970,12 @@ class MemoryMatrixRepository(private val context: Context) :
         }.getOrDefault(emptyList())
     }
 
-    private fun searchMemories(query: String, limit: Int): List<MatrixMemory> {
+    private fun searchMemories(
+        query: String,
+        limit: Int,
+        allowFallback: Boolean,
+    ): List<MatrixMemory> {
+        if (limit <= 0) return emptyList()
         val match = ftsQuery(query)
         if (match.isNotBlank() && ftsAvailable(readableDatabase)) {
             val found = runCatching {
@@ -581,6 +993,7 @@ class MemoryMatrixRepository(private val context: Context) :
             }.getOrDefault(emptyList())
             if (found.isNotEmpty()) return found
         }
+        if (!allowFallback) return emptyList()
         return readableDatabase.rawQuery(
             """
             SELECT id,kind,memory_key,value,confidence,salience,pinned,updated_at
@@ -799,6 +1212,11 @@ class MemoryMatrixRepository(private val context: Context) :
             "\\bAIza[A-Za-z0-9_-]{12,}|-----BEGIN [A-Z ]+PRIVATE KEY-----",
     ).containsMatchIn(raw)
 
+    private fun containsSensitiveProfileEvidence(raw: String): Boolean = Regex(
+        "(?i)\\b(?:diagnos(?:is|ed)|medical|health|disability|religion|race|ethnicity|" +
+            "sexuality|sexual orientation|gender identity|political affiliation|income|biometric)\\b",
+    ).containsMatchIn(raw)
+
     private fun now(): String = Instant.now().toString()
 
     private data class ExistingMemory(
@@ -820,4 +1238,11 @@ class MemoryMatrixRepository(private val context: Context) :
             else -> ""
         }
     }
+
+    private data class UndoTarget(
+        val id: Long,
+        val revision: Int,
+        val oldProfileJson: String,
+        val reason: String,
+    )
 }

@@ -130,6 +130,8 @@ data class CockpitState(
     val lastFirstTokenMillis: Long? = null,
     val lastResponseMillis: Long? = null,
     val routeLabel: String = "No model route",
+    val routeReason: String = "No routing decision yet",
+    val lastContextDecision: ContextDecision? = null,
     val memoryMatrix: MemoryMatrixSnapshot = MemoryMatrixSnapshot(),
     val pendingActions: List<PendingWorkspaceAction> = emptyList(),
     val activeAgentActionId: Long? = null,

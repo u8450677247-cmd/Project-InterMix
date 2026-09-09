@@ -23,6 +23,8 @@ Memory Matrix and controller-mediated project workspace.
 - app-private SQLite/WAL conversation and durable-memory tables with FTS5
   retrieval, provenance, revision records, and one-time JSON-history migration;
 - bounded context rehydration before each model turn;
+- a versioned Interaction Profile Matrix with explicit-evidence adaptation,
+  undo, and deterministic General/Continuity/Project context selection;
 - a persisted Storage Access Framework project tree with automatic list/read
   tools, approval-gated create/write/mkdir actions, and pre-write snapshots;
 - a real Agents approval queue plus pin/forget controls in the Matrix surface;
@@ -31,7 +33,9 @@ Memory Matrix and controller-mediated project workspace.
 - thermal-aware visual motion and model initialization.
 
 The app still has no online grounding, Android provider vault, Termux command
-bridge, Kokoro voice, long-running foreground agent service, or E2B model.
+bridge, Kokoro voice, or long-running foreground agent service. E2B has a
+fingerprint-locked Tensor G5 import and NPU route, but remains device-evidence
+gated rather than a general fallback.
 Those surfaces remain visibly unavailable instead of simulating success.
 
 ## Model import and storage

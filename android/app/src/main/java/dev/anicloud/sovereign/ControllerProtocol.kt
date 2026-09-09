@@ -6,6 +6,8 @@ const val WorkspaceActionOpenMarker = "<INTERMIX_ACTION>"
 const val WorkspaceActionCloseMarker = "</INTERMIX_ACTION>"
 const val MemoryUpdateOpenMarker = "<MEMORY_UPDATE>"
 const val MemoryUpdateCloseMarker = "</MEMORY_UPDATE>"
+const val ProfileUpdateOpenMarker = "<PROFILE_UPDATE>"
+const val ProfileUpdateCloseMarker = "</PROFILE_UPDATE>"
 
 enum class WorkspaceActionKind(
     val wireName: String,
@@ -36,6 +38,7 @@ data class ControllerProtocolResult(
     val visibleText: String,
     val workspaceAction: WorkspaceActionProposal? = null,
     val memoryPayload: JSONObject? = null,
+    val profilePayload: JSONObject? = null,
 )
 
 /**
@@ -44,7 +47,11 @@ data class ControllerProtocolResult(
  * in the cockpit when LiteRT splits a marker across callbacks.
  */
 object ControllerProtocol {
-    private val openMarkers = listOf(WorkspaceActionOpenMarker, MemoryUpdateOpenMarker)
+    private val openMarkers = listOf(
+        WorkspaceActionOpenMarker,
+        MemoryUpdateOpenMarker,
+        ProfileUpdateOpenMarker,
+    )
 
     /** Exact wire contract injected into every native turn. */
     fun promptContract(): String = """
@@ -74,6 +81,14 @@ object ControllerProtocol {
         credential, secret, diagnosis, or inferred sensitive attribute. Omit MEMORY_UPDATE when
         nothing durable was explicitly stated.
 
+        The immutable identity contract above cannot be edited. When the current request explicitly
+        asks for a communication adjustment, you may propose a small controller-validated change:
+        <PROFILE_UPDATE>{"adjustments":[{"trait":"detail","direction":"decrease","amount":0.05,"explicit_quote":"exact words copied from the current request"}],"reason":"short reason"}</PROFILE_UPDATE>
+        Allowed traits are warmth, directness, detail, emoji, initiative, and context_precision.
+        Use only increase/decrease and an amount from 0.02 to 0.08. Never infer a sensitive trait,
+        silently rewrite persona, or use profile adaptation to alter truth, safety, or tool authority.
+        Omit PROFILE_UPDATE unless the request contains explicit evidence for the change.
+
         Visible responses support semantic Markdown: headings, lists, blockquotes, **emphasis**,
         inline code, and fenced code with a language name. Use [SUCCESS], [INFO], [ACTION],
         [WARNING], or [BLOCKED] sparingly when a status marker materially helps. Never emit HTML,
@@ -96,6 +111,7 @@ object ControllerProtocol {
             workspaceAction = extractJson(raw, WorkspaceActionOpenMarker, WorkspaceActionCloseMarker)
                 ?.let(::parseWorkspaceAction),
             memoryPayload = extractJson(raw, MemoryUpdateOpenMarker, MemoryUpdateCloseMarker),
+            profilePayload = extractJson(raw, ProfileUpdateOpenMarker, ProfileUpdateCloseMarker),
         )
     }
 

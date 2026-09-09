@@ -88,6 +88,9 @@ import dev.anicloud.sovereign.prototype.ComposerMaxVisibleLines
 import dev.anicloud.sovereign.prototype.Destination
 import dev.anicloud.sovereign.prototype.FoundationLayout
 import dev.anicloud.sovereign.prototype.FoundationPreferenceStore
+import dev.anicloud.sovereign.prototype.InteractionProfile
+import dev.anicloud.sovereign.prototype.InteractionProfilePolicy
+import dev.anicloud.sovereign.prototype.InteractionTrait
 import dev.anicloud.sovereign.prototype.LayoutPreference
 import dev.anicloud.sovereign.prototype.ModelStage
 import dev.anicloud.sovereign.prototype.ModelRole
@@ -130,6 +133,10 @@ private val SlashCommands = listOf(
     SlashCommand("/capabilities", "show verified controllers", "List what this APK can really do"),
     SlashCommand("/memory", "inspect Matrix state", "Show durable-memory health"),
     SlashCommand("/remember", "enter the durable fact", "Store an explicit safe memory", true),
+    SlashCommand("/profile", "inspect interaction profile", "Show learned presentation traits"),
+    SlashCommand("/why", "explain the last decision", "Show route and context-gate evidence"),
+    SlashCommand("/adapt", "enter a trait or on/off", "Tune or pause reversible adaptation", true),
+    SlashCommand("/undo-adaptation", "revert the latest revision", "Undo one profile change"),
     SlashCommand("/files", "enter an optional folder", "List the connected workspace", true),
     SlashCommand("/read", "enter a relative file path", "Read a workspace text file", true),
     SlashCommand("/version", "show build provenance", "Display the installed build and backend"),
@@ -1392,6 +1399,12 @@ private fun MemoryMatrixSurface(cockpit: CockpitState, actions: CockpitActions) 
                 ),
             )
         }
+        item {
+            InteractionProfileCard(
+                profile = cockpit.memoryMatrix.interactionProfile,
+                contextDecision = cockpit.lastContextDecision,
+            )
+        }
         if (cockpit.memoryMatrix.recentMemories.isEmpty()) {
             item {
                 StatusCard(
@@ -1405,6 +1418,99 @@ private fun MemoryMatrixSurface(cockpit: CockpitState, actions: CockpitActions) 
             items(cockpit.memoryMatrix.recentMemories, key = { it.id }) { memory ->
                 MemoryCard(memory = memory, actions = actions)
             }
+        }
+    }
+}
+
+@Composable
+private fun InteractionProfileCard(
+    profile: InteractionProfile,
+    contextDecision: dev.anicloud.sovereign.prototype.ContextDecision?,
+) {
+    OutlinedCard(
+        border = BorderStroke(1.dp, HorizonCyan.copy(alpha = 0.52f)),
+        colors = CardDefaults.outlinedCardColors(containerColor = Color.Transparent),
+        modifier = Modifier
+            .fillMaxWidth()
+            .sovereignGlass(HorizonCyan, radius = 16.dp, depth = 0.72f, elevation = 4.dp),
+    ) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("INTERACTION PROFILE", color = HorizonCyan, fontWeight = FontWeight.Bold)
+                    Text(
+                        "Presentation learning only · identity and permissions remain immutable",
+                        color = MutedText,
+                        fontSize = 12.sp,
+                    )
+                }
+                Text(
+                    "R${profile.revision} · ${if (profile.automaticAdaptation) "AUTO" else "MANUAL"}",
+                    color = if (profile.automaticAdaptation) ResonanceMint else WaitingAmber,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                )
+            }
+            InteractionTrait.entries.forEach { trait ->
+                InteractionTraitMeter(trait, profile.valueOf(trait))
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+            Text(
+                "LAST CHANGE · ${profile.lastReason}",
+                color = SoftViolet,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+            )
+            Text(
+                contextDecision?.let {
+                    "CONTEXT GATE · ${it.scope.label.uppercase()} · ${it.relevanceScore}/${it.threshold} · ${it.reason}"
+                } ?: "CONTEXT GATE · waiting for the first generated turn",
+                color = MutedText,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+            )
+            Text(
+                "Use /profile, /why, /adapt <trait> <value>, or /undo-adaptation.",
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 12.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun InteractionTraitMeter(trait: InteractionTrait, value: Double) {
+    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Row {
+            Text(
+                trait.label.uppercase(),
+                color = MaterialTheme.colorScheme.onSurface,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                "${InteractionProfilePolicy.percent(value)}%",
+                color = SoftViolet,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+            )
+        }
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(4.dp)
+                .background(MaterialTheme.colorScheme.outline, RoundedCornerShape(999.dp)),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth(value.coerceIn(0.0, 1.0).toFloat())
+                    .fillMaxHeight()
+                    .background(
+                        Brush.horizontalGradient(listOf(HorizonCyan, CognitionViolet)),
+                        RoundedCornerShape(999.dp),
+                    ),
+            )
         }
     }
 }
@@ -1911,6 +2017,19 @@ private fun SystemLens(cockpit: CockpitState, modifier: Modifier = Modifier) {
             "MEMORY MATRIX",
             "${cockpit.memoryMatrix.memoryCount} MEMORIES · ${cockpit.memoryMatrix.messageCount} MESSAGES",
             if (cockpit.memoryMatrix.ftsAvailable) ResonanceMint else WaitingAmber,
+        )
+        LensValue(
+            "INTERACTION PROFILE",
+            "R${cockpit.memoryMatrix.interactionProfile.revision} · " +
+                (if (cockpit.memoryMatrix.interactionProfile.automaticAdaptation) "AUTO" else "MANUAL"),
+            if (cockpit.memoryMatrix.interactionProfile.automaticAdaptation) ResonanceMint else WaitingAmber,
+        )
+        LensValue(
+            "CONTEXT GATE",
+            cockpit.lastContextDecision?.let {
+                "${it.scope.label.uppercase()} · ${it.relevanceScore}/${it.threshold}"
+            } ?: "NOT MEASURED",
+            cockpit.lastContextDecision?.let { HorizonCyan } ?: MutedText,
         )
         LensValue(
             "THERMAL",

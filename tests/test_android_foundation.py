@@ -25,8 +25,8 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("compileSdk = 36", app_build)
         self.assertIn("targetSdk = 36", app_build)
         self.assertIn("minSdk = 31", app_build)
-        self.assertIn("versionCode = 9", app_build)
-        self.assertIn('versionName = "0.6.0-adaptive-tensor"', app_build)
+        self.assertIn("versionCode = 10", app_build)
+        self.assertIn('versionName = "0.7.0-interaction-matrix"', app_build)
         self.assertIn("compose-bom:2026.03.01", app_build)
         self.assertIn('abiFilters += "arm64-v8a"', app_build)
         self.assertIn(
@@ -75,6 +75,10 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn('Text("STOP"', source)
         self.assertIn("SlashCommandPalette", source)
         self.assertIn('SlashCommand("/device"', source)
+        self.assertIn('SlashCommand("/profile"', source)
+        self.assertIn('SlashCommand("/why"', source)
+        self.assertIn('SlashCommand("/adapt"', source)
+        self.assertIn('SlashCommand("/undo-adaptation"', source)
         self.assertIn("CONTROLLER COMMANDS · TAP TO INSERT", source)
 
     def test_cockpit_uses_measured_android_health_signals(self):
@@ -187,11 +191,42 @@ class AndroidFoundationTests(unittest.TestCase):
             "project_events", "agent_actions",
         ):
             self.assertIn(f"CREATE TABLE {table}", repository)
+        self.assertIn("CREATE TABLE IF NOT EXISTS interaction_profile", repository)
+        self.assertIn("CREATE TABLE IF NOT EXISTS interaction_profile_revisions", repository)
         self.assertIn("USING fts5", repository)
         self.assertIn("migrateLegacyHistory()", repository)
         self.assertIn("LegacyHistoryName.migrated", repository)
         self.assertIn("memoryMatrix.loadMessages()", view_model)
         self.assertIn("memoryMatrix.recallContext", view_model)
+        self.assertIn("MatrixSchemaVersion = 2", repository)
+        self.assertIn("undoLatestProfileChange", repository)
+
+    def test_interaction_profile_gates_context_and_cannot_grant_authority(self):
+        policy = (SOURCE / "InteractionProfile.kt").read_text(encoding="utf-8")
+        protocol = (SOURCE / "ControllerProtocol.kt").read_text(encoding="utf-8")
+        view_model = (SOURCE / "SovereignViewModel.kt").read_text(encoding="utf-8")
+        ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
+        contract = (ROOT / "docs/ANDROID_INTERACTION_PROFILE.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("object InteractionProfilePolicy", policy)
+        self.assertIn("ContextScope.General", policy)
+        self.assertIn("recentMessageLimit = 0", policy)
+        self.assertIn("allowMemoryFallback = false", policy)
+        self.assertIn("<PROFILE_UPDATE>", protocol)
+        self.assertIn("profilePayload", protocol)
+        self.assertIn("applyExplicitProfileAdjustments", view_model)
+        self.assertIn("[CONTEXT GATE]", view_model)
+        self.assertIn("WORKSPACE CONTEXT WITHHELD", view_model)
+        self.assertIn("InteractionProfileCard", ui)
+        self.assertIn("identity and permissions remain immutable", ui)
+        self.assertIn("never grants tool authority", contract)
+
+    def test_github_funding_metadata_is_valid_and_support_link_is_visible(self):
+        funding = (ROOT / ".github/FUNDING.yml").read_text(encoding="utf-8")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertEqual(funding, "buy_me_a_coffee: yasseh\n")
+        self.assertIn("https://buymeacoffee.com/yasseh", readme)
 
     def test_model_tools_are_controller_owned_and_writes_wait_for_approval(self):
         protocol = (SOURCE / "ControllerProtocol.kt").read_text(encoding="utf-8")

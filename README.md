@@ -9,7 +9,8 @@
 <p align="center">
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-39d5ff"></a>
   <a href="CHANGELOG.md"><img alt="Release: 1.4.1 alpha 1" src="https://img.shields.io/badge/release-1.4.1--alpha.1-a970ff"></a>
-  <a href=".github/workflows/tests.yml"><img alt="Tests: 93" src="https://img.shields.io/badge/tests-93%20deterministic-67e8c2"></a>
+  <a href=".github/workflows/tests.yml"><img alt="Tests: deterministic" src="https://img.shields.io/badge/tests-deterministic-67e8c2"></a>
+  <a href="https://buymeacoffee.com/yasseh"><img alt="Support Project Intermix" src="https://img.shields.io/badge/support-Buy%20Me%20a%20Coffee-ffca6b"></a>
   <img alt="Status: developer preview" src="https://img.shields.io/badge/status-developer%20preview-ffca6b">
 </p>
 
@@ -21,6 +22,7 @@ This repository is a developer preview with a functional native Android dogfood 
 
 - **Local sovereignty:** conversations, memory, model execution, and workspace files remain on the device by default.
 - **Virtual continuity:** SQLite FTS5 recall, typed events, summaries, and a separate mission ledger survive restarts and fresh sessions.
+- **Inspectable adaptation:** the native Interaction Profile Matrix learns only explicit presentation preferences, gates irrelevant context, versions every change, and supports undo.
 - **Truth before fluency:** volatile questions can trigger web research; weak evidence produces an error or limitation instead of a confident invention.
 - **Adaptive grounding:** difficult lookups use one controller-planned primary query and, only when needed, one bounded parallel follow-up round for corroboration, implementation detail, and limitations.
 - **Bounded autonomy:** the Core may read, write, and test inside one fixed workspace. Deletions require explicit review and hash revalidation.
@@ -77,7 +79,7 @@ the deterministic controller routes ordinary conversation through it and uses a
 bounded E2B intent/memory handoff before difficult E4B turns. The engine closes
 one profile before loading the other; this is not a simultaneous two-model RAM load.
 
-The native Android `0.6.0-adaptive-tensor` candidate has separate import slots:
+The native Android `0.7.0-interaction-matrix` candidate has separate import slots:
 
 - **E2B conversation + Memory Matrix:** only the reviewed
   `gemma-4-E2B-it_Google_Tensor_G5.litertlm` fingerprint may use the Google
@@ -88,6 +90,9 @@ The native Android `0.6.0-adaptive-tensor` candidate has separate import slots:
 Only one native engine is resident at a time. System Lens → Device Check-up
 shows the SoC, hardware codename, dispatcher, model fingerprint, Android
 `MemAvailable`, thermal state, and exact eligibility reason before NPU loading.
+Its [Interaction Profile Matrix](docs/ANDROID_INTERACTION_PROFILE.md) keeps the
+Sovereign identity contract fixed while adapting bounded communication traits
+and withholding incidental workspace context from self-contained questions.
 
 Google documents current LiteRT-LM models and conversion paths in the [Gemma 4 deployment guide](https://developers.google.com/edge/litert-lm/models/gemma-4).
 

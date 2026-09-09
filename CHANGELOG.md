@@ -8,6 +8,12 @@ may still change.
 
 ### Added
 
+- Native Interaction Profile Matrix with six bounded presentation traits,
+  explicit-evidence learning, controller validation, revision history, and undo.
+- A deterministic General/Continuity/Project context gate that withholds open
+  workspace state and fallback recall from unrelated self-contained questions.
+- `/profile`, `/why`, `/adapt`, and `/undo-adaptation` controller commands plus
+  visible Matrix meters and System Lens context diagnostics.
 - Optional E2B Memory Librarian with deterministic E2B/E4B routing, bounded
   handoffs, and one-resident-model-at-a-time switching for constrained Android.
 - Reversible explicit communication preferences with an inspectable persona
@@ -53,6 +59,8 @@ may still change.
 
 ### Fixed
 
+- Restored valid GitHub Sponsors funding metadata and added a direct
+  Buy Me a Coffee link to the repository header.
 - Installer validation no longer writes Python bytecode caches into the source
   bundle and then causes its own public-release audit to reject that tree.
 

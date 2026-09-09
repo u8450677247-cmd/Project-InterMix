@@ -9,6 +9,7 @@ on:
       - "docs/ANDROID_DESIGN.md"
       - "docs/ANDROID_PRODUCT_CONTRACT.md"
       - "docs/ANDROID_TENSOR_NPU.md"
+      - "docs/ANDROID_INTERACTION_PROFILE.md"
       - ".github/workflows/android-foundation.yml"
   pull_request:
     paths:
@@ -16,6 +17,7 @@ on:
       - "docs/ANDROID_DESIGN.md"
       - "docs/ANDROID_PRODUCT_CONTRACT.md"
       - "docs/ANDROID_TENSOR_NPU.md"
+      - "docs/ANDROID_INTERACTION_PROFILE.md"
       - ".github/workflows/android-foundation.yml"
   workflow_dispatch:
 

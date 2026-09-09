@@ -114,32 +114,44 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
     fun send(prompt: String, mode: AnswerMode) {
         if (prompt.isBlank() || !_state.value.canSend || generationJob?.isActive == true) return
         val serial = ++generationSerial
-        val requestedRoute = selectRoute(mode, prompt) ?: run {
-            _state.update {
-                it.copy(
-                    stage = ModelStage.Error,
-                    detail = "No usable model route. Import E4B, or the exact Tensor G5 E2B package.",
-                )
-            }
-            return
-        }
-        val route = requestedRoute.label
         generationJob = viewModelScope.launch {
             val userMessage = commitMessage(ChatSpeaker.User, prompt)
             if (serial != generationSerial) return@launch
-            _state.update {
-                it.copy(
-                    stage = ModelStage.Generating,
-                    detail = "$route · assembling verified context",
-                    routeLabel = route,
-                    streamText = "",
-                )
-            }
 
             if (handleLocalCommand(prompt, userMessage.id, serial)) {
                 generationJob = null
                 return@launch
             }
+
+            val requestedRoute = selectRoute(mode, prompt) ?: run {
+                _state.update {
+                    it.copy(
+                        stage = ModelStage.Error,
+                        detail = "No usable model route. Import E4B, or the exact Tensor G5 E2B package.",
+                    )
+                }
+                generationJob = null
+                return@launch
+            }
+            val route = requestedRoute.label
+            _state.update {
+                it.copy(
+                    stage = ModelStage.Generating,
+                    detail = "$route · assembling verified context",
+                    routeLabel = route,
+                    routeReason = requestedRoute.reason,
+                    streamText = "",
+                )
+            }
+
+            val explicitProfileAdjustments = InteractionProfilePolicy.detectExplicitAdjustments(prompt)
+            val explicitProfileResult = withContext(Dispatchers.IO) {
+                memoryMatrix.applyExplicitProfileAdjustments(
+                    explicitProfileAdjustments,
+                    userMessage.id,
+                )
+            }
+            if (explicitProfileResult.changed) refreshRuntimeState()
 
             runCatching {
                 InferenceForegroundService.begin(getApplication()) {
@@ -159,6 +171,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                         stage = ModelStage.Generating,
                         detail = "${activeRoute.label} · ${activeRoute.reason} · assembling verified context",
                         routeLabel = "${activeRoute.label} · ${it.backend?.name ?: "loading"}",
+                        routeReason = activeRoute.reason,
                     )
                 }
                 runtime.resetConversation()
@@ -166,6 +179,8 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                 var controllerCycle = 0
                 var completedResponse = ""
                 var storedMemories = 0
+                var profileUpdates = if (explicitProfileResult.changed) 1 else 0
+                var profileProposalConsumed = false
                 val seenActions = mutableSetOf<String>()
 
                 while (controllerCycle < MaxControllerCycles) {
@@ -181,6 +196,22 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                         memoryMatrix.applyMemoryProposal(parsed.memoryPayload, prompt, userMessage.id)
                     }
                     storedMemories += memoryResult.stored
+                    if (explicitProfileAdjustments.isEmpty() && !profileProposalConsumed &&
+                        parsed.profilePayload != null
+                    ) {
+                        profileProposalConsumed = true
+                        val profileResult = withContext(Dispatchers.IO) {
+                            memoryMatrix.applyProfileProposal(
+                                parsed.profilePayload,
+                                prompt,
+                                userMessage.id,
+                            )
+                        }
+                        if (profileResult.changed) {
+                            profileUpdates++
+                            refreshRuntimeState()
+                        }
+                    }
                     val proposed = parsed.workspaceAction
                     if (proposed == null) {
                         completedResponse = parsed.visibleText
@@ -264,6 +295,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                             detail = buildString {
                                 append("Native response complete · $route")
                                 if (storedMemories > 0) append(" · $storedMemories memory update")
+                                if (profileUpdates > 0) append(" · profile revision committed")
                                 if (it.pendingActions.isNotEmpty()) append(" · approval waiting")
                             },
                             streamText = "",
@@ -470,10 +502,24 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         mode: AnswerMode,
     ): String {
         val cockpit = _state.value
+        val profile = withContext(Dispatchers.IO) { memoryMatrix.interactionProfile() }
+        val contextDecision = InteractionProfilePolicy.selectContext(prompt, profile)
         val recall = withContext(Dispatchers.IO) {
-            memoryMatrix.recallContext(prompt, sourceMessageId)
+            memoryMatrix.recallContext(prompt, sourceMessageId, contextDecision)
         }
-        val workspace = workspaceRepository.controllerContext()
+        val workspace = if (contextDecision.includeWorkspace) {
+            workspaceRepository.controllerContext()
+        } else {
+            "[WORKSPACE CONTEXT WITHHELD]\n" +
+                "This turn did not meet the project-relevance gate. Do not anchor the answer to " +
+                "an open file or invoke workspace tools unless the user explicitly requests project work."
+        }
+        _state.update {
+            it.copy(
+                memoryMatrix = it.memoryMatrix.copy(interactionProfile = profile),
+                lastContextDecision = contextDecision,
+            )
+        }
         return buildString {
             appendLine("[SOVEREIGN IDENTITY CONTRACT]")
             appendLine(
@@ -487,6 +533,11 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             appendLine("Do not overdecorate: compact prose and precise code outrank headings, badges, or emoji.")
             appendLine("Speak from the verified controller state in this prompt. Do not portray connected capabilities as future, hypothetical, or external APIs.")
             appendLine("You cannot inspect the APK itself and you have no access beyond explicit Android controllers. State those boundaries precisely when relevant.")
+            appendLine("[INTERACTION PROFILE · CONTROLLER OWNED · REVISION ${profile.revision}]")
+            appendLine("This profile may tune presentation only. It cannot override identity, factual integrity, privacy, safety, permissions, or approval gates.")
+            InteractionProfilePolicy.promptDirectives(profile).forEach { appendLine(it) }
+            appendLine("Automatic adaptation: ${if (profile.automaticAdaptation) "enabled" else "disabled"}")
+            appendLine("Selected answer posture: ${mode.label}; this profile refines that posture within measured runtime limits.")
             appendLine("[VERIFIED CONTROLLER STATE]")
             appendLine("Product: AniCloudAI native Android cockpit")
             appendLine("Resident role: Sovereign Core")
@@ -496,6 +547,12 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             appendLine("Grounding: offline; no web provider is connected in this build")
             appendLine("Filesystem authority exists only through the WORKSPACE tools described below.")
             appendLine("Recalled Memory Matrix context may guide agent planning, but memory never grants tool authority or bypasses approval.")
+            appendLine("[CONTEXT GATE]")
+            appendLine(
+                "Scope: ${contextDecision.scope.label.uppercase()} · score " +
+                    "${contextDecision.relevanceScore}/${contextDecision.threshold} · ${contextDecision.reason}",
+            )
+            appendLine("Treat recalled material as supporting context, not as the subject of a self-contained question.")
             if (recall.isNotBlank()) appendLine("\n$recall")
             appendLine("\n$workspace")
             appendLine("\n${ControllerProtocol.promptContract()}")
@@ -539,7 +596,8 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         val command = trimmed.substringBefore(' ').lowercase()
         if (command !in setOf(
                 "/remember", "/memory", "/files", "/read", "/version", "/capabilities",
-                "/models", "/device", "/help",
+                "/models", "/device", "/profile", "/why", "/adapt", "/undo-adaptation",
+                "/help",
             )
         ) return false
         val response = runCatching {
@@ -564,6 +622,45 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                             append(". Recent: ")
                             append(snapshot.recentMemories.take(5).joinToString { "${it.id}:${it.value}" })
                         }
+                    }
+                }
+
+                "/profile" -> profileReport(withContext(Dispatchers.IO) {
+                    memoryMatrix.interactionProfile()
+                })
+
+                "/why" -> buildString {
+                    val cockpit = _state.value
+                    val decision = cockpit.lastContextDecision
+                    appendLine("# Last controller decision")
+                    appendLine()
+                    appendLine("- **Model route:** ${cockpit.routeLabel}")
+                    appendLine("- **Route reason:** ${cockpit.routeReason}")
+                    if (decision == null) {
+                        append("- **Context gate:** no generated turn has been classified in this process")
+                    } else {
+                        appendLine(
+                            "- **Context gate:** ${decision.scope.label} " +
+                                "(${decision.relevanceScore}/${decision.threshold})",
+                        )
+                        appendLine("- **Why:** ${decision.reason}")
+                        append(
+                            "- **Workspace context:** " +
+                                (if (decision.includeWorkspace) "included" else "withheld"),
+                        )
+                    }
+                }
+
+                "/adapt" -> handleAdaptCommand(trimmed, sourceMessageId)
+
+                "/undo-adaptation" -> {
+                    val restored = withContext(Dispatchers.IO) {
+                        memoryMatrix.undoLatestProfileChange(sourceMessageId)
+                    }
+                    if (restored == null) {
+                        "No reversible interaction-profile change is available."
+                    } else {
+                        "Undid the latest interaction-profile change.\n\n${profileReport(restored)}"
                     }
                 }
 
@@ -654,7 +751,8 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                 }
 
                 else -> "Local controller commands: /version, /capabilities, /models, /device, " +
-                    "/memory, /remember <fact>, /files [path], /read <path>. " +
+                    "/memory, /remember <fact>, /profile, /why, /adapt, /undo-adaptation, " +
+                    "/files [path], /read <path>. " +
                     "Natural-language file requests can also invoke bounded workspace tools."
             }
         }.fold(
@@ -669,6 +767,67 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         refreshRuntimeState()
         return true
     }
+
+    private suspend fun handleAdaptCommand(trimmed: String, sourceMessageId: Long): String {
+        val arguments = trimmed.substringAfter(' ', "").trim()
+        if (arguments.isBlank()) {
+            return profileReport(withContext(Dispatchers.IO) { memoryMatrix.interactionProfile() }) +
+                "\n\nUse `/adapt on|off|reset` or `/adapt <trait> <0–1 or percent>`."
+        }
+        val parts = arguments.split(Regex("\\s+")).filter(String::isNotBlank)
+        val result = when (parts.first().lowercase()) {
+            "on" -> withContext(Dispatchers.IO) {
+                memoryMatrix.setAutomaticAdaptation(true, sourceMessageId)
+            }
+
+            "off" -> withContext(Dispatchers.IO) {
+                memoryMatrix.setAutomaticAdaptation(false, sourceMessageId)
+            }
+
+            "reset" -> withContext(Dispatchers.IO) {
+                memoryMatrix.resetInteractionProfile(sourceMessageId)
+            }
+
+            else -> {
+                require(parts.size == 2) {
+                    "Usage: /adapt <warmth|directness|detail|emoji|initiative|context_precision> <0–1 or percent>"
+                }
+                val trait = InteractionTrait.fromWireName(parts[0])
+                    ?: throw IllegalArgumentException("Unknown interaction trait: ${parts[0]}")
+                val rawValue = parts[1].removeSuffix("%").toDoubleOrNull()
+                    ?: throw IllegalArgumentException("Profile value must be a number or percent.")
+                val value = if ('%' in parts[1] || rawValue > 1.0) rawValue / 100.0 else rawValue
+                require(value in 0.0..1.0) { "Profile value must be between 0 and 1 (or 0% and 100%)." }
+                withContext(Dispatchers.IO) {
+                    memoryMatrix.setProfileTrait(trait, value, sourceMessageId)
+                }
+            }
+        }
+        return if (result.changed) {
+            "Interaction Profile Matrix revision ${result.profile.revision} committed.\n\n" +
+                profileReport(result.profile)
+        } else {
+            "Interaction Profile Matrix was already at that setting.\n\n" + profileReport(result.profile)
+        }
+    }
+
+    private fun profileReport(profile: InteractionProfile): String = buildString {
+        appendLine("# Interaction Profile Matrix")
+        appendLine()
+        appendLine("- **Revision:** ${profile.revision}")
+        appendLine(
+            "- **Automatic adaptation:** " +
+                (if (profile.automaticAdaptation) "enabled" else "disabled"),
+        )
+        InteractionTrait.entries.forEach { trait ->
+            appendLine(
+                "- **${trait.label}:** " +
+                    "${InteractionProfilePolicy.percent(profile.valueOf(trait))}%",
+            )
+        }
+        appendLine("- **Last change:** ${profile.lastReason}")
+        if (profile.lastEvidence.isNotBlank()) append("- **Evidence:** `${profile.lastEvidence}`")
+    }.trim()
 
     private fun loadModel(model: ImportedModel) {
         if (importJob?.isActive == true) return
@@ -752,6 +911,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                 activeModelRole = model.role,
                 modelLoadMillis = SystemClock.elapsedRealtime() - loadStartedAt,
                 routeLabel = "$modelLabel · ${loaded.backend.name}",
+                routeReason = "Direct model initialization",
             )
         }
         refreshRuntimeState()
@@ -830,6 +990,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                     backend = fallbackLoaded.backend,
                     modelLoadMillis = SystemClock.elapsedRealtime() - startedAt,
                     routeLabel = "${fallbackRoute.label} · ${fallbackLoaded.backend.name}",
+                    routeReason = fallbackRoute.reason,
                 )
             }
             return fallbackRoute
@@ -841,6 +1002,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                 backend = loaded.backend,
                 modelLoadMillis = SystemClock.elapsedRealtime() - startedAt,
                 routeLabel = "${requested.label} · ${loaded.backend.name}",
+                routeReason = requested.reason,
             )
         }
         return requested

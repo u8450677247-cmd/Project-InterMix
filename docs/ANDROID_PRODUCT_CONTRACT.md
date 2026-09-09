@@ -128,6 +128,14 @@ and conversational rhythm. It may not infer a diagnosis, immutable identity,
 or hidden intent. Every automatic persona revision records what changed, why,
 which evidence supported it, and how to undo it.
 
+The native Interaction Profile Matrix implements that rule as six bounded
+presentation traits. The immutable Sovereign identity prompt remains separate.
+Every turn is classified as General, Continuity, or Project; self-contained
+questions exclude incidental workspace and fallback transcript context. The
+selected scope and reason are inspectable with `/why`, and profile changes are
+inspectable with `/profile`, directly adjustable with `/adapt`, and reversible
+with `/undo-adaptation`. Profile memory never grants tool authority.
+
 Topic files create virtual continuity beyond the physical model window. They
 are retrieval indexes, not a claim that an 8K engine literally processed 128K
 tokens at once. Retrieval budgets remain measured and inspectable.
