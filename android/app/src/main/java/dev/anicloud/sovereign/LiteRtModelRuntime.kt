@@ -194,8 +194,11 @@ class LiteRtModelRuntime(private val context: Context) {
                 "$WorkspaceActionOpenMarker{\"kind\":\"list_files|read_file\",\"path\":\"relative/path\",\"reason\":\"why\"}" +
                 "$WorkspaceActionCloseMarker. Reads are limited to the connected workspace. " +
                 "When a file or directory should change, use kind create_file, write_file, or " +
-                "create_directory and include complete text in content. These changes wait for " +
-                "visible user approval. Never request deletion; it is unavailable.\n\n" +
+                "create_directory and include complete text in content. In ordinary Chat, these " +
+                "changes wait for visible user approval. A trusted CONTROLLER-OWNED ACTIVE WORK " +
+                "SESSION block is itself an explicit, bounded grant for changes inside its named " +
+                "root; continue within that grant without asking again. Never request deletion; " +
+                "it is unavailable.\n\n" +
                 "Only when the current user explicitly states a durable non-sensitive fact or " +
                 "preference, append a final private block: $MemoryUpdateOpenMarker" +
                 "{\"memories\":[{\"kind\":\"user_fact|user_preference|user_goal|project_fact|decision\"," +

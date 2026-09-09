@@ -74,6 +74,21 @@ class FoundationContractTest {
     }
 
     @Test
+    fun recursiveMissionActionPatternsAreDetectedWithoutRejectingProgress() {
+        assertTrue(hasRecursiveActionTail(listOf("read:a", "read:a", "read:a")))
+        assertTrue(
+            hasRecursiveActionTail(
+                listOf("read:a", "write:b", "read:a", "write:b", "read:a", "write:b"),
+            ),
+        )
+        assertFalse(
+            hasRecursiveActionTail(
+                listOf("read:a", "write:b", "read:c", "write:d", "read:e", "write:f"),
+            ),
+        )
+    }
+
+    @Test
     fun exactNumericAnchorsMustSurviveWhenExplicitlyRequested() {
         val prompt = "Preserve every value exactly: 6800 tokens, 6.99 GiB, 0.52x, 814.8 MiB."
         val valid = "Context 6800 tokens; memory 6.99 GiB; voice 0.52x; peak 814.8 MiB."

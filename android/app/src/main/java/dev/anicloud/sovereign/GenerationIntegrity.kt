@@ -32,6 +32,12 @@ object GenerationIntegrityGuard {
                 detail = "The stream contained a Unicode replacement character.",
             )
         }
+        if (Regex("(?i)</?\\s*(?:INTERMIX[_\\s-]*ACTION|INTERACTION)\\b").containsMatchIn(text)) {
+            return IntegrityViolation(
+                code = "protocol-leak",
+                detail = "Controller protocol appeared in visible model text.",
+            )
+        }
         if (text.length > MaximumVisibleGenerationCharacters) {
             return IntegrityViolation(
                 code = "output-limit",
@@ -106,7 +112,48 @@ data class ChatMessage(
     val id: Long,
     val speaker: ChatSpeaker,
     val text: String,
+    val source: String = "chat",
 )
+
+enum class AgentMissionStatus {
+    Running,
+    Paused,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+/** Controller-owned continuity for a scoped long-form workspace run. */
+data class AgentMissionCheckpoint(
+    val id: String,
+    val rootPath: String,
+    val objective: String,
+    val mode: AnswerMode,
+    val startedMessageId: Long = 0L,
+    val status: AgentMissionStatus = AgentMissionStatus.Running,
+    val completedActions: Int = 0,
+    val maxActions: Int = 120,
+    val writtenBytes: Long = 0L,
+    val maxWriteBytes: Long = 1024L * 1024L,
+    val guidance: List<String> = emptyList(),
+    val actionTrail: List<String> = emptyList(),
+    val lastAction: String = "",
+    val lastResult: String = "",
+    val updatedAt: String = "",
+) {
+    val active: Boolean
+        get() = status == AgentMissionStatus.Running || status == AgentMissionStatus.Paused
+}
+
+/** Detects a one-to-six-action sequence rehearsed three times at the end of a mission trail. */
+fun hasRecursiveActionTail(trail: List<String>): Boolean {
+    for (width in 1..minOf(6, trail.size / 3)) {
+        val tail = trail.takeLast(width * 3)
+        val unit = tail.take(width)
+        if (tail.chunked(width).all { it == unit }) return true
+    }
+    return false
+}
 
 data class CockpitState(
     val stage: ModelStage = ModelStage.Empty,
@@ -133,6 +180,7 @@ data class CockpitState(
     val routeReason: String = "No routing decision yet",
     val lastContextDecision: ContextDecision? = null,
     val memoryMatrix: MemoryMatrixSnapshot = MemoryMatrixSnapshot(),
+    val activeMission: AgentMissionCheckpoint? = null,
     val pendingActions: List<PendingWorkspaceAction> = emptyList(),
     val activeAgentActionId: Long? = null,
     val messages: List<ChatMessage> = listOf(

@@ -76,7 +76,9 @@ class WorkspaceRepository(private val context: Context) {
             val label = runCatching { queryDisplayName(root) }.getOrNull() ?: fallbackRootLabel(root)
             "[WORKSPACE]\nConnected root: $label\n" +
                 "Tools: list_files and read_file run inside this root. " +
-                "create_file, write_file, and create_directory require visible approval. " +
+                "In ordinary Chat, create_file, write_file, and create_directory require visible " +
+                "approval. A controller-owned active Work Session may separately grant those " +
+                "actions inside one exact scoped root. " +
                 "Deletion and access outside this root are unavailable."
         }
     }

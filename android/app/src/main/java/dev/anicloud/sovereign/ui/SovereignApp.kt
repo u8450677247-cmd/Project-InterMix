@@ -2,15 +2,19 @@ package dev.anicloud.sovereign.prototype.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -23,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -31,6 +36,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -39,11 +45,13 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
@@ -52,6 +60,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -59,6 +68,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -79,6 +89,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.anicloud.sovereign.prototype.AnswerMode
 import dev.anicloud.sovereign.prototype.AnswerModeSelection
 import dev.anicloud.sovereign.prototype.AdaptiveRuntimePolicy
+import dev.anicloud.sovereign.prototype.AgentMissionStatus
 import dev.anicloud.sovereign.prototype.Appearance
 import dev.anicloud.sovereign.prototype.BuildConfig
 import dev.anicloud.sovereign.prototype.ChatMessage
@@ -112,6 +123,7 @@ private data class CockpitActions(
     val onImportReasoningModel: () -> Unit,
     val onRetryModel: () -> Unit,
     val onSend: (String, AnswerMode) -> Unit,
+    val onGuideMission: (String) -> Unit,
     val onStop: () -> Unit,
     val onApproveWorkspaceAction: (Long) -> Unit,
     val onDenyWorkspaceAction: (Long) -> Unit,
@@ -139,6 +151,12 @@ private val SlashCommands = listOf(
     SlashCommand("/undo-adaptation", "revert the latest revision", "Undo one profile change"),
     SlashCommand("/files", "enter an optional folder", "List the connected workspace", true),
     SlashCommand("/read", "enter a relative file path", "Read a workspace text file", true),
+    SlashCommand(
+        "/mission",
+        "run project-folder :: describe the complete objective",
+        "Start a scoped, checkpointed long-form work session",
+        true,
+    ),
     SlashCommand("/version", "show build provenance", "Display the installed build and backend"),
 )
 
@@ -168,6 +186,7 @@ fun AniCloudApp(
         },
         onRetryModel = sovereignViewModel::retryModel,
         onSend = sovereignViewModel::send,
+        onGuideMission = sovereignViewModel::guideActiveMission,
         onStop = sovereignViewModel::stopGeneration,
         onApproveWorkspaceAction = sovereignViewModel::approveWorkspaceAction,
         onDenyWorkspaceAction = sovereignViewModel::denyWorkspaceAction,
@@ -310,21 +329,32 @@ fun LockedSurface(
 @Composable
 private fun LivingVoid(cockpit: CockpitState, content: @Composable () -> Unit) {
     val motionAllowed = allowsAmbientMotion(cockpit.thermalStatus, cockpit.stage)
-    val pulse = if (motionAllowed) {
+    val atmosphere = if (motionAllowed) {
         val transition = rememberInfiniteTransition(label = "living-void")
-        val animated by transition.animateFloat(
-            initialValue = 0.055f,
-            targetValue = 0.105f,
+        val pulse by transition.animateFloat(
+            initialValue = 0.060f,
+            targetValue = 0.115f,
             animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 9_000),
+                animation = tween(durationMillis = 12_000),
                 repeatMode = RepeatMode.Reverse,
             ),
             label = "void-breath",
         )
-        animated
+        val drift by transition.animateFloat(
+            initialValue = -0.035f,
+            targetValue = 0.035f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 16_000),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "void-drift",
+        )
+        pulse to drift
     } else {
-        0.055f
+        0.060f to 0f
     }
+    val pulse = atmosphere.first
+    val drift = atmosphere.second
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -335,8 +365,9 @@ private fun LivingVoid(cockpit: CockpitState, content: @Composable () -> Unit) {
                 brush = Brush.linearGradient(
                     colors = listOf(
                         Obsidian,
-                        Color(0xFF080C18),
-                        CognitionViolet.copy(alpha = 0.075f),
+                        Color(0xFF090B18),
+                        CognitionViolet.copy(alpha = 0.070f),
+                        PulseMagenta.copy(alpha = 0.045f),
                     ),
                     start = Offset.Zero,
                     end = Offset(size.width, size.height),
@@ -349,11 +380,17 @@ private fun LivingVoid(cockpit: CockpitState, content: @Composable () -> Unit) {
                         HorizonCyan.copy(alpha = pulse * 0.24f),
                         Color.Transparent,
                     ),
-                    center = Offset(size.width * 0.72f, size.height * 0.28f),
+                    center = Offset(
+                        size.width * (0.74f + drift),
+                        size.height * (0.24f + drift * 0.35f),
+                    ),
                     radius = size.minDimension * 0.70f,
                 ),
                 radius = size.minDimension * 0.70f,
-                center = Offset(size.width * 0.72f, size.height * 0.28f),
+                center = Offset(
+                    size.width * (0.74f + drift),
+                    size.height * (0.24f + drift * 0.35f),
+                ),
             )
             drawCircle(
                 brush = Brush.radialGradient(
@@ -362,17 +399,42 @@ private fun LivingVoid(cockpit: CockpitState, content: @Composable () -> Unit) {
                         CognitionViolet.copy(alpha = pulse * 0.18f),
                         Color.Transparent,
                     ),
-                    center = Offset(size.width * 0.22f, size.height * 0.82f),
+                    center = Offset(
+                        size.width * (0.20f - drift * 0.45f),
+                        size.height * (0.80f - drift),
+                    ),
                     radius = size.minDimension * 0.62f,
                 ),
                 radius = size.minDimension * 0.62f,
-                center = Offset(size.width * 0.22f, size.height * 0.82f),
+                center = Offset(
+                    size.width * (0.20f - drift * 0.45f),
+                    size.height * (0.80f - drift),
+                ),
+            )
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        PulseMagenta.copy(alpha = pulse * 0.72f),
+                        CognitionViolet.copy(alpha = pulse * 0.16f),
+                        Color.Transparent,
+                    ),
+                    center = Offset(
+                        size.width * (0.54f - drift * 0.30f),
+                        size.height * (0.64f + drift * 0.50f),
+                    ),
+                    radius = size.minDimension * 0.52f,
+                ),
+                radius = size.minDimension * 0.52f,
+                center = Offset(
+                    size.width * (0.54f - drift * 0.30f),
+                    size.height * (0.64f + drift * 0.50f),
+                ),
             )
             val grid = 72.dp.toPx()
             var x = 0f
             while (x <= size.width) {
                 drawLine(
-                    HorizonCyan.copy(alpha = 0.026f),
+                    HorizonCyan.copy(alpha = 0.020f),
                     Offset(x, 0f),
                     Offset(x, size.height),
                     1f,
@@ -382,7 +444,7 @@ private fun LivingVoid(cockpit: CockpitState, content: @Composable () -> Unit) {
             var y = 0f
             while (y <= size.height) {
                 drawLine(
-                    SoftViolet.copy(alpha = 0.022f),
+                    PulseMagenta.copy(alpha = 0.016f),
                     Offset(0f, y),
                     Offset(size.width, y),
                     1f,
@@ -411,7 +473,7 @@ private fun PhoneShell(
     Column(Modifier.fillMaxSize()) {
         TopRail(destination = destination, cockpit = cockpit, onLock = onLock)
         Box(Modifier.weight(1f)) {
-            DestinationContent(
+            DestinationTransition(
                 destination = destination,
                 defaultMode = defaultMode,
                 appearance = appearance,
@@ -423,15 +485,27 @@ private fun PhoneShell(
                 onAppearance = onAppearance,
                 onLayoutPreference = onLayoutPreference,
                 compact = true,
+                label = "phone-destination",
             )
         }
-        NavigationBar(containerColor = SmokedDeep) {
+        NavigationBar(
+            containerColor = SmokedDeep.copy(alpha = 0.96f),
+            tonalElevation = 0.dp,
+        ) {
             Destination.entries.forEach { item ->
+                val accent = destinationAccent(item)
                 NavigationBarItem(
                     selected = destination == item,
                     onClick = { onDestination(item) },
                     icon = { DestinationIcon(item, selected = destination == item) },
                     label = { Text(item.label) },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = accent,
+                        selectedTextColor = accent,
+                        indicatorColor = accent.copy(alpha = 0.16f),
+                        unselectedIconColor = MutedText,
+                        unselectedTextColor = MutedText,
+                    ),
                 )
             }
         }
@@ -471,7 +545,7 @@ private fun DesktopShell(
                 .weight(1f)
                 .fillMaxHeight(),
         ) {
-            DestinationContent(
+            DestinationTransition(
                 destination = destination,
                 defaultMode = defaultMode,
                 appearance = appearance,
@@ -483,6 +557,7 @@ private fun DesktopShell(
                 onAppearance = onAppearance,
                 onLayoutPreference = onLayoutPreference,
                 compact = false,
+                label = "desktop-destination",
             )
         }
         VerticalDivider(
@@ -492,6 +567,42 @@ private fun DesktopShell(
             color = MaterialTheme.colorScheme.outline,
         )
         SystemLens(cockpit = cockpit, modifier = Modifier.width(320.dp))
+    }
+}
+
+@Composable
+private fun DestinationTransition(
+    destination: Destination,
+    defaultMode: AnswerMode,
+    appearance: Appearance,
+    layoutPreference: LayoutPreference,
+    cockpit: CockpitState,
+    cockpitActions: CockpitActions,
+    onDestination: (Destination) -> Unit,
+    onDefaultMode: (AnswerMode) -> Unit,
+    onAppearance: (Appearance) -> Unit,
+    onLayoutPreference: (LayoutPreference) -> Unit,
+    compact: Boolean,
+    label: String,
+) {
+    Crossfade(
+        targetState = destination,
+        animationSpec = tween(durationMillis = 180),
+        label = label,
+    ) { visibleDestination ->
+        DestinationContent(
+            destination = visibleDestination,
+            defaultMode = defaultMode,
+            appearance = appearance,
+            layoutPreference = layoutPreference,
+            cockpit = cockpit,
+            cockpitActions = cockpitActions,
+            onDestination = onDestination,
+            onDefaultMode = onDefaultMode,
+            onAppearance = onAppearance,
+            onLayoutPreference = onLayoutPreference,
+            compact = compact,
+        )
     }
 }
 
@@ -532,7 +643,11 @@ private fun DestinationContent(
             cockpit = cockpit,
             actions = cockpitActions,
         )
-        Destination.Workspace -> WorkspaceSurface()
+        Destination.Workspace -> WorkspaceSurface(
+            defaultMode = defaultMode,
+            cockpit = cockpit,
+            cockpitActions = cockpitActions,
+        )
         Destination.Agents -> AgentSurface(cockpit = cockpit, actions = cockpitActions)
         Destination.System -> SystemSurface(
             defaultMode = defaultMode,
@@ -555,7 +670,13 @@ private fun TopRail(destination: Destination, cockpit: CockpitState, onLock: () 
             .height(58.dp)
             .background(
                 Brush.horizontalGradient(
-                    listOf(SmokedDeep, CognitionViolet.copy(alpha = 0.11f), SmokedDeep),
+                    listOf(
+                        SmokedDeep,
+                        PulseMagenta.copy(alpha = 0.08f),
+                        CognitionViolet.copy(alpha = 0.12f),
+                        HorizonCyan.copy(alpha = 0.06f),
+                        SmokedDeep,
+                    ),
                 ),
             )
             .padding(horizontal = 16.dp),
@@ -599,12 +720,20 @@ private fun NavigationPane(
         Text("SOVEREIGN CORE", color = SoftViolet, fontSize = 13.sp)
         Spacer(Modifier.height(24.dp))
         Destination.entries.forEach { item ->
+            val accent = destinationAccent(item)
             FilterChip(
                 selected = destination == item,
                 onClick = { onDestination(item) },
                 leadingIcon = { DestinationIcon(item, selected = destination == item) },
                 label = { Text(item.label) },
-                modifier = Modifier.fillMaxWidth(),
+                colors = FilterChipDefaults.filterChipColors(
+                    containerColor = Color.Transparent,
+                    labelColor = MutedText,
+                    selectedContainerColor = accent.copy(alpha = 0.16f),
+                    selectedLabelColor = accent,
+                    selectedLeadingIconColor = accent,
+                ),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
             )
         }
         Spacer(Modifier.weight(1f))
@@ -1099,6 +1228,14 @@ private fun ChatSurface(
     var selection by remember(defaultMode) {
         mutableStateOf(AnswerModeSelection(defaultMode = defaultMode))
     }
+    val threadState = rememberLazyListState()
+    val leadingItems = if (cockpit.model == null || cockpit.stage == ModelStage.Error) 1 else 0
+    val tailIndex = leadingItems + cockpit.messages.size +
+        (if (cockpit.streamText.isNotBlank()) 1 else 0) - 1
+
+    LaunchedEffect(tailIndex, cockpit.streamText.length / 128) {
+        if (tailIndex >= 0) threadState.scrollToItem(tailIndex)
+    }
 
     Column(Modifier.fillMaxSize()) {
         TruthThread(
@@ -1107,6 +1244,7 @@ private fun ChatSurface(
             active = cockpit.isGenerating,
         )
         LazyColumn(
+            state = threadState,
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.weight(1f),
@@ -1184,7 +1322,7 @@ private fun TruthThread(phase: RuntimePhase, detail: String, active: Boolean) {
 private fun MessageBlock(message: ChatMessage) {
     val isUser = message.speaker == ChatSpeaker.User
     val accent = when (message.speaker) {
-        ChatSpeaker.User -> CognitionViolet
+        ChatSpeaker.User -> PulseMagenta
         ChatSpeaker.Core -> HorizonCyan
         ChatSpeaker.System -> WaitingAmber
     }
@@ -1231,12 +1369,13 @@ private fun Composer(
     onSend: () -> Unit,
     onStop: () -> Unit,
 ) {
+    val modeAccent = answerModeAccent(selection.modeForNextResponse())
     Surface(
         color = Color.Transparent,
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 6.dp)
-            .sovereignGlass(HorizonCyan, radius = 18.dp, depth = 0.88f, elevation = 10.dp),
+            .sovereignGlass(modeAccent, radius = 18.dp, depth = 0.88f, elevation = 10.dp),
     ) {
         Column(
             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -1249,13 +1388,25 @@ private fun Composer(
             ) {
                 Text("NEXT", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
                 AnswerMode.entries.forEach { mode ->
-                    FilterChip(
+                    FluorescentChip(
                         selected = selection.modeForNextResponse() == mode,
                         onClick = { onMode(mode) },
-                        label = { Text(mode.label) },
+                        label = when (mode) {
+                            AnswerMode.Performance -> "Performance · 1K"
+                            AnswerMode.Adaptive -> "Adaptive · 1.5K"
+                            AnswerMode.Quality -> "Quality · 2K"
+                        },
+                        accent = answerModeAccent(mode),
                     )
                 }
             }
+            Text(
+                "${selection.modeForNextResponse().description.uppercase()} · " +
+                    answerModeTokenBudget(selection.modeForNextResponse()),
+                color = modeAccent,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+            )
             if (draft.startsWith("/") && !draft.contains('\n')) {
                 SlashCommandPalette(
                     query = draft.substringBefore(' '),
@@ -1287,6 +1438,10 @@ private fun Composer(
                     Button(
                         onClick = onSend,
                         enabled = draft.isNotBlank() && canSend,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = modeAccent,
+                            contentColor = Obsidian,
+                        ),
                         modifier = Modifier.height(56.dp),
                     ) {
                         Text("SEND", fontWeight = FontWeight.Bold)
@@ -1305,6 +1460,28 @@ private fun Composer(
             )
         }
     }
+}
+
+@Composable
+private fun FluorescentChip(
+    selected: Boolean,
+    onClick: () -> Unit,
+    label: String,
+    accent: Color,
+    modifier: Modifier = Modifier,
+) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = { Text(label) },
+        colors = FilterChipDefaults.filterChipColors(
+            containerColor = Color.Transparent,
+            labelColor = MutedText,
+            selectedContainerColor = accent.copy(alpha = 0.18f),
+            selectedLabelColor = accent,
+        ),
+        modifier = modifier.heightIn(min = 48.dp),
+    )
 }
 
 @Composable
@@ -1561,8 +1738,14 @@ private fun MemoryCard(memory: MatrixMemory, actions: CockpitActions) {
 }
 
 @Composable
-private fun WorkspaceSurface(workspaceViewModel: WorkspaceViewModel = viewModel()) {
+private fun WorkspaceSurface(
+    defaultMode: AnswerMode,
+    cockpit: CockpitState,
+    cockpitActions: CockpitActions,
+    workspaceViewModel: WorkspaceViewModel = viewModel(),
+) {
     val state by workspaceViewModel.state.collectAsStateWithLifecycle()
+    var workSessionOpen by rememberSaveable { mutableStateOf(false) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri?.let(workspaceViewModel::attachRoot)
     }
@@ -1590,6 +1773,18 @@ private fun WorkspaceSurface(workspaceViewModel: WorkspaceViewModel = viewModel(
                 onClick = workspaceViewModel::refresh,
                 enabled = state.rootUri != null && !state.busy,
             ) { Text("REFRESH") }
+            FluorescentChip(
+                selected = !workSessionOpen,
+                onClick = { workSessionOpen = false },
+                label = "EDITOR",
+                accent = HorizonCyan,
+            )
+            FluorescentChip(
+                selected = workSessionOpen,
+                onClick = { workSessionOpen = true },
+                label = "WORK SESSION",
+                accent = PulseMagenta,
+            )
             Text(
                 state.detail,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1607,7 +1802,15 @@ private fun WorkspaceSurface(workspaceViewModel: WorkspaceViewModel = viewModel(
             )
         }
 
-        if (state.rootUri == null) {
+        if (workSessionOpen) {
+            WorkSessionSurface(
+                defaultMode = defaultMode,
+                cockpit = cockpit,
+                actions = cockpitActions,
+                workspaceConnected = state.rootUri != null,
+                modifier = Modifier.weight(1f),
+            )
+        } else if (state.rootUri == null) {
             OutlinedCard(
                 border = BorderStroke(1.dp, CognitionViolet.copy(alpha = 0.6f)),
                 modifier = Modifier.fillMaxWidth(),
@@ -1648,6 +1851,508 @@ private fun WorkspaceSurface(workspaceViewModel: WorkspaceViewModel = viewModel(
             }
         }
     }
+}
+
+@Composable
+private fun WorkSessionSurface(
+    defaultMode: AnswerMode,
+    cockpit: CockpitState,
+    actions: CockpitActions,
+    workspaceConnected: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    var rootPath by rememberSaveable { mutableStateOf("") }
+    var objective by rememberSaveable { mutableStateOf("") }
+    var guidance by rememberSaveable { mutableStateOf("") }
+    var modeName by rememberSaveable(defaultMode.name) { mutableStateOf(defaultMode.name) }
+    val selectedMode = enumOrDefault(modeName, defaultMode)
+    val mission = cockpit.activeMission
+    val missionMessages = cockpit.messages.filter {
+        it.source == "mission" && it.speaker != ChatSpeaker.User &&
+            (mission == null || it.id >= mission.startedMessageId)
+    }
+    val threadState = rememberLazyListState()
+    val streamVisible = cockpit.isGenerating && mission?.active == true && cockpit.streamText.isNotBlank()
+    val threadTail = missionMessages.size + if (streamVisible) 1 else 0
+
+    LaunchedEffect(threadTail, cockpit.streamText.length / 128) {
+        if (threadTail > 0) threadState.scrollToItem(threadTail - 1)
+    }
+
+    BoxWithConstraints(modifier.fillMaxSize()) {
+        val wide = maxWidth >= 900.dp
+        if (wide) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                WorkSessionControlPanel(
+                    rootPath = rootPath,
+                    objective = objective,
+                    guidance = guidance,
+                    selectedMode = selectedMode,
+                    cockpit = cockpit,
+                    workspaceConnected = workspaceConnected,
+                    onRootPath = { rootPath = it },
+                    onObjective = { objective = it },
+                    onGuidance = { guidance = it },
+                    onMode = { modeName = it.name },
+                    onStart = {
+                        actions.onSend(
+                            "/mission run ${rootPath.trim()} :: ${objective.trim()}",
+                            selectedMode,
+                        )
+                    },
+                    onGuide = {
+                        val submitted = guidance.trim()
+                        if (submitted.isNotEmpty()) {
+                            guidance = ""
+                            actions.onGuideMission(submitted)
+                        }
+                    },
+                    onCommand = { command -> actions.onSend(command, selectedMode) },
+                    onStop = actions.onStop,
+                    modifier = Modifier.width(390.dp).fillMaxHeight(),
+                )
+                WorkSessionThread(
+                    missionMessages = missionMessages,
+                    streamText = if (streamVisible) cockpit.streamText else "",
+                    listState = threadState,
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                )
+            }
+        } else {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                WorkSessionControlPanel(
+                    rootPath = rootPath,
+                    objective = objective,
+                    guidance = guidance,
+                    selectedMode = selectedMode,
+                    cockpit = cockpit,
+                    workspaceConnected = workspaceConnected,
+                    onRootPath = { rootPath = it },
+                    onObjective = { objective = it },
+                    onGuidance = { guidance = it },
+                    onMode = { modeName = it.name },
+                    onStart = {
+                        actions.onSend(
+                            "/mission run ${rootPath.trim()} :: ${objective.trim()}",
+                            selectedMode,
+                        )
+                    },
+                    onGuide = {
+                        val submitted = guidance.trim()
+                        if (submitted.isNotEmpty()) {
+                            guidance = ""
+                            actions.onGuideMission(submitted)
+                        }
+                    },
+                    onCommand = { command -> actions.onSend(command, selectedMode) },
+                    onStop = actions.onStop,
+                    modifier = Modifier.weight(0.60f).fillMaxWidth(),
+                )
+                WorkSessionThread(
+                    missionMessages = missionMessages,
+                    streamText = if (streamVisible) cockpit.streamText else "",
+                    listState = threadState,
+                    modifier = Modifier.weight(0.40f).fillMaxWidth(),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkSessionControlPanel(
+    rootPath: String,
+    objective: String,
+    guidance: String,
+    selectedMode: AnswerMode,
+    cockpit: CockpitState,
+    workspaceConnected: Boolean,
+    onRootPath: (String) -> Unit,
+    onObjective: (String) -> Unit,
+    onGuidance: (String) -> Unit,
+    onMode: (AnswerMode) -> Unit,
+    onStart: () -> Unit,
+    onGuide: () -> Unit,
+    onCommand: (String) -> Unit,
+    onStop: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val mission = cockpit.activeMission
+    val active = mission?.active == true
+    val statusColor = when (mission?.status) {
+        AgentMissionStatus.Running -> PulseMagenta
+        AgentMissionStatus.Paused -> WaitingAmber
+        AgentMissionStatus.Completed -> ResonanceMint
+        AgentMissionStatus.Failed, AgentMissionStatus.Cancelled -> InterventionCoral
+        null -> PulseMagenta
+    }
+
+    OutlinedCard(
+        colors = CardDefaults.outlinedCardColors(containerColor = Color.Transparent),
+        border = BorderStroke(1.dp, Color.Transparent),
+        modifier = modifier.sovereignGlass(statusColor, radius = 16.dp, depth = 0.82f, elevation = 3.dp),
+    ) {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(14.dp).verticalScroll(rememberScrollState()),
+        ) {
+            Text("THE LONG FORGE", color = statusColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Text(
+                "A focused studio for one objective, controller-owned continuity, and bounded autonomous work.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp,
+            )
+
+            if (mission == null || !active) {
+                OutlinedTextField(
+                    value = rootPath,
+                    onValueChange = onRootPath,
+                    label = { Text("MISSION FOLDER") },
+                    placeholder = { Text("sovereign-studio-lf01") },
+                    supportingText = { Text("Relative to the connected project; ASCII paths only") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = objective,
+                    onValueChange = onObjective,
+                    label = { Text("COMPLETE OBJECTIVE") },
+                    placeholder = {
+                        Text("Describe the finished artifact, constraints, checks, and completion standard.")
+                    },
+                    minLines = 4,
+                    maxLines = 9,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                AnswerMode.entries.forEach { mode ->
+                    FluorescentChip(
+                        selected = selectedMode == mode,
+                        onClick = { onMode(mode) },
+                        label = "${mode.label} · ${answerModeTokenBudget(mode)}",
+                        accent = answerModeAccent(mode),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                Text(
+                    answerModeRouteHint(selectedMode, cockpit),
+                    color = if (selectedMode == AnswerMode.Performance && !cockpit.npuEligible) {
+                        WaitingAmber
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                )
+                Button(
+                    onClick = onStart,
+                    enabled = workspaceConnected && cockpit.canSend && rootPath.isNotBlank() &&
+                        objective.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = PulseMagenta,
+                        contentColor = Obsidian,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("START SCOPED RUN", fontWeight = FontWeight.Bold)
+                }
+                if (!workspaceConnected) {
+                    Text("Connect a project before starting a work session.", color = WaitingAmber, fontSize = 11.sp)
+                }
+            }
+
+            if (mission != null) {
+                HorizontalDivider(color = statusColor.copy(alpha = 0.35f))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "${mission.id} · ${mission.status.name.uppercase()}",
+                        color = statusColor,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(mission.mode.label.uppercase(), color = SoftViolet, fontSize = 10.sp)
+                }
+                Text(
+                    mission.objective,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis,
+                    fontSize = 12.sp,
+                )
+                Text(
+                    "SCOPE ${mission.rootPath} · ACTIONS ${mission.completedActions}/${mission.maxActions}",
+                    color = MutedText,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                LongForgePhaseRail(
+                    completedActions = mission.completedActions,
+                    maxActions = mission.maxActions,
+                    status = mission.status,
+                )
+                FluorescentProgress(
+                    progress = (mission.completedActions.toFloat() / mission.maxActions.toFloat())
+                        .coerceIn(0f, 1f),
+                    accent = statusColor,
+                    motionEnabled = cockpit.thermalStatus == null || cockpit.thermalStatus < 3,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "WRITE ${formatBytes(mission.writtenBytes)} / ${formatBytes(mission.maxWriteBytes)}",
+                    color = MutedText,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                )
+                if (mission.lastAction.isNotBlank()) {
+                    Text(
+                        "LAST ${mission.lastAction}",
+                        color = HorizonCyan,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (mission.guidance.isNotEmpty()) {
+                    Text(
+                        "GUIDANCE ${mission.guidance.size} · ${mission.guidance.last()}",
+                        color = SoftViolet,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (mission.lastResult.isNotBlank()) {
+                    Text(
+                        mission.lastResult,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 11.sp,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                ) {
+                    if (cockpit.isGenerating) {
+                        Button(
+                            onClick = onStop,
+                            colors = ButtonDefaults.buttonColors(containerColor = InterventionCoral),
+                        ) { Text("STOP", color = Obsidian, fontWeight = FontWeight.Bold) }
+                    } else if (mission.status == AgentMissionStatus.Paused && cockpit.canSend) {
+                        Button(onClick = { onCommand("/mission resume") }) { Text("RESUME") }
+                    } else if (mission.status == AgentMissionStatus.Running && cockpit.canSend) {
+                        OutlinedButton(onClick = { onCommand("/mission pause") }) { Text("PAUSE") }
+                    }
+                    OutlinedButton(
+                        onClick = { onCommand("/mission status") },
+                        enabled = cockpit.canSend && !cockpit.isGenerating,
+                    ) { Text("STATUS") }
+                    OutlinedButton(
+                        onClick = { onCommand("/mission cancel") },
+                        enabled = mission.active && cockpit.canSend && !cockpit.isGenerating,
+                    ) { Text("CANCEL") }
+                }
+
+                if (mission.active) {
+                    OutlinedTextField(
+                        value = guidance,
+                        onValueChange = onGuidance,
+                        label = { Text("GUIDANCE / INTERRUPTION") },
+                        placeholder = { Text("Add a constraint without erasing the mission checkpoint") },
+                        minLines = 1,
+                        maxLines = 4,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Button(
+                        onClick = onGuide,
+                        enabled = guidance.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(if (cockpit.isGenerating) "QUEUE GUIDANCE" else "GUIDE NEXT RUN")
+                    }
+                }
+            }
+
+            Text(
+                "GRANT · 120 ACTIONS · MATRIX OFFLOAD · RECURSION GUARD · 1 MiB WRITES · NO DELETE / EXEC / NET",
+                color = ResonanceMint,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 9.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun WorkSessionThread(
+    missionMessages: List<ChatMessage>,
+    streamText: String,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    modifier: Modifier = Modifier,
+) {
+    OutlinedCard(
+        colors = CardDefaults.outlinedCardColors(containerColor = Color.Transparent),
+        border = BorderStroke(1.dp, Color.Transparent),
+        modifier = modifier.sovereignGlass(PulseMagenta, radius = 16.dp, depth = 0.76f, elevation = 2.dp),
+    ) {
+        Column(Modifier.fillMaxSize()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+            ) {
+                Text("WORK SESSION TRANSCRIPT", color = PulseMagenta, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.weight(1f))
+                Text("LATEST FOCUSED", color = HorizonCyan, fontFamily = FontFamily.Monospace, fontSize = 9.sp)
+            }
+            HorizontalDivider(color = PulseMagenta.copy(alpha = 0.24f))
+            if (missionMessages.isEmpty() && streamText.isBlank()) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(18.dp),
+                ) {
+                    Text("No work-session handoff yet.", color = MaterialTheme.colorScheme.onSurface)
+                    Text(
+                        "The initial objective stays in the control panel, so opening this view never lands at " +
+                            "the top of a giant prompt. Verified handoffs and blockers appear here.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp,
+                    )
+                }
+            } else {
+                LazyColumn(
+                    state = listState,
+                    contentPadding = PaddingValues(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    items(missionMessages, key = { it.id }) { message -> MessageBlock(message) }
+                    if (streamText.isNotBlank()) item { StreamingBlock(streamText) }
+                }
+            }
+        }
+    }
+}
+
+private val LongForgePhases = listOf("BRIEF", "PLAN", "BUILD", "VERIFY", "HANDOFF")
+
+@Composable
+private fun LongForgePhaseRail(
+    completedActions: Int,
+    maxActions: Int,
+    status: AgentMissionStatus,
+) {
+    val fraction = (completedActions.toFloat() / maxActions.coerceAtLeast(1).toFloat())
+        .coerceIn(0f, 1f)
+    val activeIndex = when {
+        status == AgentMissionStatus.Completed -> LongForgePhases.lastIndex
+        completedActions == 0 -> 0
+        fraction < 0.08f -> 1
+        fraction < 0.78f -> 2
+        fraction < 0.94f -> 3
+        else -> 4
+    }
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+    ) {
+        LongForgePhases.forEachIndexed { index, label ->
+            val complete = index < activeIndex || status == AgentMissionStatus.Completed
+            val current = index == activeIndex && status != AgentMissionStatus.Completed
+            val accent = when {
+                current -> PulseMagenta
+                complete -> HorizonCyan
+                else -> CognitionViolet.copy(alpha = 0.62f)
+            }
+            Surface(
+                color = accent.copy(alpha = if (current) 0.16f else 0.055f),
+                contentColor = accent,
+                shape = RoundedCornerShape(50),
+                border = BorderStroke(1.dp, accent.copy(alpha = if (current) 0.82f else 0.30f)),
+            ) {
+                Text(
+                    "${if (complete) "✓" else if (current) "◆" else "·"} ${index + 1} $label",
+                    color = accent,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 9.sp,
+                    fontWeight = if (current) FontWeight.Bold else FontWeight.Medium,
+                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FluorescentProgress(
+    progress: Float,
+    accent: Color,
+    motionEnabled: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val renderedProgress by animateFloatAsState(
+        targetValue = progress.coerceIn(0f, 1f),
+        animationSpec = tween(durationMillis = if (motionEnabled) 220 else 0),
+        label = "long-forge-progress",
+    )
+    val shape = RoundedCornerShape(50)
+    Box(
+        modifier = modifier
+            .height(9.dp)
+            .clip(shape)
+            .background(SmokedDeep)
+            .border(1.dp, accent.copy(alpha = 0.40f), shape),
+    ) {
+        if (renderedProgress > 0f) {
+            Box(
+                Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(renderedProgress)
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(HorizonCyan, PulseMagenta, CognitionViolet),
+                        ),
+                        shape,
+                    ),
+            )
+        }
+    }
+}
+
+private fun answerModeAccent(mode: AnswerMode): Color = when (mode) {
+    AnswerMode.Performance -> HorizonCyan
+    AnswerMode.Adaptive -> PulseMagenta
+    AnswerMode.Quality -> CognitionViolet
+}
+
+private fun answerModeTokenBudget(mode: AnswerMode): String = when (mode) {
+    AnswerMode.Performance -> "1,024 TOKENS/STEP"
+    AnswerMode.Adaptive -> "1,536 TOKENS/STEP"
+    AnswerMode.Quality -> "2,048 TOKENS/STEP"
+}
+
+private fun answerModeRouteHint(mode: AnswerMode, cockpit: CockpitState): String = when (mode) {
+    AnswerMode.Performance -> if (cockpit.npuEligible) {
+        "ROUTE · E2B/NPU PREFERRED · FALLS TO E4B ONLY WHEN THE CONTROLLER REQUIRES REASONING"
+    } else {
+        "ROUTE · E4B FALLBACK · E2B/NPU UNAVAILABLE: ${cockpit.npuStatus}"
+    }
+    AnswerMode.Adaptive -> if (cockpit.npuEligible) {
+        "ROUTE · CONTROLLER CHOOSES E2B/NPU FOR CHAT/MEMORY OR E4B FOR DEEP WORK"
+    } else {
+        "ROUTE · E4B ONLY UNTIL E2B/NPU IS READY"
+    }
+    AnswerMode.Quality -> "ROUTE · E4B REASONING/CODING PREFERRED"
 }
 
 @Composable
@@ -2138,7 +2843,11 @@ private fun StatusCard(
     accent: Color,
     modifier: Modifier = Modifier,
 ) {
-    OutlinedCard(modifier = modifier, border = BorderStroke(1.dp, accent.copy(alpha = 0.45f))) {
+    OutlinedCard(
+        colors = CardDefaults.outlinedCardColors(containerColor = Color.Transparent),
+        border = BorderStroke(1.dp, Color.Transparent),
+        modifier = modifier.sovereignGlass(accent, radius = 14.dp, depth = 0.76f, elevation = 2.dp),
+    ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(title.uppercase(), color = accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             Text(
@@ -2204,9 +2913,15 @@ private fun SectionTitle(title: String) {
     Text(title.uppercase(), color = SoftViolet, fontSize = 13.sp, fontWeight = FontWeight.Bold)
 }
 
+private fun destinationAccent(destination: Destination): Color = when (destination) {
+    Destination.Home, Destination.Workspace -> HorizonCyan
+    Destination.Chat, Destination.Agents -> PulseMagenta
+    Destination.Memory, Destination.System -> CognitionViolet
+}
+
 @Composable
 private fun DestinationIcon(destination: Destination, selected: Boolean) {
-    val color = if (selected) ResonanceMint else HorizonCyan.copy(alpha = 0.82f)
+    val color = if (selected) destinationAccent(destination) else MutedText.copy(alpha = 0.82f)
     Canvas(Modifier.size(20.dp)) {
         val stroke = Stroke(width = 1.8.dp.toPx(), cap = StrokeCap.Round)
         val cx = size.width / 2f

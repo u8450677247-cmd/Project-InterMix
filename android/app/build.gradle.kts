@@ -11,8 +11,8 @@ android {
         applicationId = "dev.anicloud.sovereign.prototype"
         minSdk = 31
         targetSdk = 36
-        versionCode = 10
-        versionName = "0.7.0-interaction-matrix"
+        versionCode = 12
+        versionName = "0.8.1-fluorescent-forge"
 
         buildConfigField("String", "TENSOR_DISPATCH_VERSION", "\"2.1.6\"")
         buildConfigField(

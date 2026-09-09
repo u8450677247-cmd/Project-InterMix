@@ -45,8 +45,9 @@ import androidx.compose.ui.unit.sp
 private const val MaxHighlightedCharacters = 128 * 1024
 
 /**
- * Static smoked glass: translucent enough to reveal LivingVoid, but deliberately
- * avoids a live blur shader while E4B owns the GPU.
+ * Static spectral glass: deep smoke, a restrained chromatic wash, and a
+ * fluorescent rim reveal LivingVoid without competing with long-form reading.
+ * It deliberately avoids a live blur shader while E4B owns the GPU.
  */
 @Composable
 internal fun Modifier.sovereignGlass(
@@ -62,16 +63,17 @@ internal fun Modifier.sovereignGlass(
             elevation = elevation,
             shape = shape,
             clip = false,
-            ambientColor = accent.copy(alpha = 0.08f),
-            spotColor = accent.copy(alpha = 0.14f),
+            ambientColor = accent.copy(alpha = 0.12f),
+            spotColor = PulseMagenta.copy(alpha = 0.12f),
         )
         .clip(shape)
         .background(
             brush = Brush.linearGradient(
                 listOf(
                     scheme.surface.copy(alpha = depth),
-                    scheme.surfaceVariant.copy(alpha = (depth - 0.12f).coerceAtLeast(0.24f)),
-                    CognitionViolet.copy(alpha = 0.055f),
+                    Color(0xFF121127).copy(alpha = (depth - 0.07f).coerceAtLeast(0.24f)),
+                    PulseMagenta.copy(alpha = 0.035f),
+                    scheme.surfaceVariant.copy(alpha = (depth - 0.14f).coerceAtLeast(0.24f)),
                 ),
             ),
         )
@@ -79,9 +81,11 @@ internal fun Modifier.sovereignGlass(
             width = 1.dp,
             brush = Brush.linearGradient(
                 listOf(
-                    accent.copy(alpha = 0.58f),
-                    SoftViolet.copy(alpha = 0.20f),
-                    Color.White.copy(alpha = 0.055f),
+                    HorizonCyan.copy(alpha = 0.18f),
+                    accent.copy(alpha = 0.82f),
+                    PulseMagenta.copy(alpha = 0.52f),
+                    CognitionViolet.copy(alpha = 0.66f),
+                    Color.White.copy(alpha = 0.10f),
                 ),
             ),
             shape = shape,
@@ -194,14 +198,22 @@ private fun SovereignCodeBlock(source: String, language: String) {
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(CognitionViolet.copy(alpha = 0.10f))
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(
+                                HorizonCyan.copy(alpha = 0.10f),
+                                CognitionViolet.copy(alpha = 0.14f),
+                                PulseMagenta.copy(alpha = 0.10f),
+                            ),
+                        ),
+                    )
                     .padding(horizontal = 12.dp, vertical = 7.dp),
             ) {
                 Text("CODE", color = HorizonCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.weight(1f))
                 Text(
                     language.ifBlank { "TEXT" }.uppercase(),
-                    color = SoftViolet,
+                    color = PulseMagenta,
                     fontFamily = FontFamily.Monospace,
                     fontSize = 10.sp,
                 )
@@ -392,7 +404,7 @@ private fun styledInline(source: String): AnnotatedString = buildAnnotatedString
     val semantic = mapOf(
         "[SUCCESS]" to ResonanceMint,
         "[INFO]" to HorizonCyan,
-        "[ACTION]" to CognitionViolet,
+        "[ACTION]" to PulseMagenta,
         "[WARNING]" to WaitingAmber,
         "[BLOCKED]" to InterventionCoral,
     )

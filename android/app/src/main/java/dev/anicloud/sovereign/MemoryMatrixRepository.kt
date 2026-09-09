@@ -19,6 +19,8 @@ private const val LegacyHistoryName = "conversation_history_v1.json"
 private const val MaxStoredMessageCharacters = 32 * 1024
 private const val MaxMemoryValueCharacters = 4 * 1024
 private const val MaxActionContentCharacters = 64 * 1024
+private const val ActiveAgentMissionKey = "active_agent_mission"
+private const val MaxMissionObjectiveCharacters = 16 * 1024
 
 data class MatrixMemory(
     val id: Long,
@@ -200,14 +202,14 @@ class MemoryMatrixRepository(private val context: Context) :
         collapseDuplicateRuntimeMessages(db)
         val sessionId = activeSessionId(db)
         val rows = readableDatabase.rawQuery(
-            "SELECT id, speaker, content FROM messages WHERE session_id=? ORDER BY id DESC LIMIT ?",
+            "SELECT id, speaker, content, source FROM messages WHERE session_id=? ORDER BY id DESC LIMIT ?",
             arrayOf(sessionId, limit.coerceIn(1, 500).toString()),
         ).use { cursor ->
             buildList {
                 while (cursor.moveToNext()) {
                     val speaker = runCatching { ChatSpeaker.valueOf(cursor.getString(1)) }
                         .getOrDefault(ChatSpeaker.System)
-                    add(ChatMessage(cursor.getLong(0), speaker, cursor.getString(2)))
+                    add(ChatMessage(cursor.getLong(0), speaker, cursor.getString(2), cursor.getString(3)))
                 }
             }
         }
@@ -250,6 +252,150 @@ class MemoryMatrixRepository(private val context: Context) :
         val id = db.insertOrThrow("messages", null, values)
         db.execSQL("UPDATE sessions SET updated_at=? WHERE id=?", arrayOf(now, sessionId))
         return id
+    }
+
+    @Synchronized
+    fun startAgentMission(
+        rootPath: String,
+        objective: String,
+        mode: AnswerMode,
+        startedMessageId: Long,
+        maxActions: Int = 120,
+        maxWriteBytes: Long = 1024L * 1024L,
+    ): AgentMissionCheckpoint {
+        val normalizedRoot = normalizeWorkspacePath(rootPath)
+        require(Regex("[A-Za-z0-9][A-Za-z0-9._/-]{0,511}").matches(normalizedRoot)) {
+            "Long-form mission roots use ASCII letters, numbers, dots, dashes, underscores, and slashes."
+        }
+        require(objective.isNotBlank()) { "A long-form mission objective is required." }
+        val existing = activeAgentMission()
+        require(existing == null || !existing.active) {
+            "Mission ${existing?.id} is still ${existing?.status?.name?.lowercase()}; resume or cancel it first."
+        }
+        val checkpoint = AgentMissionCheckpoint(
+            id = missionId(objective),
+            rootPath = normalizedRoot,
+            objective = objective.replace("\u0000", "").trim().take(MaxMissionObjectiveCharacters),
+            mode = mode,
+            startedMessageId = startedMessageId.coerceAtLeast(0L),
+            maxActions = maxActions.coerceIn(1, 120),
+            maxWriteBytes = maxWriteBytes.coerceIn(64L * 1024L, 2L * 1024L * 1024L),
+            updatedAt = now(),
+        )
+        persistAgentMission(checkpoint)
+        updateActiveSessionTask(checkpoint)
+        return checkpoint
+    }
+
+    @Synchronized
+    fun activeAgentMission(): AgentMissionCheckpoint? {
+        val raw = readableDatabase.rawQuery(
+            "SELECT value FROM settings WHERE key=? LIMIT 1",
+            arrayOf(ActiveAgentMissionKey),
+        ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null } ?: return null
+        return runCatching { missionFromJson(JSONObject(raw)) }.getOrNull()
+    }
+
+    @Synchronized
+    fun resumeAgentMission(): AgentMissionCheckpoint {
+        val current = activeAgentMission() ?: error("No long-form mission checkpoint is available.")
+        require(current.status in setOf(AgentMissionStatus.Paused, AgentMissionStatus.Running)) {
+            "Mission ${current.id} is ${current.status.name.lowercase()} and cannot be resumed."
+        }
+        val resumed = current.copy(status = AgentMissionStatus.Running, updatedAt = now())
+        persistAgentMission(resumed)
+        updateActiveSessionTask(resumed)
+        return resumed
+    }
+
+    @Synchronized
+    fun guideAgentMission(instruction: String): AgentMissionCheckpoint {
+        val current = activeAgentMission() ?: error("No long-form mission checkpoint is available.")
+        require(current.active) {
+            "Mission ${current.id} is ${current.status.name.lowercase()} and cannot receive guidance."
+        }
+        val clean = instruction.replace("\u0000", "").trim().take(2_000)
+        require(clean.isNotBlank()) { "Mission guidance cannot be empty." }
+        val guided = current.copy(
+            status = AgentMissionStatus.Running,
+            guidance = (current.guidance + clean).takeLast(12),
+            lastResult = "User guidance recorded: $clean".take(2_000),
+            updatedAt = now(),
+        )
+        persistAgentMission(guided)
+        updateActiveSessionTask(guided)
+        return guided
+    }
+
+    @Synchronized
+    fun recordAgentMissionAction(
+        proposal: WorkspaceActionProposal,
+        result: WorkspaceActionResult,
+    ): AgentMissionCheckpoint {
+        val current = activeAgentMission() ?: error("No long-form mission is active.")
+        require(current.status == AgentMissionStatus.Running) { "The long-form mission is not running." }
+        val writeBytes = when (proposal.kind) {
+            WorkspaceActionKind.CreateFile, WorkspaceActionKind.WriteFile ->
+                proposal.content.toByteArray(Charsets.UTF_8).size.toLong()
+            else -> 0L
+        }
+        val next = current.copy(
+            completedActions = current.completedActions + 1,
+            writtenBytes = current.writtenBytes + writeBytes,
+            actionTrail = (
+                current.actionTrail +
+                    "${proposal.kind.wireName}:${proposal.path}:${proposal.content.hashCode()}"
+                ).takeLast(120),
+            lastAction = "${proposal.kind.wireName} ${proposal.path}".take(700),
+            lastResult = result.detail.take(2_000),
+            updatedAt = now(),
+        )
+        persistAgentMission(next)
+        updateActiveSessionTask(next)
+        return next
+    }
+
+    @Synchronized
+    fun setAgentMissionStatus(
+        status: AgentMissionStatus,
+        detail: String,
+    ): AgentMissionCheckpoint? {
+        val current = activeAgentMission() ?: return null
+        val next = current.copy(
+            status = status,
+            lastResult = detail.replace("\u0000", "").trim().take(2_000),
+            updatedAt = now(),
+        )
+        persistAgentMission(next)
+        updateActiveSessionTask(next)
+        return next
+    }
+
+    fun agentMissionContext(): String {
+        val mission = activeAgentMission()?.takeIf(AgentMissionCheckpoint::active) ?: return ""
+        val recentEvents = recentMissionEvents(mission)
+        val guidanceBlock = mission.guidance.joinToString("\n") { "- $it" }.take(2_400)
+        val eventBlock = recentEvents.joinToString("\n") { "- $it" }.take(3_600)
+        return buildString {
+            appendLine("[CONTROLLER-OWNED ACTIVE WORK SESSION]")
+            appendLine("Mission: ${mission.id}")
+            appendLine("Status: ${mission.status.name.lowercase()}")
+            appendLine("Authorized workspace root: ${mission.rootPath}")
+            appendLine("Progress: ${mission.completedActions}/${mission.maxActions} actions")
+            appendLine("Write budget: ${mission.writtenBytes}/${mission.maxWriteBytes} bytes")
+            appendLine("Objective (full text remains durable in the Matrix):")
+            appendLine(mission.objective.take(6_000))
+            if (mission.lastAction.isNotBlank()) appendLine("Last action: ${mission.lastAction}")
+            if (mission.lastResult.isNotBlank()) appendLine("Last verified result: ${mission.lastResult}")
+            if (guidanceBlock.isNotBlank()) {
+                appendLine("User guidance, oldest to newest:")
+                appendLine(guidanceBlock)
+            }
+            if (eventBlock.isNotBlank()) {
+                appendLine("Recent verified action ledger, oldest to newest:")
+                appendLine(eventBlock)
+            }
+        }.take(13 * 1024)
     }
 
     @Synchronized
@@ -853,6 +999,104 @@ class MemoryMatrixRepository(private val context: Context) :
             lastEvidence = payload.optString("last_evidence"),
         ).normalized()
     }
+
+    private fun persistAgentMission(mission: AgentMissionCheckpoint) {
+        val payload = JSONObject()
+            .put("id", mission.id)
+            .put("root_path", mission.rootPath)
+            .put("objective", mission.objective)
+            .put("mode", mission.mode.name)
+            .put("started_message_id", mission.startedMessageId)
+            .put("status", mission.status.name)
+            .put("completed_actions", mission.completedActions)
+            .put("max_actions", mission.maxActions)
+            .put("written_bytes", mission.writtenBytes)
+            .put("max_write_bytes", mission.maxWriteBytes)
+            .put("guidance", JSONArray(mission.guidance))
+            .put("action_trail", JSONArray(mission.actionTrail))
+            .put("last_action", mission.lastAction)
+            .put("last_result", mission.lastResult)
+            .put("updated_at", mission.updatedAt)
+        writableDatabase.execSQL(
+            "INSERT OR REPLACE INTO settings(key,value,updated_at) VALUES(?,?,?)",
+            arrayOf(ActiveAgentMissionKey, payload.toString(), now()),
+        )
+    }
+
+    private fun missionFromJson(payload: JSONObject): AgentMissionCheckpoint = AgentMissionCheckpoint(
+        id = payload.optString("id").ifBlank { "LF-RECOVERED" },
+        rootPath = payload.getString("root_path"),
+        objective = payload.getString("objective").take(MaxMissionObjectiveCharacters),
+        mode = runCatching { AnswerMode.valueOf(payload.optString("mode")) }
+            .getOrDefault(AnswerMode.Quality),
+        startedMessageId = payload.optLong("started_message_id", 0L).coerceAtLeast(0L),
+        status = runCatching { AgentMissionStatus.valueOf(payload.optString("status")) }
+            .getOrDefault(AgentMissionStatus.Paused),
+        completedActions = payload.optInt("completed_actions", 0).coerceAtLeast(0),
+        maxActions = payload.optInt("max_actions", 120).coerceIn(1, 120),
+        writtenBytes = payload.optLong("written_bytes", 0L).coerceAtLeast(0L),
+        maxWriteBytes = payload.optLong("max_write_bytes", 1024L * 1024L)
+            .coerceIn(64L * 1024L, 2L * 1024L * 1024L),
+        guidance = buildList {
+            val entries = payload.optJSONArray("guidance") ?: JSONArray()
+            for (index in 0 until entries.length()) {
+                entries.optString(index).trim().takeIf(String::isNotBlank)?.let {
+                    add(it.take(2_000))
+                }
+            }
+        }.takeLast(12),
+        actionTrail = buildList {
+            val entries = payload.optJSONArray("action_trail") ?: JSONArray()
+            for (index in 0 until entries.length()) {
+                entries.optString(index).trim().takeIf(String::isNotBlank)?.let {
+                    add(it.take(800))
+                }
+            }
+        }.takeLast(120),
+        lastAction = payload.optString("last_action").take(700),
+        lastResult = payload.optString("last_result").take(2_000),
+        updatedAt = payload.optString("updated_at"),
+    )
+
+    private fun updateActiveSessionTask(mission: AgentMissionCheckpoint) {
+        val sessionId = activeSessionId(writableDatabase)
+        val currentTask = if (mission.active) {
+            "${mission.id}: ${compact(mission.objective, 4_000)}"
+        } else {
+            ""
+        }
+        writableDatabase.execSQL(
+            "UPDATE sessions SET current_task=?,active_project=?,updated_at=? WHERE id=?",
+            arrayOf(currentTask, mission.rootPath, now(), sessionId),
+        )
+    }
+
+    private fun recentMissionEvents(mission: AgentMissionCheckpoint): List<String> {
+        val sessionId = activeSessionId(writableDatabase)
+        return readableDatabase.rawQuery(
+            """
+            SELECT action,path,result FROM project_events
+            WHERE session_id=? AND (path=? OR path LIKE ?)
+            ORDER BY id DESC LIMIT 24
+            """.trimIndent(),
+            arrayOf(sessionId, mission.rootPath, "${mission.rootPath}/%"),
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    add(
+                        "${cursor.getString(0)} ${cursor.getString(1)} — " +
+                            compact(cursor.getString(2), 320),
+                    )
+                }
+            }.asReversed()
+        }
+    }
+
+    private fun missionId(objective: String): String = Regex("\\b[A-Za-z]{2,8}-\\d{1,6}\\b")
+        .find(objective)
+        ?.value
+        ?.uppercase(Locale.ROOT)
+        ?: "LF-${UUID.randomUUID().toString().take(8).uppercase(Locale.ROOT)}"
 
     private fun profilesEquivalent(left: InteractionProfile, right: InteractionProfile): Boolean =
         InteractionTrait.entries.all { left.valueOf(it) == right.valueOf(it) } &&

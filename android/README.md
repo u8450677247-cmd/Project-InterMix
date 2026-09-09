@@ -2,8 +2,11 @@
 
 This module is the private Pixel 10 Pro reference cockpit for Project Intermix.
 The original disconnected shell has passed its first device test. The current
-candidate combines the stable E4B LiteRT-LM boundary with the first native
-Memory Matrix and controller-mediated project workspace.
+`0.8.1-fluorescent-forge` candidate combines the stable E4B LiteRT-LM boundary with
+the native Memory Matrix, controller-mediated project workspace, and the first
+checkpointed long-form work-session loop. Its cyan–magenta–violet spectral
+glass pass concentrates fluorescence on focus, mode, code, and mission progress
+while preserving neutral long-form reading surfaces.
 
 ## What runs in this candidate
 
@@ -27,13 +30,17 @@ Memory Matrix and controller-mediated project workspace.
   undo, and deterministic General/Continuity/Project context selection;
 - a persisted Storage Access Framework project tree with automatic list/read
   tools, approval-gated create/write/mkdir actions, and pre-write snapshots;
+- a dedicated Long Forge workspace conversation that accepts one complete
+  objective, up to 120 scoped controller actions, queued mid-run guidance,
+  periodic Matrix context rebuilding, recursive-loop detection, and durable
+  pause/resume checkpoints;
 - a real Agents approval queue plus pin/forget controls in the Matrix surface;
 - custom destination icons that preserve the cyan-purple cockpit language;
 - actual Android `MemAvailable` and categorical thermal-pressure signals; and
 - thermal-aware visual motion and model initialization.
 
 The app still has no online grounding, Android provider vault, Termux command
-bridge, Kokoro voice, or long-running foreground agent service. E2B has a
+bridge, Kokoro voice, isolated code runner, or unattended scheduler. E2B has a
 fingerprint-locked Tensor G5 import and NPU route, but remains device-evidence
 gated rather than a general fallback.
 Those surfaces remain visibly unavailable instead of simulating success.
@@ -46,9 +53,12 @@ initializing. The copied file is named by its SHA-256 digest and stored beneath
 `noBackupFilesDir/models`; the external source is never executed in place.
 
 Workspace access uses a separate persisted SAF tree chosen in Workspace Lens.
-Choosing an Internal Storage folder grants reach only within that tree. Reads
-can be controller-executed; file creation, replacement, and directory creation
-must be approved in Agents. Deletion remains disabled in this candidate.
+Choosing an Internal Storage folder grants reach only within that tree. In
+ordinary Chat, reads can be controller-executed while file creation,
+replacement, and directory creation must be approved in Agents. Starting a
+Long Forge work session visibly grants those three mutation types inside one
+named subdirectory for at most 120 actions and 1 MiB of attempted write content.
+Deletion remains disabled in this candidate.
 
 For the current Termux E4B package, make a temporary picker-visible copy:
 
@@ -142,6 +152,11 @@ bash tools/termux_dogfood_update.sh --open
    Matrix and influences a relevant later turn.
 10. Connect a disposable project tree, ask chat to list and read a file, then
     request an edit and verify no bytes change before approval in Agents.
+11. Open Workspace → Work Session, give a disposable ASCII subdirectory and a
+    multi-file objective, then verify several actions complete without a manual
+    resume between files. Queue guidance while it runs, press STOP, and verify
+    explicit Resume continues from the Matrix checkpoint rather than recent
+    chat guesses.
 
 Do not import a live Termux SQLite database. A later bridge must use a reviewed
 export so two runtimes never concurrently open the same database. The next

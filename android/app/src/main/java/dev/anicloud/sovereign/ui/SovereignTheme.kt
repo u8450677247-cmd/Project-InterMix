@@ -11,17 +11,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import dev.anicloud.sovereign.prototype.Appearance
 
-val Obsidian = Color(0xFF070A12)
-val Smoked = Color(0xD90C1422)
-val SmokedDeep = Color(0xCC09101C)
-val HorizonCyan = Color(0xFF39D5FF)
-val CognitionViolet = Color(0xFFA970FF)
-val SoftViolet = Color(0xFFC39AFF)
+val Obsidian = Color(0xFF05070E)
+val Smoked = Color(0xDC0B1322)
+val SmokedDeep = Color(0xE4080D19)
+val HorizonCyan = Color(0xFF25F4FF)
+val CognitionViolet = Color(0xFFA855FF)
+val PulseMagenta = Color(0xFFFF2BD6)
+val SoftViolet = Color(0xFFD0A3FF)
 val ResonanceMint = Color(0xFF67E8C2)
 val WaitingAmber = Color(0xFFFFCA6B)
 val InterventionCoral = Color(0xFFFF6F91)
-val PrimaryText = Color(0xFFE7EDF5)
-val MutedText = Color(0xFF8492A8)
+val PrimaryText = Color(0xFFF0F5FC)
+val MutedText = Color(0xFF94A2B8)
 
 private val SovereignDarkScheme = darkColorScheme(
     primary = HorizonCyan,
@@ -37,7 +38,7 @@ private val SovereignDarkScheme = darkColorScheme(
     onSurfaceVariant = MutedText,
     error = InterventionCoral,
     onError = Obsidian,
-    outline = Color(0x993A5477),
+    outline = Color(0xA34A6388),
 )
 
 private val SovereignShapes = Shapes(

@@ -1,6 +1,6 @@
 # Sovereign Glass Android design language
 
-Status: version 0.1 design contract for the native Project Intermix APK.
+Status: version 0.2 design contract for the native Project Intermix APK.
 
 Sovereign Glass is the internal name of the AniCloudAI interface system, not a
 trademark decision. The Pixel 10 Pro is the reference canvas, but the rules
@@ -27,21 +27,49 @@ check. The prototype package identity remains provisional until release review.
 
 | Token | Value | Role |
 |---|---:|---|
-| Obsidian | `#070A12` | Primary canvas |
-| Smoked | `#0C1422` | Raised panels and opaque blur fallback |
-| Smoked deep | `#09101C` | Navigation and system surfaces |
-| Horizon cyan | `#39D5FF` | Grounded facts, focus, active controls |
-| Cognition violet | `#A970FF` | User intent, memory, model handoff |
-| Soft violet | `#C39AFF` | Secondary cognition accents |
+| Obsidian | `#05070E` | Primary canvas |
+| Smoked | `#0B1322` | Raised panels and opaque blur fallback |
+| Smoked deep | `#080D19` | Navigation and system surfaces |
+| Horizon cyan | `#25F4FF` | Grounded facts, focus, active controls |
+| Cognition violet | `#A855FF` | Memory, model depth, quality posture |
+| Pulse magenta | `#FF2BD6` | User intent, active agent work, current phase |
+| Soft violet | `#D0A3FF` | Secondary cognition accents |
 | Resonance mint | `#67E8C2` | Ready, verified, completed |
 | Waiting amber | `#FFCA6B` | Waiting, degraded, attention |
 | Intervention coral | `#FF6F91` | Stop, corruption, destructive review |
-| Primary text | `#E7EDF5` | Main readable content |
-| Muted text | `#8492A8` | Metadata and secondary labels |
+| Primary text | `#F0F5FC` | Main readable content |
+| Muted text | `#94A2B8` | Metadata and secondary labels |
 
 Color is never the only state carrier. Every state also receives a stable icon
 and text label. Contrast must be tested against the actual composited surface,
 including any wallpaper or content visible behind a translucent layer.
+
+### Fluorescent attention contract
+
+The cyan–violet–magenta triad is intentionally at full chroma, but not at full
+area. Fluorescence is a scarce attention signal rather than the reading color:
+
+- **cyan** identifies focus, code structure, grounded evidence, and navigable
+  workspace state;
+- **magenta** identifies current intent, the selected adaptive posture, active
+  Long Forge work, and the present phase;
+- **violet** identifies memory, model depth, future phases, and reflective
+  context; and
+- neutral near-white carries paragraphs and code-body defaults while dark smoke
+  carries large surfaces.
+
+Large saturated fills and fluorescent paragraph text are prohibited. Material's
+dark-theme guidance warns that high-saturation color on dark surfaces can create
+optical vibration; the cockpit therefore spends maximum chroma on thin rims,
+small badges, progress fills, focus indicators, and primary actions. A normal
+screen should remain mostly quiet obsidian and smoke, with luminous color making
+state changes immediately locatable rather than permanently demanding attention.
+
+The reward loop is informational, not casino-like: a task earns one short state
+transition when it advances; Long Forge exposes `BRIEF → PLAN → BUILD → VERIFY →
+HANDOFF`; completion changes both symbol and label; and no decorative pulse claims
+work that the controller has not verified. There are no streaks, confetti,
+variable rewards, or urgency animation.
 
 Light mode is a deliberate counterpart rather than an inverted afterthought.
 Its workspace uses pale baby blue (`#EAF6FF`), near-white blue surfaces
@@ -60,6 +88,9 @@ light-surface variants where required for contrast.
   fallback. Reduce-transparency, battery, accessibility, or thermal signals may
   select that fallback without removing information.
 - Cyan and violet edge light establishes hierarchy; shadows stay soft and sparse.
+- Magenta joins cyan and violet only at selected or active edges. The resulting
+  spectral rim is the primary glass cue; the implementation does not claim live
+  optical blur while the inference engine owns the GPU.
 - The app must remain complete and legible when system blur is unavailable.
 
 ## Type and spacing
@@ -71,8 +102,8 @@ light-surface variants where required for contrast.
 - Dynamic type is supported without clipping critical controls.
 - Paragraph rhythm and intentional blank lines survive composition, storage,
   restoration, and rendering.
-- Touch targets meet Android accessibility guidance even when the visible icon
-  is compact.
+- Interactive targets are at least `48dp` even when their visible icon is
+  compact, following Android Compose accessibility guidance.
 
 ## Reference surfaces
 
@@ -147,6 +178,8 @@ the same semantic navigation destinations.
 ## Motion and haptics
 
 - Standard transitions target roughly 120–220 ms and never block input.
+- State transitions use eased motion; linear motion is reserved for genuinely
+  continuous progress. Motion reinforces hierarchy and never delays an action.
 - Streaming text does not pulse, shimmer, or reflow unrelated content.
 - Syntax highlighting uses an identity offset map so typing, cursor movement,
   selection, and hardware-keyboard shortcuts remain native and predictable.
@@ -198,6 +231,20 @@ permit it; **Opaque** remains a first-class appearance rather than an error mode
 - Critical controls remain reachable at large font and display scaling.
 - Exact values have copy actions and do not rely on abbreviated visual labels.
 - Flashing, rapid color cycling, and color-only warnings are prohibited.
+- Normal text targets at least `4.5:1` contrast, large text and non-text UI
+  boundaries at least `3:1`, measured against the final composited surface.
+- Keyboard focus remains visible and is not obscured by the composer, rails, or
+  sticky status chrome.
+
+The numerical accessibility thresholds follow WCAG 2.2 and Android's Compose
+accessibility defaults. Motion timing and dark-surface chroma decisions follow
+the public Material guidance:
+
+- <https://developer.android.com/develop/ui/compose/accessibility/api-defaults>
+- <https://www.w3.org/TR/WCAG22/>
+- <https://www.w3.org/WAI/standards-guidelines/wcag/new-in-22/>
+- <https://m2.material.io/design/color/dark-theme.html>
+- <https://m3.material.io/styles/motion/easing-and-duration>
 
 ## Privacy surfaces
 

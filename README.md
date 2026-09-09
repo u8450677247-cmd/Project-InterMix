@@ -26,6 +26,7 @@ This repository is a developer preview with a functional native Android dogfood 
 - **Truth before fluency:** volatile questions can trigger web research; weak evidence produces an error or limitation instead of a confident invention.
 - **Adaptive grounding:** difficult lookups use one controller-planned primary query and, only when needed, one bounded parallel follow-up round for corroboration, implementation detail, and limitations.
 - **Bounded autonomy:** the Core may read, write, and test inside one fixed workspace. Deletions require explicit review and hash revalidation.
+- **Long Forge work sessions:** one scoped objective can continue for up to 120 controller actions with foreground STOP, Matrix checkpoints, recursive-loop detection, and restart-safe pause/resume.
 - **Resource awareness:** a resident LiteRT-LM engine is reused while memory permits, then unloaded under pressure or sustained inactivity.
 - **Optional dual-model routing:** a smaller E2B librarian can handle ordinary conversation and prepare bounded context for E4B reasoning while only one model stays resident.
 - **Recoverable generation:** the phone UI stays interactive during inference, exposes STOP, caps native output, and quarantines mechanically corrupted or interrupted replies before memory or voice.
@@ -43,7 +44,7 @@ This repository is a developer preview with a functional native Android dogfood 
 | Cold/idle available memory | Approximately 7.0–7.6 GiB in the owner's test environment |
 | Resident-hot available memory | Approximately 2.6–3.7 GiB in the owner's test environment |
 | Cooling used during long tests | Optional Black Shark Magnetic/FunCooler 6 Pro (BR62); approximately 25 °C owner-observed device temperature |
-| Test suite | 93 deterministic public-alpha checks across memory, routing, grounding, cancellation, stream integrity, inference, workspace, release safety, and interface behavior |
+| Test suite | 109 deterministic public-alpha checks across memory, routing, grounding, cancellation, stream integrity, inference, workspace, release safety, and interface behavior |
 
 These are observations, not guarantees. Android memory pressure, other applications, firmware, drivers, ambient temperature, model build, and compiled caches can materially change the result.
 
@@ -58,7 +59,7 @@ These are observations, not guarantees. Android memory pressure, other applicati
 
 Google's current Gemma 4 documentation includes E2B and E4B benchmarks on the Galaxy S26 Ultra, which makes it a compelling test target—not a verified Intermix device. LiteRT-LM itself supports Python on Android, Linux, macOS, and Windows, but each Intermix backend and interface path still needs its own report.
 
-See [the device matrix](docs/DEVICE_MATRIX.md) before making or repeating a compatibility claim, [the installation guide](docs/INSTALLATION.md) before testing a new device, the [Tensor G5 NPU adapter](docs/ANDROID_TENSOR_NPU.md), the [Sovereign Glass design contract](docs/ANDROID_DESIGN.md), and the [AniCloudAI product contract](docs/ANDROID_PRODUCT_CONTRACT.md) for the native Android direction.
+See [the device matrix](docs/DEVICE_MATRIX.md) before making or repeating a compatibility claim, [the installation guide](docs/INSTALLATION.md) before testing a new device, the [Tensor G5 NPU adapter](docs/ANDROID_TENSOR_NPU.md), the [Sovereign Glass design contract](docs/ANDROID_DESIGN.md), the [native agent roadmap](docs/ANDROID_AGENT_ROADMAP.md), and the [AniCloudAI product contract](docs/ANDROID_PRODUCT_CONTRACT.md) for the native Android direction.
 
 ## Install
 
@@ -79,7 +80,7 @@ the deterministic controller routes ordinary conversation through it and uses a
 bounded E2B intent/memory handoff before difficult E4B turns. The engine closes
 one profile before loading the other; this is not a simultaneous two-model RAM load.
 
-The native Android `0.7.0-interaction-matrix` candidate has separate import slots:
+The native Android `0.8.1-fluorescent-forge` candidate has separate import slots:
 
 - **E2B conversation + Memory Matrix:** only the reviewed
   `gemma-4-E2B-it_Google_Tensor_G5.litertlm` fingerprint may use the Google

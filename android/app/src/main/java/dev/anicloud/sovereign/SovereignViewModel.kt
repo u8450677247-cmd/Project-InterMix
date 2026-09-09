@@ -29,6 +29,18 @@ private const val FirstTokenTimeoutMillis = 180_000L
 private const val InterChunkTimeoutMillis = 60_000L
 private const val StreamUiPublishMillis = 90L
 private const val MaxControllerCycles = 3
+private const val MaxMissionControllerCycles = 121
+private const val MissionConversationResetInterval = 4
+
+private sealed interface MissionCommand {
+    data class Run(val rootPath: String, val objective: String) : MissionCommand
+    data class Guide(val instruction: String) : MissionCommand
+    data object Resume : MissionCommand
+    data object Status : MissionCommand
+    data object Pause : MissionCommand
+    data object Cancel : MissionCommand
+    data class Invalid(val detail: String) : MissionCommand
+}
 
 /** Owns the resident model, deterministic controllers, and durable cockpit state. */
 class SovereignViewModel(application: Application) : AndroidViewModel(application) {
@@ -65,6 +77,16 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     init {
+        runCatching {
+            memoryMatrix.activeAgentMission()
+                ?.takeIf { it.status == AgentMissionStatus.Running }
+                ?.let {
+                    memoryMatrix.setAgentMissionStatus(
+                        AgentMissionStatus.Paused,
+                        "Recovered after the Android process restarted; resume explicitly to continue.",
+                    )
+                }
+        }
         refreshRuntimeState()
         recordThermalStatus(powerManager.currentThermalStatus)
         powerManager.addThermalStatusListener(application.mainExecutor, thermalListener)
@@ -115,15 +137,116 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         if (prompt.isBlank() || !_state.value.canSend || generationJob?.isActive == true) return
         val serial = ++generationSerial
         generationJob = viewModelScope.launch {
-            val userMessage = commitMessage(ChatSpeaker.User, prompt)
+            val parsedMissionCommand = parseMissionCommand(prompt)
+            val userMessage = commitMessage(
+                ChatSpeaker.User,
+                prompt,
+                source = if (parsedMissionCommand == null) "chat" else "mission",
+            )
             if (serial != generationSerial) return@launch
 
-            if (handleLocalCommand(prompt, userMessage.id, serial)) {
+            var mission: AgentMissionCheckpoint? = null
+            var effectivePrompt = prompt
+            var effectiveMode = mode
+            when (val command = parsedMissionCommand) {
+                is MissionCommand.Run -> {
+                    val started = runCatching {
+                        withContext(Dispatchers.IO) {
+                            memoryMatrix.startAgentMission(
+                                command.rootPath,
+                                command.objective,
+                                mode,
+                                startedMessageId = userMessage.id,
+                            )
+                        }
+                    }.getOrElse { failure ->
+                        completeControllerResponse("[BLOCKED] ${safeFailure(failure)}")
+                        generationJob = null
+                        return@launch
+                    }
+                    mission = started
+                    effectivePrompt = started.objective
+                    effectiveMode = started.mode
+                    refreshRuntimeState()
+                }
+
+                MissionCommand.Resume -> {
+                    val resumed = runCatching {
+                        withContext(Dispatchers.IO) { memoryMatrix.resumeAgentMission() }
+                    }.getOrElse { failure ->
+                        completeControllerResponse("[BLOCKED] ${safeFailure(failure)}")
+                        generationJob = null
+                        return@launch
+                    }
+                    mission = resumed
+                    effectivePrompt = "Resume ${resumed.id} from its controller-owned checkpoint. " +
+                        "Verify the last result and continue until complete or genuinely blocked."
+                    effectiveMode = resumed.mode
+                    refreshRuntimeState()
+                }
+
+                is MissionCommand.Guide -> {
+                    val guided = runCatching {
+                        withContext(Dispatchers.IO) {
+                            memoryMatrix.guideAgentMission(command.instruction)
+                        }
+                    }.getOrElse { failure ->
+                        completeControllerResponse("[BLOCKED] ${safeFailure(failure)}")
+                        generationJob = null
+                        return@launch
+                    }
+                    mission = guided
+                    effectivePrompt = "Apply this user guidance without losing ${guided.id}: " +
+                        "${command.instruction}\nThen continue the durable mission until complete or genuinely blocked."
+                    effectiveMode = guided.mode
+                    refreshRuntimeState()
+                }
+
+                MissionCommand.Status -> {
+                    completeControllerResponse(agentMissionReport(memoryMatrix.activeAgentMission()))
+                    generationJob = null
+                    return@launch
+                }
+
+                MissionCommand.Pause -> {
+                    val paused = withContext(Dispatchers.IO) {
+                        memoryMatrix.setAgentMissionStatus(
+                            AgentMissionStatus.Paused,
+                            "Paused explicitly by the user.",
+                        )
+                    }
+                    completeControllerResponse(agentMissionReport(paused))
+                    generationJob = null
+                    return@launch
+                }
+
+                MissionCommand.Cancel -> {
+                    val cancelled = withContext(Dispatchers.IO) {
+                        memoryMatrix.setAgentMissionStatus(
+                            AgentMissionStatus.Cancelled,
+                            "Cancelled explicitly by the user. Existing files were retained.",
+                        )
+                    }
+                    completeControllerResponse(agentMissionReport(cancelled))
+                    generationJob = null
+                    return@launch
+                }
+
+                is MissionCommand.Invalid -> {
+                    completeControllerResponse("[BLOCKED] ${command.detail}\n\n${missionUsage()}")
+                    generationJob = null
+                    return@launch
+                }
+
+                null -> Unit
+            }
+
+            if (handleLocalCommand(effectivePrompt, userMessage.id, serial)) {
                 generationJob = null
                 return@launch
             }
 
-            val requestedRoute = selectRoute(mode, prompt) ?: run {
+            val requestedRoute = selectRoute(effectiveMode, effectivePrompt) ?: run {
                 _state.update {
                     it.copy(
                         stage = ModelStage.Error,
@@ -144,7 +267,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                 )
             }
 
-            val explicitProfileAdjustments = InteractionProfilePolicy.detectExplicitAdjustments(prompt)
+            val explicitProfileAdjustments = InteractionProfilePolicy.detectExplicitAdjustments(effectivePrompt)
             val explicitProfileResult = withContext(Dispatchers.IO) {
                 memoryMatrix.applyExplicitProfileAdjustments(
                     explicitProfileAdjustments,
@@ -165,7 +288,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
 
             val startedAt = SystemClock.elapsedRealtime()
             try {
-                val activeRoute = ensureRoute(requestedRoute, mode)
+                val activeRoute = ensureRoute(requestedRoute, effectiveMode)
                 _state.update {
                     it.copy(
                         stage = ModelStage.Generating,
@@ -175,25 +298,27 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                 }
                 runtime.resetConversation()
-                var request = buildTurnPrompt(prompt, userMessage.id, mode)
+                var request = buildTurnPrompt(effectivePrompt, userMessage.id, effectiveMode)
                 var controllerCycle = 0
                 var completedResponse = ""
                 var storedMemories = 0
                 var profileUpdates = if (explicitProfileResult.changed) 1 else 0
                 var profileProposalConsumed = false
-                val seenActions = mutableSetOf<String>()
+                var previousActionSignature: String? = null
+                var consecutiveToolFailures = 0
 
-                while (controllerCycle < MaxControllerCycles) {
+                val controllerLimit = if (mission == null) MaxControllerCycles else MaxMissionControllerCycles
+                while (controllerCycle < controllerLimit) {
                     val raw = collectNativeResponse(
                         request = request,
-                        mode = mode,
+                        mode = effectiveMode,
                         serial = serial,
                         startedAt = startedAt,
                         measureFirstToken = controllerCycle == 0,
                     )
                     val parsed = ControllerProtocol.parse(raw)
                     val memoryResult = withContext(Dispatchers.IO) {
-                        memoryMatrix.applyMemoryProposal(parsed.memoryPayload, prompt, userMessage.id)
+                        memoryMatrix.applyMemoryProposal(parsed.memoryPayload, effectivePrompt, userMessage.id)
                     }
                     storedMemories += memoryResult.stored
                     if (explicitProfileAdjustments.isEmpty() && !profileProposalConsumed &&
@@ -203,7 +328,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                         val profileResult = withContext(Dispatchers.IO) {
                             memoryMatrix.applyProfileProposal(
                                 parsed.profilePayload,
-                                prompt,
+                                effectivePrompt,
                                 userMessage.id,
                             )
                         }
@@ -214,19 +339,57 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                     }
                     val proposed = parsed.workspaceAction
                     if (proposed == null) {
-                        completedResponse = parsed.visibleText
+                        val latestMission = mission?.let {
+                            withContext(Dispatchers.IO) { memoryMatrix.activeAgentMission() }
+                        }
+                        if (
+                            latestMission?.status == AgentMissionStatus.Running &&
+                            latestMission.guidance != mission?.guidance
+                        ) {
+                            mission = latestMission
+                            runtime.resetConversation()
+                            request = buildTurnPrompt(
+                                "Apply the newly queued user guidance to ${latestMission.id}, then " +
+                                    "continue from its durable checkpoint.",
+                                userMessage.id,
+                                effectiveMode,
+                            )
+                            _state.update {
+                                it.copy(
+                                    detail = "${latestMission.id} · queued guidance accepted · continuing",
+                                    streamText = "",
+                                )
+                            }
+                            continue
+                        }
+                        completedResponse = parsed.visibleText.ifBlank {
+                            if (mission == null) "The native response contained no visible result." else
+                                "[PAUSED] ${mission?.id} yielded without a next controller action."
+                        }
+                        mission?.let { active ->
+                            val status = if (completedResponse.contains("[MISSION_COMPLETE]", ignoreCase = true)) {
+                                AgentMissionStatus.Completed
+                            } else {
+                                AgentMissionStatus.Paused
+                            }
+                            mission = withContext(Dispatchers.IO) {
+                                memoryMatrix.setAgentMissionStatus(status, completedResponse)
+                            } ?: active.copy(status = status)
+                            refreshRuntimeState()
+                        }
                         break
                     }
 
                     val normalized = normalizeProposal(proposed)
                     val signature = "${normalized.kind.wireName}:${normalized.path}:${normalized.content.hashCode()}"
-                    if (!seenActions.add(signature)) {
+                    if (signature == previousActionSignature) {
                         throw QuarantinedGeneration(
                             IntegrityViolation("tool-loop", "The model repeated the same workspace action."),
                         )
                     }
+                    previousActionSignature = signature
 
-                    if (normalized.kind.requiresApproval) {
+                    if (normalized.kind.requiresApproval && mission == null) {
                         val actionId = withContext(Dispatchers.IO) {
                             memoryMatrix.queueWorkspaceAction(normalized)
                         }
@@ -238,19 +401,94 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                         break
                     }
 
+                    mission?.let { validateMissionProposal(normalized, it) }
+                    var auditActionId: Long? = null
+                    if (mission != null && normalized.kind.requiresApproval) {
+                        auditActionId = withContext(Dispatchers.IO) {
+                            memoryMatrix.queueWorkspaceAction(normalized)
+                        }
+                    }
                     val toolResult = runCatching {
-                        workspaceRepository.executeReadOnly(normalized)
+                        if (normalized.kind.requiresApproval) {
+                            workspaceRepository.executeApproved(normalized)
+                        } else {
+                            workspaceRepository.executeReadOnly(normalized)
+                        }
                     }
                     toolResult.onSuccess { result ->
                         withContext(Dispatchers.IO) {
                             memoryMatrix.recordProjectEvent(normalized.kind.wireName, normalized.path, result)
+                            auditActionId?.let {
+                                memoryMatrix.resolveWorkspaceAction(
+                                    it,
+                                    "approved",
+                                    "Executed by scoped long-form mission grant. ${result.detail}",
+                                )
+                            }
+                            if (mission != null) {
+                                mission = memoryMatrix.recordAgentMissionAction(normalized, result)
+                            }
+                        }
+                    }.onFailure { failure ->
+                        withContext(Dispatchers.IO) {
+                            auditActionId?.let {
+                                memoryMatrix.resolveWorkspaceAction(it, "failed", safeFailure(failure))
+                            }
+                            if (mission != null) {
+                                val failedResult = WorkspaceActionResult(
+                                    detail = "FAILED: ${safeFailure(failure)}",
+                                )
+                                memoryMatrix.recordProjectEvent(
+                                    "${normalized.kind.wireName}_failed",
+                                    normalized.path,
+                                    failedResult,
+                                )
+                                mission = memoryMatrix.recordAgentMissionAction(normalized, failedResult)
+                            }
                         }
                     }
                     controllerCycle++
-                    if (controllerCycle >= MaxControllerCycles) {
-                        completedResponse = parsed.visibleText.ifBlank {
-                            "Stopped after $MaxControllerCycles bounded workspace cycles. " +
+                    if (toolResult.isFailure) {
+                        val failure = toolResult.exceptionOrNull() ?: error("Unknown workspace failure")
+                        if (mission == null) {
+                            completedResponse = "[BLOCKED] Workspace action stopped safely: ${safeFailure(failure)}"
+                            refreshRuntimeState()
+                            break
+                        }
+                        consecutiveToolFailures++
+                        if (consecutiveToolFailures >= 3) {
+                            completedResponse = "[BLOCKED] ${mission?.id} paused after three consecutive " +
+                                "workspace failures: ${safeFailure(failure)}"
+                            mission = withContext(Dispatchers.IO) {
+                                memoryMatrix.setAgentMissionStatus(
+                                    AgentMissionStatus.Paused,
+                                    completedResponse,
+                                )
+                            }
+                            refreshRuntimeState()
+                            break
+                        }
+                        refreshRuntimeState()
+                        request = missionToolFollowUp(normalized, toolResult, mission!!)
+                        continue
+                    }
+                    consecutiveToolFailures = 0
+                    if (controllerCycle >= controllerLimit) {
+                        completedResponse = if (mission == null) {
+                            "Stopped after $controllerLimit bounded workspace cycles. " +
                                 "Please narrow the request or name the next file."
+                        } else {
+                            "[PAUSED] ${mission?.id} reached its $controllerLimit-cycle run boundary. " +
+                                "Its checkpoint is durable; use /mission resume to continue."
+                        }
+                        if (mission != null) {
+                            mission = withContext(Dispatchers.IO) {
+                                memoryMatrix.setAgentMissionStatus(
+                                    AgentMissionStatus.Paused,
+                                    completedResponse,
+                                )
+                            }
+                            refreshRuntimeState()
                         }
                         break
                     }
@@ -263,7 +501,20 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                             streamText = "",
                         )
                     }
-                    request = toolFollowUp(normalized, toolResult)
+                    refreshRuntimeState()
+                    request = if (mission != null && controllerCycle % MissionConversationResetInterval == 0) {
+                        runtime.resetConversation()
+                        buildTurnPrompt(
+                            "Continue ${mission?.id} from its durable checkpoint after the verified " +
+                                "${normalized.kind.wireName} result.",
+                            userMessage.id,
+                            effectiveMode,
+                        ) + "\n\n" + toolFollowUp(normalized, toolResult)
+                    } else if (mission != null) {
+                        missionToolFollowUp(normalized, toolResult, mission!!)
+                    } else {
+                        toolFollowUp(normalized, toolResult)
+                    }
                 }
 
                 if (completedResponse.isBlank()) {
@@ -288,7 +539,11 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                 }
 
                 if (serial == generationSerial) {
-                    commitMessage(ChatSpeaker.Core, completedResponse)
+                    commitMessage(
+                        ChatSpeaker.Core,
+                        completedResponse,
+                        source = if (mission == null) "chat" else "mission",
+                    )
                     _state.update {
                         it.copy(
                             stage = ModelStage.Ready,
@@ -307,6 +562,15 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (quarantined: QuarantinedGeneration) {
+                mission?.let {
+                    withContext(Dispatchers.IO) {
+                        memoryMatrix.setAgentMissionStatus(
+                            AgentMissionStatus.Paused,
+                            "Paused by integrity guard (${quarantined.violation.code}): " +
+                                quarantined.violation.detail,
+                        )
+                    }
+                }
                 if (serial == generationSerial) {
                     recoverFromGeneration(
                         serial = serial,
@@ -315,6 +579,14 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                 }
             } catch (failure: Throwable) {
+                mission?.let {
+                    withContext(Dispatchers.IO) {
+                        memoryMatrix.setAgentMissionStatus(
+                            AgentMissionStatus.Paused,
+                            "Paused after controller failure: ${safeFailure(failure)}",
+                        )
+                    }
+                }
                 if (serial == generationSerial) {
                     recoverFromGeneration(
                         serial = serial,
@@ -395,12 +667,42 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         stopGeneration("Stopped by user. Partial output was discarded and not committed.")
     }
 
+    fun guideActiveMission(instruction: String) {
+        val clean = instruction.replace("\u0000", "").trim().take(2_000)
+        if (clean.isBlank()) return
+        viewModelScope.launch {
+            runCatching {
+                val guided = withContext(Dispatchers.IO) {
+                    memoryMatrix.guideAgentMission(clean)
+                }
+                commitMessage(ChatSpeaker.User, "[GUIDANCE] $clean", source = "mission")
+                _state.update {
+                    it.copy(
+                        detail = if (generationJob?.isActive == true) {
+                            "${guided.id} · guidance queued for the next safe controller boundary"
+                        } else {
+                            "${guided.id} · guidance saved; resume the work session when ready"
+                        },
+                    )
+                }
+                refreshRuntimeState()
+            }.onFailure { failure ->
+                _state.update { it.copy(detail = "Mission guidance rejected: ${safeFailure(failure)}") }
+            }
+        }
+    }
+
     private fun stopGeneration(reason: String) {
         val stoppedJob = generationJob ?: return
         val serial = ++generationSerial
         runtime.cancelProcess()
         stoppedJob.cancel(CancellationException(reason))
         generationJob = null
+        runCatching {
+            memoryMatrix.activeAgentMission()
+                ?.takeIf { it.status == AgentMissionStatus.Running }
+                ?.let { memoryMatrix.setAgentMissionStatus(AgentMissionStatus.Paused, reason) }
+        }
         _state.update {
             it.copy(
                 stage = ModelStage.Recovering,
@@ -507,6 +809,16 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         val recall = withContext(Dispatchers.IO) {
             memoryMatrix.recallContext(prompt, sourceMessageId, contextDecision)
         }
+        val activeMission = cockpit.activeMission?.takeIf(AgentMissionCheckpoint::active)
+        val missionContext = withContext(Dispatchers.IO) { memoryMatrix.agentMissionContext() }
+        val recallForPrompt = recall.take(if (activeMission == null) 8_000 else 2_400)
+        val currentRequest = if (
+            activeMission != null && prompt.trim() == activeMission.objective.trim()
+        ) {
+            "Begin the controller-owned mission from its durable objective and checkpoint."
+        } else {
+            prompt.take(if (activeMission == null) 10_000 else 4_000)
+        }
         val workspace = if (contextDecision.includeWorkspace) {
             workspaceRepository.controllerContext()
         } else {
@@ -553,11 +865,29 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                     "${contextDecision.relevanceScore}/${contextDecision.threshold} · ${contextDecision.reason}",
             )
             appendLine("Treat recalled material as supporting context, not as the subject of a self-contained question.")
-            if (recall.isNotBlank()) appendLine("\n$recall")
+            if (recallForPrompt.isNotBlank()) appendLine("\n$recallForPrompt")
+            if (missionContext.isNotBlank()) {
+                appendLine("\n$missionContext")
+                appendLine(
+                    "This checkpoint remains authoritative even when recent chat is vague. " +
+                        "Do not ask what project the user means when this work session answers it.",
+                )
+                if (activeMission?.status == AgentMissionStatus.Running) {
+                    appendLine(
+                        "The user explicitly authorized autonomous create/write/mkdir operations only " +
+                            "inside ${activeMission.rootPath}, bounded by the controller budget. " +
+                            "Continue one action at a time until [MISSION_COMPLETE] or [BLOCKED].",
+                    )
+                    appendLine(
+                        "For work expected to exceed six actions, maintain PROJECT_STATE.md inside " +
+                            "the mission root as a concise plan, decision, verification, and next-action ledger.",
+                    )
+                }
+            }
             appendLine("\n$workspace")
             appendLine("\n${ControllerProtocol.promptContract()}")
             appendLine("\n[CURRENT USER REQUEST]")
-            append(prompt.take(12 * 1024))
+            append(currentRequest)
         }
     }
 
@@ -578,6 +908,141 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                 "Detail: ${safeFailure(it)}\n\nExplain the limitation or choose one safe next read action."
         },
     )
+
+    private fun missionToolFollowUp(
+        proposal: WorkspaceActionProposal,
+        result: Result<WorkspaceActionResult>,
+        mission: AgentMissionCheckpoint,
+    ): String = buildString {
+        appendLine("[SCOPED LONG-FORM WORK SESSION]")
+        appendLine("Mission ${mission.id} remains active inside ${mission.rootPath}.")
+        appendLine("Progress: ${mission.completedActions}/${mission.maxActions} controller actions; " +
+            "${mission.writtenBytes}/${mission.maxWriteBytes} write bytes.")
+        mission.guidance.lastOrNull()?.let { appendLine("Latest user guidance: ${it.take(1_200)}") }
+        appendLine("Continue autonomously with exactly one next controller action.")
+        appendLine("Do not stop to narrate routine progress. If genuinely finished, return [MISSION_COMPLETE] " +
+            "with a concise verified handoff. If human input is essential, return [BLOCKED] with one question.")
+        appendLine()
+        append(toolFollowUp(proposal, result))
+    }
+
+    private fun validateMissionProposal(
+        proposal: WorkspaceActionProposal,
+        mission: AgentMissionCheckpoint,
+    ) {
+        require(mission.status == AgentMissionStatus.Running) { "Mission ${mission.id} is not running." }
+        require(mission.completedActions < mission.maxActions) {
+            "Mission ${mission.id} exhausted its ${mission.maxActions}-action grant."
+        }
+        require(
+            proposal.path.isBlank() ||
+                Regex("[A-Za-z0-9][A-Za-z0-9._/-]{0,511}").matches(proposal.path),
+        ) {
+            "Mission ${mission.id} rejected a malformed or non-ASCII controller path."
+        }
+        val pathSegments = proposal.path.split('/').filter(String::isNotBlank)
+        require(pathSegments.size <= 32) {
+            "Mission ${mission.id} rejected a recursively deep workspace path."
+        }
+        require(
+            pathSegments.windowed(3).none { segmentWindow ->
+                segmentWindow.map { it.lowercase() }.distinct().size == 1
+            },
+        ) {
+            "Mission ${mission.id} rejected a self-repeating directory path."
+        }
+        val nextSignature =
+            "${proposal.kind.wireName}:${proposal.path}:${proposal.content.hashCode()}"
+        require(!hasRecursiveActionTail(mission.actionTrail + nextSignature)) {
+            "Mission ${mission.id} paused after detecting a recursive controller-action pattern."
+        }
+        val insideScope = proposal.path == mission.rootPath ||
+            proposal.path.startsWith("${mission.rootPath}/")
+        require(insideScope) {
+            "Mission ${mission.id} proposed ${proposal.path.ifBlank { "." }} outside its authorized root " +
+                "${mission.rootPath}."
+        }
+        require(
+            proposal.path != mission.rootPath ||
+                proposal.kind in setOf(WorkspaceActionKind.CreateDirectory, WorkspaceActionKind.ListFiles),
+        ) {
+            "Mission ${mission.id} reserves its scoped root path for a directory."
+        }
+        val nextBytes = mission.writtenBytes + when (proposal.kind) {
+            WorkspaceActionKind.CreateFile, WorkspaceActionKind.WriteFile ->
+                proposal.content.toByteArray(Charsets.UTF_8).size.toLong()
+            else -> 0L
+        }
+        require(nextBytes <= mission.maxWriteBytes) {
+            "Mission ${mission.id} exceeded its ${mission.maxWriteBytes}-byte write grant."
+        }
+    }
+
+    private fun parseMissionCommand(raw: String): MissionCommand? {
+        val trimmed = raw.trim()
+        if (!trimmed.startsWith("/mission", ignoreCase = true)) return null
+        val remainder = trimmed.substringAfter(' ', "").trim()
+        if (remainder.equals("resume", ignoreCase = true)) return MissionCommand.Resume
+        if (remainder.equals("status", ignoreCase = true)) return MissionCommand.Status
+        if (remainder.equals("pause", ignoreCase = true) || remainder.equals("stop", ignoreCase = true)) {
+            return MissionCommand.Pause
+        }
+        if (remainder.equals("cancel", ignoreCase = true)) return MissionCommand.Cancel
+        if (remainder.startsWith("guide ", ignoreCase = true)) {
+            val instruction = remainder.substringAfter(' ').trim()
+            return if (instruction.isBlank()) {
+                MissionCommand.Invalid("Mission guidance cannot be empty.")
+            } else {
+                MissionCommand.Guide(instruction)
+            }
+        }
+        if (!remainder.startsWith("run ", ignoreCase = true)) {
+            return MissionCommand.Invalid("Choose run, guide, resume, status, pause, or cancel.")
+        }
+        val runBody = remainder.substringAfter(' ').trim()
+        val separator = runBody.indexOf("::")
+        if (separator <= 0) {
+            return MissionCommand.Invalid("A mission needs an explicit workspace root followed by :: and its objective.")
+        }
+        val root = runBody.substring(0, separator).trim()
+        val objective = runBody.substring(separator + 2).trim()
+        if (root.isBlank() || objective.isBlank()) {
+            return MissionCommand.Invalid("Both the scoped workspace root and mission objective are required.")
+        }
+        return MissionCommand.Run(root, objective)
+    }
+
+    private fun missionUsage(): String =
+        "`/mission run project-folder :: describe the complete long-form objective`\n\n" +
+            "The command grants up to 120 controller actions and 1 MiB of create/write content inside " +
+            "that exact folder. Every replacement retains a snapshot; deletion, execution, installs, " +
+            "network access, and paths outside the folder remain unavailable."
+
+    private fun agentMissionReport(mission: AgentMissionCheckpoint?): String = if (mission == null) {
+        "No long-form work-session checkpoint exists.\n\n${missionUsage()}"
+    } else {
+        buildString {
+            appendLine("# Work session ${mission.id}")
+            appendLine()
+            appendLine("- **Status:** ${mission.status.name}")
+            appendLine("- **Scope:** `${mission.rootPath}`")
+            appendLine("- **Mode:** ${mission.mode.label}")
+            appendLine("- **Actions:** ${mission.completedActions}/${mission.maxActions}")
+            appendLine("- **Written:** ${mission.writtenBytes}/${mission.maxWriteBytes} bytes")
+            if (mission.lastAction.isNotBlank()) appendLine("- **Last action:** `${mission.lastAction}`")
+            if (mission.lastResult.isNotBlank()) appendLine("- **Last result:** ${mission.lastResult}")
+            if (mission.guidance.isNotEmpty()) appendLine("- **Guidance entries:** ${mission.guidance.size}")
+            if (mission.active) append("\nUse `/mission resume`, `/mission pause`, or `/mission cancel`.")
+        }.trim()
+    }
+
+    private suspend fun completeControllerResponse(response: String) {
+        commitMessage(ChatSpeaker.Core, response, source = "mission")
+        _state.update {
+            it.copy(stage = ModelStage.Ready, detail = "Long-form work-session command complete", streamText = "")
+        }
+        refreshRuntimeState()
+    }
 
     private fun normalizeProposal(proposal: WorkspaceActionProposal): WorkspaceActionProposal {
         val path = normalizeWorkspacePath(
@@ -752,7 +1217,8 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
 
                 else -> "Local controller commands: /version, /capabilities, /models, /device, " +
                     "/memory, /remember <fact>, /profile, /why, /adapt, /undo-adaptation, " +
-                    "/files [path], /read <path>. " +
+                    "/files [path], /read <path>, /mission run <folder> :: <objective>, " +
+                    "/mission guide|resume|status|pause|cancel. " +
                     "Natural-language file requests can also invoke bounded workspace tools."
             }
         }.fold(
@@ -1048,7 +1514,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         source: String = "chat",
     ): ChatMessage {
         val id = withContext(Dispatchers.IO) { memoryMatrix.appendMessage(speaker, text, source) }
-        val message = ChatMessage(id, speaker, text.trim())
+        val message = ChatMessage(id, speaker, text.trim(), source)
         _state.update { state ->
             state.copy(messages = state.messages.filterNot { it.id < 0 } + message)
         }
@@ -1092,12 +1558,14 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
     private fun refreshRuntimeState() {
         val facts = deviceRuntimeFacts()
         val matrix = runCatching { memoryMatrix.snapshot() }.getOrDefault(_state.value.memoryMatrix)
+        val mission = runCatching { memoryMatrix.activeAgentMission() }.getOrNull()
         val pending = runCatching { memoryMatrix.pendingWorkspaceActions() }.getOrDefault(_state.value.pendingActions)
         val npu = AdaptiveRuntimePolicy.npuEligibility(_state.value.conversationModel, facts)
         _state.update {
             it.copy(
                 availableMemoryBytes = facts.availableMemoryBytes,
                 memoryMatrix = matrix,
+                activeMission = mission,
                 pendingActions = pending,
                 npuStatus = npu.detail,
                 npuEligible = npu.eligible,

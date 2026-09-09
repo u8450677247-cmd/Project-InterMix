@@ -47,6 +47,14 @@ data class ControllerProtocolResult(
  * in the cockpit when LiteRT splits a marker across callbacks.
  */
 object ControllerProtocol {
+    private val workspaceOpenPattern = Regex(
+        "<\\s*INTERMIX[_\\s-]*ACTION\\s*>",
+        RegexOption.IGNORE_CASE,
+    )
+    private val workspaceClosePattern = Regex(
+        "</\\s*(?:INTERMIX[_\\s-]*ACTION|INTERACTION)\\s*>",
+        RegexOption.IGNORE_CASE,
+    )
     private val openMarkers = listOf(
         WorkspaceActionOpenMarker,
         MemoryUpdateOpenMarker,
@@ -96,23 +104,38 @@ object ControllerProtocol {
     """.trimIndent()
 
     fun visibleStreamingText(raw: String): String {
-        val completeMarker = openMarkers.map(raw::indexOf).filter { it >= 0 }.minOrNull()
+        val completeMarker = buildList {
+            addAll(openMarkers.map(raw::indexOf).filter { it >= 0 })
+            workspaceOpenPattern.find(raw)?.range?.first?.let(::add)
+        }.minOrNull()
         if (completeMarker != null) return raw.substring(0, completeMarker)
 
-        val withheld = openMarkers.maxOf { marker -> longestMarkerPrefixAtEnd(raw, marker) }
+        val withheld = (openMarkers + listOf("<INTERMIXACTION>", "<INTERMIX-ACTION>"))
+            .maxOf { marker -> longestMarkerPrefixAtEnd(raw, marker) }
         return if (withheld == 0) raw else raw.dropLast(withheld)
     }
 
     fun parse(raw: String): ControllerProtocolResult {
-        val firstMarker = openMarkers.map(raw::indexOf).filter { it >= 0 }.minOrNull()
+        val firstMarker = buildList {
+            addAll(openMarkers.map(raw::indexOf).filter { it >= 0 })
+            workspaceOpenPattern.find(raw)?.range?.first?.let(::add)
+        }.minOrNull()
         val visible = (firstMarker?.let(raw::substring) ?: raw).trim()
         return ControllerProtocolResult(
             visibleText = visible,
-            workspaceAction = extractJson(raw, WorkspaceActionOpenMarker, WorkspaceActionCloseMarker)
+            workspaceAction = extractWorkspaceJson(raw)
                 ?.let(::parseWorkspaceAction),
             memoryPayload = extractJson(raw, MemoryUpdateOpenMarker, MemoryUpdateCloseMarker),
             profilePayload = extractJson(raw, ProfileUpdateOpenMarker, ProfileUpdateCloseMarker),
         )
+    }
+
+    private fun extractWorkspaceJson(raw: String): JSONObject? {
+        val open = workspaceOpenPattern.find(raw) ?: return null
+        val contentStart = open.range.last + 1
+        val close = workspaceClosePattern.find(raw, contentStart)
+        val end = close?.range?.first ?: raw.length
+        return jsonObjectFromCandidate(raw.substring(contentStart, end))
     }
 
     private fun parseWorkspaceAction(payload: JSONObject): WorkspaceActionProposal? {
@@ -132,7 +155,11 @@ object ControllerProtocol {
         if (start < 0) return null
         val contentStart = start + open.length
         val end = raw.indexOf(close, contentStart).takeIf { it >= 0 } ?: raw.length
-        val candidate = raw.substring(contentStart, end).trim()
+        return jsonObjectFromCandidate(raw.substring(contentStart, end))
+    }
+
+    private fun jsonObjectFromCandidate(raw: String): JSONObject? {
+        val candidate = raw.trim()
             .removePrefix("```json")
             .removePrefix("```")
             .removeSuffix("```")
