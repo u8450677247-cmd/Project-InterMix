@@ -182,7 +182,7 @@ if [[ -z "$run_id" ]]; then
             --branch "$branch" \
             --limit 1 \
             --json databaseId,status,conclusion,url \
-            --jq 'if length == 0 then empty else .[0] | "\(.databaseId) \(.status) \(.conclusion // \"pending\") \(.url)" end')"
+            --jq 'if length == 0 then empty else .[0] | [.databaseId, .status, (.conclusion // "pending"), .url] | @tsv end')"
         if [[ -n "$latest_record" ]]; then
             read -r latest_id latest_status latest_conclusion latest_url <<< "$latest_record"
             printf 'No successful %s run found on %s. Latest run %s is %s/%s: %s\n' \

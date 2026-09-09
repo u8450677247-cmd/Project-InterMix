@@ -340,6 +340,8 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("ANICLOUD_DOGFOOD_BRANCH", updater)
         self.assertIn("--status success", updater)
         self.assertIn("if length == 0 then empty", updater)
+        self.assertIn("| @tsv end", updater)
+        self.assertNotIn('\\\\\"pending\\\\\"', updater)
         self.assertIn("Latest run %s is %s/%s", updater)
         self.assertIn('"$run_id" =~ ^[0-9]+$', updater)
         self.assertIn("sha256sum -c", updater)
