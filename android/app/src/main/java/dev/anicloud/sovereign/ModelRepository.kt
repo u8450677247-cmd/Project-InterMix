@@ -116,13 +116,13 @@ class ModelRepository(private val context: Context) {
         val prefix = role.name.lowercase()
         val legacy = role == ModelRole.Reasoning
         val path = preferences.getString("${prefix}_model_path", null)
-            ?: if (legacy) preferences.getString(ModelPathKey, null) else null
+            ?: (if (legacy) preferences.getString(ModelPathKey, null) else null)
             ?: return null
         val name = preferences.getString("${prefix}_model_name", null)
-            ?: if (legacy) preferences.getString(ModelNameKey, null) else null
+            ?: (if (legacy) preferences.getString(ModelNameKey, null) else null)
             ?: return null
         val sha = preferences.getString("${prefix}_model_sha256", null)
-            ?: if (legacy) preferences.getString(ModelShaKey, null) else null
+            ?: (if (legacy) preferences.getString(ModelShaKey, null) else null)
             ?: return null
         val roleBytes = preferences.getLong("${prefix}_model_bytes", -1L)
         val bytes = if (roleBytes > 0) roleBytes else if (legacy) {

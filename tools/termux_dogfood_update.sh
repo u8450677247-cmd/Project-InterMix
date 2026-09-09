@@ -174,12 +174,30 @@ if [[ -z "$run_id" ]]; then
         --status success \
         --limit 1 \
         --json databaseId,headSha \
-        --jq '.[0] | "\(.databaseId) \(.headSha)"')"
+        --jq 'if length == 0 then empty else .[0] | "\(.databaseId) \(.headSha)" end')"
     [[ -n "$run_record" ]] || {
-        printf 'No successful %s run found on %s.\n' "$workflow" "$branch" >&2
+        latest_record="$(gh run list \
+            --repo "$repo" \
+            --workflow "$workflow" \
+            --branch "$branch" \
+            --limit 1 \
+            --json databaseId,status,conclusion,url \
+            --jq 'if length == 0 then empty else .[0] | "\(.databaseId) \(.status) \(.conclusion // \"pending\") \(.url)" end')"
+        if [[ -n "$latest_record" ]]; then
+            read -r latest_id latest_status latest_conclusion latest_url <<< "$latest_record"
+            printf 'No successful %s run found on %s. Latest run %s is %s/%s: %s\n' \
+                "$workflow" "$branch" "$latest_id" "$latest_status" "$latest_conclusion" "$latest_url" >&2
+        else
+            printf 'No %s run found on %s. Push an Android change or dispatch the workflow first.\n' \
+                "$workflow" "$branch" >&2
+        fi
         exit 1
     }
     read -r run_id head_sha <<< "$run_record"
+    [[ "$run_id" =~ ^[0-9]+$ && "$head_sha" =~ ^[0-9a-f]{40}$ ]] || {
+        printf 'Invalid workflow selection for %s: %s\n' "$branch" "$run_record" >&2
+        exit 1
+    }
 else
     run_record="$(gh run view "$run_id" --repo "$repo" --json conclusion,headSha --jq '"\(.conclusion) \(.headSha)"')"
     read -r conclusion head_sha <<< "$run_record"

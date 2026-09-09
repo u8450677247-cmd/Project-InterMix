@@ -96,6 +96,14 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn('MessageDigest.getInstance("SHA-256")', repository)
         self.assertIn('endsWith(".litertlm")', repository)
         self.assertIn("target.fd.sync()", repository)
+        self.assertIn(
+            "?: (if (legacy) preferences.getString(ModelNameKey, null) else null)",
+            repository,
+        )
+        self.assertIn(
+            "?: (if (legacy) preferences.getString(ModelShaKey, null) else null)",
+            repository,
+        )
 
     def test_adaptive_tensor_route_is_fingerprint_locked_and_visible(self):
         policy = (SOURCE / "AdaptiveRuntimePolicy.kt").read_text(encoding="utf-8")
@@ -331,6 +339,9 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("symbolic-ref --quiet --short HEAD", updater)
         self.assertIn("ANICLOUD_DOGFOOD_BRANCH", updater)
         self.assertIn("--status success", updater)
+        self.assertIn("if length == 0 then empty", updater)
+        self.assertIn("Latest run %s is %s/%s", updater)
+        self.assertIn('"$run_id" =~ ^[0-9]+$', updater)
         self.assertIn("sha256sum -c", updater)
         self.assertIn("termux-open --content-type", updater)
         self.assertNotIn("adb install", updater)
