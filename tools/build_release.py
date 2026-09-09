@@ -38,7 +38,11 @@ def _source_files(root: Path) -> list[Path]:
     return [
         path
         for path in sorted(root.rglob("*"))
-        if path.is_file() and ".git" not in path.relative_to(root).parts
+        if (
+            path.is_file()
+            and ".git" not in path.relative_to(root).parts
+            and path.relative_to(root).as_posix() != "RELEASE_MANIFEST.json"
+        )
     ]
 
 

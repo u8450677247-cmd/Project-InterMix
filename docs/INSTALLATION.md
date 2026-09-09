@@ -11,7 +11,8 @@ without loading the model.
 - Python 3.11 or newer;
 - SQLite with FTS5;
 - LiteRT-LM 0.16.1 reference stack;
-- a separately obtained compatible `.litertlm` model; and
+- a separately obtained compatible E4B `.litertlm` model;
+- optionally, a separately obtained E2B `.litertlm` librarian model; and
 - at least 8 GiB physical RAM and 6 GiB free storage.
 
 Twelve GiB or more is strongly recommended for the E4B/8K profile. A passing
@@ -34,6 +35,8 @@ storage. It never downloads weights or requests provider keys.
 bash install.sh \
   --non-interactive \
   --model "$HOME/models/model.litertlm" \
+  --librarian-model "$HOME/models/librarian-E2B.litertlm" \
+  --dual-model auto \
   --user-name "Operator" \
   --assistant-name "Intermix Core" \
   --workspace-dir "$HOME/storage/downloads/intermix_workspace" \
@@ -80,6 +83,10 @@ artifacts. Distinguish these stages when reporting performance:
 Warm turns reuse the engine until explicit unload, memory pressure, or the idle
 policy releases it. Android may terminate a process under extreme pressure;
 SQLite and mission state should survive, but an in-flight answer does not.
+
+Dual-model mode never keeps E2B and E4B resident simultaneously. A difficult
+turn may load E2B for a compact, non-authoritative memory/intent handoff, release
+it, and then load E4B. This trades switching latency for lower peak memory.
 
 ## Upgrade safety
 

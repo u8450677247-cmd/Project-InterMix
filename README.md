@@ -9,7 +9,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-39d5ff"></a>
   <a href="CHANGELOG.md"><img alt="Release: 1.4.1 alpha 1" src="https://img.shields.io/badge/release-1.4.1--alpha.1-a970ff"></a>
-  <a href=".github/workflows/tests.yml"><img alt="Tests: 61" src="https://img.shields.io/badge/tests-61%20deterministic-67e8c2"></a>
+  <a href=".github/workflows/tests.yml"><img alt="Tests: 71" src="https://img.shields.io/badge/tests-71%20deterministic-67e8c2"></a>
   <img alt="Status: developer preview" src="https://img.shields.io/badge/status-developer%20preview-ffca6b">
 </p>
 
@@ -24,6 +24,7 @@ This repository is a developer preview, not a polished Android application. The 
 - **Truth before fluency:** volatile questions can trigger web research; weak evidence produces an error or limitation instead of a confident invention.
 - **Bounded autonomy:** the Core may read, write, and test inside one fixed workspace. Deletions require explicit review and hash revalidation.
 - **Resource awareness:** a resident LiteRT-LM engine is reused while memory permits, then unloaded under pressure or sustained inactivity.
+- **Optional dual-model routing:** a smaller E2B librarian can handle ordinary conversation and prepare bounded context for E4B reasoning while only one model stays resident.
 - **Readable terminal UX:** cyan/violet hierarchy, streamed plain text, final Markdown rendering, foldable diagnostics, compact mode, and a workspace lens.
 
 ## Verified reference profile
@@ -33,12 +34,12 @@ This repository is a developer preview, not a polished Android application. The 
 | Device | Google Pixel 10 Pro, Tensor G5, 16 GB RAM |
 | OS / shell | Android 17, Termux |
 | Runtime | Python 3.13.13, LiteRT-LM 0.16.1, GPU/OpenCL |
-| Model | Gemma 4 E4B-it `.litertlm` supplied separately |
+| Model | Gemma 4 E4B-it `.litertlm`; optional E2B librarian supplied separately |
 | Physical context | 8,000 tokens |
 | Cold/idle available memory | Approximately 7.0–7.6 GiB in the owner's test environment |
 | Resident-hot available memory | Approximately 2.6–3.7 GiB in the owner's test environment |
 | Cooling used during long tests | Optional Black Shark Magnetic/FunCooler 6 Pro (BR62); approximately 25 °C owner-observed device temperature |
-| Test suite | 61 deterministic public-alpha checks across memory, grounding, inference, workspace, release safety, and interface behavior |
+| Test suite | 71 deterministic public-alpha checks across memory, routing, grounding, inference, workspace, release safety, and interface behavior |
 
 These are observations, not guarantees. Android memory pressure, other applications, firmware, drivers, ambient temperature, model build, and compiled caches can materially change the result.
 
@@ -69,6 +70,11 @@ termux-setup-storage
 
 Project Intermix does **not** redistribute model weights. Obtain a compatible `.litertlm` model under its own license and place it in a Termux-readable location. The interactive installer finds nearby models and lets you choose one.
 
+E4B remains the required reasoning model. An E2B file is optional: when present,
+the deterministic controller routes ordinary conversation through it and uses a
+bounded E2B intent/memory handoff before difficult E4B turns. The engine closes
+one profile before loading the other; this is not a simultaneous two-model RAM load.
+
 Google documents current LiteRT-LM models and conversion paths in the [Gemma 4 deployment guide](https://developers.google.com/edge/litert-lm/models/gemma-4).
 
 ### 3. Run the local installer
@@ -97,6 +103,8 @@ For scripted testing:
 bash install.sh \
   --non-interactive \
   --model "$HOME/models/gemma-4-E4B-it.litertlm" \
+  --librarian-model "$HOME/models/gemma-4-E2B-it.litertlm" \
+  --dual-model auto \
   --user-name "Operator" \
   --assistant-name "Intermix Core" \
   --context-tokens 8000
@@ -125,6 +133,8 @@ Inside the cockpit:
 ```text
 /status
 /engine status
+/model status
+/persona status
 /web status
 /memory audit
 /files
@@ -164,6 +174,14 @@ Even then, Intermix records only explicit first-person self-reports, marks them 
 
 Intermix is not a medical device, therapist, crisis service, or substitute for professional care. See [memory architecture](docs/MEMORY.md) and the [privacy model](docs/PRIVACY.md).
 
+Explicit communication preferences can update the reversible persona profile.
+`/persona history` shows its changelog and `/persona undo` reverts the newest
+active revision. Intermix does not infer diagnoses or immutable personality traits.
+
+`/sanctuary status` is deliberately fail-closed in Termux. It does not claim an
+encrypted vault or collect extra raw conversations. Encrypted Sanctuary remains
+reserved for a future APK implementation backed by Android Keystore and biometric authentication.
+
 ## Optional Resonance voice bridge
 
 The Kokoro/Resonance path is intentionally separate from the core release. On the verified Pixel setup, Android's Debian Linux environment renders completed responses to WAV and Termux performs Android-native playback. The model is loaded lazily, only after explicit voice consent, and the managed archive retains at most 25 unpinned WAV files.
@@ -175,8 +193,10 @@ No Kokoro model, voice pack, Debian image, or audio is bundled here. Follow [the
 ```mermaid
 flowchart TD
     U["User + Textual cockpit"] --> C["Deterministic controller"]
-    C --> P["Budgeted prompt + recall"]
-    P --> L["Resident LiteRT-LM engine"]
+    C --> R["Model router + budgeted recall"]
+    R --> E2["Optional E2B librarian"]
+    R --> E4["E4B reasoning"]
+    E2 -. bounded handoff .-> E4
     C --> G["Grounding + exact-claim guards"]
     C --> W["Bounded workspace executor"]
     C <--> M["SQLite memory + mission ledger"]
@@ -198,6 +218,10 @@ The language model proposes prose, memories, and workspace actions. Deterministi
 | `/sessions` | Reopen conversation sessions |
 | `/engine status` | Inspect cold/hot state and latency telemetry |
 | `/engine unload` | Release the resident model explicitly |
+| `/model status` | Inspect routing, availability, and the active profile |
+| `/model mode auto\|librarian\|reasoning` | Override automatic routing locally |
+| `/persona status\|history\|undo` | Inspect or reverse communication-style evolution |
+| `/sanctuary status` | Confirm the current encryption capability truthfully |
 | `/status` | Show local system diagnostics |
 
 ## Safety boundaries
