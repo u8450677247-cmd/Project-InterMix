@@ -44,7 +44,7 @@ This repository is a developer preview with a functional native Android dogfood 
 | Cold/idle available memory | Approximately 7.0–7.6 GiB in the owner's test environment |
 | Resident-hot available memory | Approximately 2.6–3.7 GiB in the owner's test environment |
 | Cooling used during long tests | Optional Black Shark Magnetic/FunCooler 6 Pro (BR62); approximately 25 °C owner-observed device temperature |
-| Test suite | 109 deterministic public-alpha checks across memory, routing, grounding, cancellation, stream integrity, inference, workspace, release safety, and interface behavior |
+| Test suite | 110 deterministic public-alpha checks across memory, routing, grounding, cancellation, stream integrity, inference, workspace, release safety, and interface behavior |
 
 These are observations, not guarantees. Android memory pressure, other applications, firmware, drivers, ambient temperature, model build, and compiled caches can materially change the result.
 
@@ -80,7 +80,8 @@ the deterministic controller routes ordinary conversation through it and uses a
 bounded E2B intent/memory handoff before difficult E4B turns. The engine closes
 one profile before loading the other; this is not a simultaneous two-model RAM load.
 
-The native Android `0.8.1-fluorescent-forge` candidate has separate import slots:
+The native Android `0.8.2-session-boundary` candidate adds non-destructive native
+conversation creation and reopening to the existing fluorescent Long Forge build. It has separate import slots:
 
 - **E2B conversation + Memory Matrix:** only the reviewed
   `gemma-4-E2B-it_Google_Tensor_G5.litertlm` fingerprint may use the Google

@@ -8,6 +8,12 @@ may still change.
 
 ### Added
 
+- Native `/sessions list|new|open <reference>` controls that preserve prior
+  SQLite history, durable memories, model files, and SAF grants while resetting
+  the resident model conversation before a different session can accept input.
+- A fail-closed session boundary that refuses conversation changes while a Long
+  Forge mission is running or paused, preventing its checkpoint from being
+  detached from the session-owned project ledger.
 - Native Interaction Profile Matrix with six bounded presentation traits,
   explicit-evidence learning, controller validation, revision history, and undo.
 - A deterministic General/Continuity/Project context gate that withholds open

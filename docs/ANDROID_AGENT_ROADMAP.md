@@ -9,7 +9,8 @@ continuity but never grants authority.
 
 ## 1. Long Forge workspace sessions — current build
 
-`0.8.1-fluorescent-forge` separates ordinary Chat from long-running project work. A work session has a
+`0.8.2-session-boundary` separates ordinary Chat from long-running project work and
+adds non-destructive fresh/reopen conversation controls. A work session has a
 complete objective, one ASCII workspace root, a selected model posture, a durable Matrix
 checkpoint, and a visible foreground STOP path.
 

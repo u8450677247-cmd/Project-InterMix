@@ -25,8 +25,8 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("compileSdk = 36", app_build)
         self.assertIn("targetSdk = 36", app_build)
         self.assertIn("minSdk = 31", app_build)
-        self.assertIn("versionCode = 12", app_build)
-        self.assertIn('versionName = "0.8.1-fluorescent-forge"', app_build)
+        self.assertIn("versionCode = 13", app_build)
+        self.assertIn('versionName = "0.8.2-session-boundary"', app_build)
         self.assertIn("compose-bom:2026.03.01", app_build)
         self.assertIn('abiFilters += "arm64-v8a"', app_build)
         self.assertIn(
@@ -201,6 +201,26 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("memoryMatrix.recallContext", view_model)
         self.assertIn("MatrixSchemaVersion = 2", repository)
         self.assertIn("undoLatestProfileChange", repository)
+
+    def test_native_conversation_sessions_preserve_history_and_reset_model_context(self):
+        repository = (SOURCE / "MemoryMatrixRepository.kt").read_text(
+            encoding="utf-8"
+        )
+        view_model = (SOURCE / "SovereignViewModel.kt").read_text(
+            encoding="utf-8"
+        )
+        ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
+        self.assertIn("data class ConversationSessionSummary", repository)
+        self.assertIn("fun listConversationSessions", repository)
+        self.assertIn("fun startFreshConversation", repository)
+        self.assertIn("fun openConversationSession", repository)
+        self.assertIn("requireSessionTransitionIsSafe", repository)
+        self.assertIn("SELECT s.id,s.title,COUNT(m.id),s.updated_at", repository)
+        self.assertNotIn("DELETE FROM sessions", repository)
+        self.assertIn("parseSessionTransitionCommand", view_model)
+        self.assertIn("resetConversationFailure()", view_model)
+        self.assertIn("lastContextDecision = null", view_model)
+        self.assertIn('SlashCommand(\n        "/sessions"', ui)
 
     def test_interaction_profile_gates_context_and_cannot_grant_authority(self):
         policy = (SOURCE / "InteractionProfile.kt").read_text(encoding="utf-8")

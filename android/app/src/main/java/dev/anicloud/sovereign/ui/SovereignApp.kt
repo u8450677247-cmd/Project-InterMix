@@ -145,6 +145,12 @@ private val SlashCommands = listOf(
     SlashCommand("/capabilities", "show verified controllers", "List what this APK can really do"),
     SlashCommand("/memory", "inspect Matrix state", "Show durable-memory health"),
     SlashCommand("/remember", "enter the durable fact", "Store an explicit safe memory", true),
+    SlashCommand(
+        "/sessions",
+        "list, new, or open <reference>",
+        "Create or reopen a conversation without deleting Matrix history",
+        true,
+    ),
     SlashCommand("/profile", "inspect interaction profile", "Show learned presentation traits"),
     SlashCommand("/why", "explain the last decision", "Show route and context-gate evidence"),
     SlashCommand("/adapt", "enter a trait or on/off", "Tune or pause reversible adaptation", true),

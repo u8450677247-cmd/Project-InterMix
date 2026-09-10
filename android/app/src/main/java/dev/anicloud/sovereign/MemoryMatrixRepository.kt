@@ -43,6 +43,16 @@ data class MemoryMatrixSnapshot(
     val interactionProfile: InteractionProfile = InteractionProfile(),
 )
 
+data class ConversationSessionSummary(
+    val id: String,
+    val title: String,
+    val messageCount: Int,
+    val updatedAt: String,
+    val active: Boolean,
+) {
+    val reference: String get() = id.take(12)
+}
+
 data class PendingWorkspaceAction(
     val id: Long,
     val kind: WorkspaceActionKind,
@@ -214,6 +224,113 @@ class MemoryMatrixRepository(private val context: Context) :
             }
         }
         return rows.asReversed()
+    }
+
+    @Synchronized
+    fun listConversationSessions(limit: Int = 20): List<ConversationSessionSummary> {
+        val db = readableDatabase
+        val activeId = activeSessionId(db)
+        return db.rawQuery(
+            """
+            SELECT s.id,s.title,COUNT(m.id),s.updated_at
+            FROM sessions s
+            LEFT JOIN messages m ON m.session_id=s.id
+            GROUP BY s.id,s.title,s.updated_at
+            ORDER BY s.updated_at DESC
+            LIMIT ?
+            """.trimIndent(),
+            arrayOf(limit.coerceIn(1, 100).toString()),
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    val id = cursor.getString(0)
+                    add(
+                        ConversationSessionSummary(
+                            id = id,
+                            title = cursor.getString(1),
+                            messageCount = cursor.getInt(2),
+                            updatedAt = cursor.getString(3),
+                            active = id == activeId,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    @Synchronized
+    fun startFreshConversation(): ConversationSessionSummary {
+        requireSessionTransitionIsSafe()
+        val db = writableDatabase
+        val sessionId = UUID.randomUUID().toString()
+        val timestamp = now()
+        db.beginTransaction()
+        try {
+            db.execSQL(
+                "INSERT INTO sessions(id,title,created_at,updated_at) VALUES(?,?,?,?)",
+                arrayOf(sessionId, "AniCloudAI Session", timestamp, timestamp),
+            )
+            setActiveSession(db, sessionId, timestamp)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return ConversationSessionSummary(
+            id = sessionId,
+            title = "AniCloudAI Session",
+            messageCount = 0,
+            updatedAt = timestamp,
+            active = true,
+        )
+    }
+
+    @Synchronized
+    fun openConversationSession(reference: String): ConversationSessionSummary {
+        requireSessionTransitionIsSafe()
+        val normalized = reference.trim().lowercase(Locale.ROOT)
+        require(normalized.length in 8..36 && Regex("[0-9a-f-]+").matches(normalized)) {
+            "Session references use at least eight hexadecimal UUID characters."
+        }
+        val db = writableDatabase
+        val matches = db.rawQuery(
+            """
+            SELECT s.id,s.title,COUNT(m.id),s.updated_at
+            FROM sessions s
+            LEFT JOIN messages m ON m.session_id=s.id
+            WHERE lower(s.id)=? OR lower(s.id) LIKE ?
+            GROUP BY s.id,s.title,s.updated_at
+            ORDER BY s.updated_at DESC
+            LIMIT 2
+            """.trimIndent(),
+            arrayOf(normalized, "$normalized%"),
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    add(
+                        ConversationSessionSummary(
+                            id = cursor.getString(0),
+                            title = cursor.getString(1),
+                            messageCount = cursor.getInt(2),
+                            updatedAt = cursor.getString(3),
+                            active = true,
+                        ),
+                    )
+                }
+            }
+        }
+        require(matches.isNotEmpty()) { "No conversation matches session reference $normalized." }
+        require(matches.size == 1) { "Session reference $normalized is ambiguous; use more characters." }
+        val selected = matches.single()
+        setActiveSession(db, selected.id, now())
+        return selected
+    }
+
+    private fun requireSessionTransitionIsSafe() {
+        val mission = activeAgentMission()
+        require(mission == null || !mission.active) {
+            "Mission ${mission?.id} is still ${mission?.status?.name?.lowercase()}; " +
+                "complete or cancel it before changing conversations."
+        }
     }
 
     /** Removes repeated model-ready cards caused by process recreation; chat content is untouched. */
@@ -1148,11 +1265,15 @@ class MemoryMatrixRepository(private val context: Context) :
             "INSERT INTO sessions(id,title,created_at,updated_at) VALUES(?,?,?,?)",
             arrayOf(sessionId, "AniCloudAI Session", now, now),
         )
+        setActiveSession(db, sessionId, now)
+        return sessionId
+    }
+
+    private fun setActiveSession(db: SQLiteDatabase, sessionId: String, timestamp: String) {
         db.execSQL(
             "INSERT OR REPLACE INTO settings(key,value,updated_at) VALUES('active_session_id',?,?)",
-            arrayOf(sessionId, now),
+            arrayOf(sessionId, timestamp),
         )
-        return sessionId
     }
 
     private fun activeSessionId(db: SQLiteDatabase): String = ensureSession(db)

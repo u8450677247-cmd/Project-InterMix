@@ -13,6 +13,13 @@ Project Intermix creates the experience of long continuity through durable stora
 | Mission ledger | Verified workspace actions, failures, tests, hashes, and completion | Active mission or prior-work recall intent |
 | Web evidence | Cached current evidence and fact watches | Freshness, relevance, expiry, and source policy |
 
+The native Android cockpit exposes `/sessions list`, `/sessions new`, and
+`/sessions open <reference>`. Starting or reopening a conversation changes only
+the active-session pointer and resets the resident model conversation; it does
+not delete previous messages, durable memories, model files, or the persisted
+SAF workspace grant. Session changes fail closed while a Long Forge mission is
+running or paused so its checkpoint cannot be detached from its project ledger.
+
 ## Why SQLite FTS5
 
 - transactional writes survive restart better than appended free-form text;

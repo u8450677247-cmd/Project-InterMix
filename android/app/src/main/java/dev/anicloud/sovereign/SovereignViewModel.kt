@@ -42,6 +42,12 @@ private sealed interface MissionCommand {
     data class Invalid(val detail: String) : MissionCommand
 }
 
+private sealed interface SessionTransitionCommand {
+    data object New : SessionTransitionCommand
+    data class Open(val reference: String) : SessionTransitionCommand
+    data class Invalid(val detail: String) : SessionTransitionCommand
+}
+
 /** Owns the resident model, deterministic controllers, and durable cockpit state. */
 class SovereignViewModel(application: Application) : AndroidViewModel(application) {
     private val modelRepository = ModelRepository(application)
@@ -137,13 +143,24 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         if (prompt.isBlank() || !_state.value.canSend || generationJob?.isActive == true) return
         val serial = ++generationSerial
         generationJob = viewModelScope.launch {
+            val parsedSessionCommand = parseSessionTransitionCommand(prompt)
             val parsedMissionCommand = parseMissionCommand(prompt)
             val userMessage = commitMessage(
                 ChatSpeaker.User,
                 prompt,
-                source = if (parsedMissionCommand == null) "chat" else "mission",
+                source = when {
+                    parsedSessionCommand != null -> "controller"
+                    parsedMissionCommand != null -> "mission"
+                    else -> "chat"
+                },
             )
             if (serial != generationSerial) return@launch
+
+            if (parsedSessionCommand != null) {
+                handleSessionTransition(parsedSessionCommand, serial)
+                generationJob = null
+                return@launch
+            }
 
             var mission: AgentMissionCheckpoint? = null
             var effectivePrompt = prompt
@@ -1044,6 +1061,98 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         refreshRuntimeState()
     }
 
+    private fun parseSessionTransitionCommand(raw: String): SessionTransitionCommand? {
+        val trimmed = raw.trim()
+        if (!trimmed.substringBefore(' ').equals("/sessions", ignoreCase = true)) return null
+        val remainder = trimmed.substringAfter(' ', "").trim()
+        if (remainder.isBlank() || remainder.equals("list", ignoreCase = true)) return null
+        if (remainder.equals("new", ignoreCase = true)) return SessionTransitionCommand.New
+        if (remainder.startsWith("open", ignoreCase = true)) {
+            val reference = remainder.substringAfter(' ', "").trim()
+            return if (reference.isBlank()) {
+                SessionTransitionCommand.Invalid("Choose a session reference from `/sessions list`.")
+            } else {
+                SessionTransitionCommand.Open(reference)
+            }
+        }
+        return SessionTransitionCommand.Invalid(
+            "Choose `/sessions list`, `/sessions new`, or `/sessions open <reference>`.",
+        )
+    }
+
+    private suspend fun handleSessionTransition(command: SessionTransitionCommand, serial: Long) {
+        if (command is SessionTransitionCommand.Invalid) {
+            commitMessage(ChatSpeaker.Core, "[BLOCKED] ${command.detail}", source = "controller")
+            _state.update {
+                it.copy(stage = ModelStage.Ready, detail = "Conversation change stopped safely", streamText = "")
+            }
+            refreshRuntimeState()
+            return
+        }
+        val selected = runCatching {
+            withContext(Dispatchers.IO) {
+                when (command) {
+                    SessionTransitionCommand.New -> memoryMatrix.startFreshConversation()
+                    is SessionTransitionCommand.Open ->
+                        memoryMatrix.openConversationSession(command.reference)
+                    is SessionTransitionCommand.Invalid -> error(command.detail)
+                }
+            }
+        }.getOrElse { failure ->
+            commitMessage(
+                ChatSpeaker.Core,
+                "[BLOCKED] ${safeFailure(failure)}",
+                source = "controller",
+            )
+            _state.update {
+                it.copy(stage = ModelStage.Ready, detail = "Conversation change stopped safely", streamText = "")
+            }
+            refreshRuntimeState()
+            return
+        }
+        if (serial != generationSerial) return
+
+        val resetFailure = resetConversationFailure()
+        val restored = withContext(Dispatchers.IO) { memoryMatrix.loadMessages() }
+        val freshCard = ChatMessage(
+            id = -200,
+            speaker = ChatSpeaker.Core,
+            text = "Fresh native conversation ready. Previous sessions, durable memories, models, " +
+                "and workspace grants remain preserved.",
+            source = "runtime",
+        )
+        if (resetFailure != null) {
+            runtime.close()
+            _state.update {
+                it.copy(
+                    messages = restored.ifEmpty { listOf(freshCard) },
+                    stage = ModelStage.Error,
+                    detail = "Session ${selected.reference} opened, but model context reset failed. " +
+                        "Retry the model before sending.",
+                    backend = null,
+                    activeModelRole = null,
+                    routeLabel = "No active model route",
+                    routeReason = "Conversation reset failed safely",
+                    lastContextDecision = null,
+                    streamText = "",
+                )
+            }
+        } else {
+            _state.update {
+                it.copy(
+                    messages = restored.ifEmpty { listOf(freshCard) },
+                    stage = ModelStage.Ready,
+                    detail = "Session ${selected.reference} ready · previous sessions preserved",
+                    routeLabel = "Conversation reset",
+                    routeReason = "Fresh native model context for session ${selected.reference}",
+                    lastContextDecision = null,
+                    streamText = "",
+                )
+            }
+        }
+        refreshRuntimeState()
+    }
+
     private fun normalizeProposal(proposal: WorkspaceActionProposal): WorkspaceActionProposal {
         val path = normalizeWorkspacePath(
             proposal.path,
@@ -1062,7 +1171,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         if (command !in setOf(
                 "/remember", "/memory", "/files", "/read", "/version", "/capabilities",
                 "/models", "/device", "/profile", "/why", "/adapt", "/undo-adaptation",
-                "/help",
+                "/sessions", "/help",
             )
         ) return false
         val response = runCatching {
@@ -1088,6 +1197,25 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                             append(snapshot.recentMemories.take(5).joinToString { "${it.id}:${it.value}" })
                         }
                     }
+                }
+
+                "/sessions" -> {
+                    val sessions = withContext(Dispatchers.IO) {
+                        memoryMatrix.listConversationSessions()
+                    }
+                    buildString {
+                        appendLine("# Native conversations")
+                        appendLine()
+                        sessions.forEach { session ->
+                            appendLine(
+                                "- `${session.reference}` ${if (session.active) "**ACTIVE**" else "preserved"} · " +
+                                    "${session.messageCount} messages · ${session.updatedAt}",
+                            )
+                        }
+                        appendLine()
+                        append("Use `/sessions new` or `/sessions open <reference>`. " +
+                            "An active Long Forge mission must be completed or cancelled first.")
+                    }.trim()
                 }
 
                 "/profile" -> profileReport(withContext(Dispatchers.IO) {
@@ -1217,6 +1345,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
 
                 else -> "Local controller commands: /version, /capabilities, /models, /device, " +
                     "/memory, /remember <fact>, /profile, /why, /adapt, /undo-adaptation, " +
+                    "/sessions list|new|open <reference>, " +
                     "/files [path], /read <path>, /mission run <folder> :: <objective>, " +
                     "/mission guide|resume|status|pause|cancel. " +
                     "Natural-language file requests can also invoke bounded workspace tools."

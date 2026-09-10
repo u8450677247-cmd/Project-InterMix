@@ -2,7 +2,7 @@
 
 This module is the private Pixel 10 Pro reference cockpit for Project Intermix.
 The original disconnected shell has passed its first device test. The current
-`0.8.1-fluorescent-forge` candidate combines the stable E4B LiteRT-LM boundary with
+`0.8.2-session-boundary` candidate combines the stable E4B LiteRT-LM boundary with
 the native Memory Matrix, controller-mediated project workspace, and the first
 checkpointed long-form work-session loop. Its cyan–magenta–violet spectral
 glass pass concentrates fluorescence on focus, mode, code, and mission progress
@@ -25,6 +25,9 @@ while preserving neutral long-form reading surfaces.
 - deterministic repetition, Unicode, output-length, and exact-number guards;
 - app-private SQLite/WAL conversation and durable-memory tables with FTS5
   retrieval, provenance, revision records, and one-time JSON-history migration;
+- non-destructive `/sessions list|new|open <reference>` controls that reset native
+  model context while preserving earlier sessions, durable memories, model files,
+  and the SAF workspace grant;
 - bounded context rehydration before each model turn;
 - a versioned Interaction Profile Matrix with explicit-evidence adaptation,
   undo, and deterministic General/Continuity/Project context selection;
