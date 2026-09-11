@@ -108,8 +108,10 @@ import dev.anicloud.sovereign.prototype.ModelRole
 import dev.anicloud.sovereign.prototype.MatrixMemory
 import dev.anicloud.sovereign.prototype.MemoryMatrixSnapshot
 import dev.anicloud.sovereign.prototype.PendingWorkspaceAction
+import dev.anicloud.sovereign.prototype.PendingExecutionAction
 import dev.anicloud.sovereign.prototype.RuntimePhase
 import dev.anicloud.sovereign.prototype.SovereignViewModel
+import dev.anicloud.sovereign.prototype.TermuxRunCommandPermission
 import dev.anicloud.sovereign.prototype.WorkspaceEntry
 import dev.anicloud.sovereign.prototype.WorkspaceState
 import dev.anicloud.sovereign.prototype.WorkspaceViewModel
@@ -127,6 +129,10 @@ private data class CockpitActions(
     val onStop: () -> Unit,
     val onApproveWorkspaceAction: (Long) -> Unit,
     val onDenyWorkspaceAction: (Long) -> Unit,
+    val onApproveExecutionAction: (Long) -> Unit,
+    val onDenyExecutionAction: (Long) -> Unit,
+    val onStopExecutionAction: (Long) -> Unit,
+    val onRequestTermuxPermission: () -> Unit,
     val onForgetMemory: (Long) -> Unit,
     val onSetMemoryPinned: (Long, Boolean) -> Unit,
 )
@@ -158,6 +164,12 @@ private val SlashCommands = listOf(
     SlashCommand("/files", "enter an optional folder", "List the connected workspace", true),
     SlashCommand("/read", "enter a relative file path", "Read a workspace text file", true),
     SlashCommand(
+        "/exec",
+        "status, workdir, run, test, build, or deps",
+        "Plan and explicitly approve a Termux project command",
+        true,
+    ),
+    SlashCommand(
         "/mission",
         "run project-folder :: describe the complete objective",
         "Start a scoped, checkpointed long-form work session",
@@ -183,6 +195,11 @@ fun AniCloudApp(
     ) { uri ->
         uri?.let { sovereignViewModel.importModel(it, ModelRole.Reasoning) }
     }
+    val termuxPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) {
+        sovereignViewModel.refreshTermuxBridgeStatus()
+    }
     val cockpitActions = CockpitActions(
         onImportConversationModel = {
             conversationModelPicker.launch(arrayOf("application/octet-stream", "*/*"))
@@ -196,6 +213,10 @@ fun AniCloudApp(
         onStop = sovereignViewModel::stopGeneration,
         onApproveWorkspaceAction = sovereignViewModel::approveWorkspaceAction,
         onDenyWorkspaceAction = sovereignViewModel::denyWorkspaceAction,
+        onApproveExecutionAction = sovereignViewModel::approveExecutionAction,
+        onDenyExecutionAction = sovereignViewModel::denyExecutionAction,
+        onStopExecutionAction = sovereignViewModel::stopExecutionAction,
+        onRequestTermuxPermission = { termuxPermission.launch(TermuxRunCommandPermission) },
         onForgetMemory = sovereignViewModel::forgetMemory,
         onSetMemoryPinned = sovereignViewModel::setMemoryPinned,
     )
@@ -1260,7 +1281,7 @@ private fun ChatSurface(
             }
             items(cockpit.messages, key = { it.id }) { message -> MessageBlock(message) }
             if (cockpit.streamText.isNotBlank()) {
-                item { StreamingBlock(cockpit.streamText) }
+                item { StreamingBlock(cockpit.streamText, active = cockpit.isGenerating) }
             }
         }
         Composer(
@@ -1359,8 +1380,13 @@ private fun MessageBlock(message: ChatMessage) {
 }
 
 @Composable
-private fun StreamingBlock(text: String) {
-    MessageBlock(ChatMessage(-1, ChatSpeaker.Core, "$text▌"))
+private fun StreamingBlock(text: String, active: Boolean = true) {
+    val visible = if (active) {
+        "$text▌"
+    } else {
+        "$text\n\n[INTERRUPTED DRAFT · NOT COMMITTED TO MEMORY]"
+    }
+    MessageBlock(ChatMessage(-1, ChatSpeaker.Core, visible))
 }
 
 @Composable
@@ -1878,7 +1904,7 @@ private fun WorkSessionSurface(
             (mission == null || it.id >= mission.startedMessageId)
     }
     val threadState = rememberLazyListState()
-    val streamVisible = cockpit.isGenerating && mission?.active == true && cockpit.streamText.isNotBlank()
+    val streamVisible = mission?.active == true && cockpit.streamText.isNotBlank()
     val threadTail = missionMessages.size + if (streamVisible) 1 else 0
 
     LaunchedEffect(threadTail, cockpit.streamText.length / 128) {
@@ -1923,6 +1949,7 @@ private fun WorkSessionSurface(
                 WorkSessionThread(
                     missionMessages = missionMessages,
                     streamText = if (streamVisible) cockpit.streamText else "",
+                    streamActive = cockpit.isGenerating,
                     listState = threadState,
                     modifier = Modifier.weight(1f).fillMaxHeight(),
                 )
@@ -1963,6 +1990,7 @@ private fun WorkSessionSurface(
                 WorkSessionThread(
                     missionMessages = missionMessages,
                     streamText = if (streamVisible) cockpit.streamText else "",
+                    streamActive = cockpit.isGenerating,
                     listState = threadState,
                     modifier = Modifier.weight(0.40f).fillMaxWidth(),
                 )
@@ -2191,7 +2219,7 @@ private fun WorkSessionControlPanel(
             }
 
             Text(
-                "GRANT · 120 ACTIONS · MATRIX OFFLOAD · RECURSION GUARD · 1 MiB WRITES · NO DELETE / EXEC / NET",
+                "GRANT · 120 ACTIONS · MATRIX OFFLOAD · RECURSION GUARD · 1 MiB WRITES · NO DELETE · EXEC/NET NEED AGENTS APPROVAL",
                 color = ResonanceMint,
                 fontFamily = FontFamily.Monospace,
                 fontSize = 9.sp,
@@ -2204,6 +2232,7 @@ private fun WorkSessionControlPanel(
 private fun WorkSessionThread(
     missionMessages: List<ChatMessage>,
     streamText: String,
+    streamActive: Boolean,
     listState: androidx.compose.foundation.lazy.LazyListState,
     modifier: Modifier = Modifier,
 ) {
@@ -2243,7 +2272,9 @@ private fun WorkSessionThread(
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     items(missionMessages, key = { it.id }) { message -> MessageBlock(message) }
-                    if (streamText.isNotBlank()) item { StreamingBlock(streamText) }
+                    if (streamText.isNotBlank()) {
+                        item { StreamingBlock(streamText, active = streamActive) }
+                    }
                 }
             }
         }
@@ -2464,6 +2495,46 @@ private fun AgentSurface(cockpit: CockpitState, actions: CockpitActions) {
     ) {
         item { PageHeading("Agents", "Checkpointed work that never hides its state") }
         item { AgentMemoryContext(cockpit.memoryMatrix) }
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatusCard(
+                    "TERMUX EXECUTION BRIDGE",
+                    if (cockpit.termuxBridge.ready) "Ready" else "Setup required",
+                    cockpit.termuxBridge.detail,
+                    if (cockpit.termuxBridge.ready) ResonanceMint else WaitingAmber,
+                )
+                if (cockpit.termuxBridge.installed && !cockpit.termuxBridge.permissionGranted) {
+                    Button(
+                        onClick = actions.onRequestTermuxPermission,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("GRANT TERMUX COMMAND PERMISSION") }
+                }
+            }
+        }
+        if (cockpit.pendingExecutions.isEmpty()) {
+            item {
+                StatusCard(
+                    "EXECUTION QUEUE",
+                    "No pending commands",
+                    "Sovereign Core may prepare run, test, build, or dependency plans. " +
+                        "Every exact command waits here for approval.",
+                    ResonanceMint,
+                )
+            }
+        } else {
+            items(cockpit.pendingExecutions, key = { "execution-${it.id}" }) { pending ->
+                PendingExecutionCard(
+                    pending = pending,
+                    bridgeReady = cockpit.termuxBridge.ready,
+                    bridgeRoot = cockpit.termuxBridge.workdir,
+                    anotherActionBusy = cockpit.activeAgentActionId != null ||
+                        cockpit.pendingExecutions.any {
+                            it.id != pending.id && it.status in setOf("running", "cancel_requested")
+                        },
+                    actions = actions,
+                )
+            }
+        }
         if (cockpit.pendingActions.isEmpty()) {
             item {
                 StatusCard(
@@ -2485,7 +2556,10 @@ private fun AgentSurface(cockpit: CockpitState, actions: CockpitActions) {
             items(cockpit.pendingActions, key = { it.id }) { pending ->
                 PendingActionCard(
                     pending = pending,
-                    busy = cockpit.activeAgentActionId != null,
+                    busy = cockpit.activeAgentActionId != null ||
+                        cockpit.pendingExecutions.any {
+                            it.status in setOf("running", "cancel_requested")
+                        },
                     actions = actions,
                 )
             }
@@ -2497,11 +2571,125 @@ private fun AgentSurface(cockpit: CockpitState, actions: CockpitActions) {
                     "Runs in bounded, restartable cycles",
                     "Relevant Matrix context guides planning without granting authority",
                     "Writes create versioned snapshots",
+                    "Scripts and dependency changes require exact command approval",
+                    "Dependency plans declare packages and network use",
                     "Deletion remains unavailable in this build",
                     "External actions require batch preview and approval",
                     "Thermal severity can reduce or pause work",
                 ),
             )
+        }
+    }
+}
+
+@Composable
+private fun PendingExecutionCard(
+    pending: PendingExecutionAction,
+    bridgeReady: Boolean,
+    bridgeRoot: String,
+    anotherActionBusy: Boolean,
+    actions: CockpitActions,
+) {
+    val running = pending.status in setOf("running", "cancel_requested")
+    val accent = if (running) HorizonCyan else WaitingAmber
+    val resolvedWorkdir = when {
+        bridgeRoot.isBlank() -> pending.workdir
+        pending.workdir == "." -> bridgeRoot
+        else -> "$bridgeRoot/${pending.workdir}"
+    }
+    OutlinedCard(
+        colors = CardDefaults.outlinedCardColors(containerColor = Color.Transparent),
+        border = BorderStroke(1.dp, Color.Transparent),
+        modifier = Modifier.sovereignGlass(accent, radius = 16.dp, depth = 0.82f, elevation = 2.dp),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "EXECUTION #${pending.id} · ${pending.kind.label}",
+                    color = accent,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    pending.status.uppercase(),
+                    color = accent,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                )
+            }
+            Text(
+                "WORKDIR $resolvedWorkdir · TIMEOUT ${pending.timeoutSeconds}s",
+                color = HorizonCyan,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+            )
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.46f),
+                shape = RoundedCornerShape(8.dp),
+            ) {
+                Text(
+                    pending.command,
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                )
+            }
+            if (pending.dependencies.isNotEmpty()) {
+                Text(
+                    "PACKAGES · ${pending.dependencies.joinToString()}",
+                    color = SoftViolet,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                )
+            }
+            Text(
+                if (pending.networkRequired) {
+                    "NETWORK · REQUIRED AND INCLUDED IN THIS APPROVAL"
+                } else {
+                    "NETWORK · NOT DECLARED"
+                },
+                color = if (pending.networkRequired) InterventionCoral else ResonanceMint,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                "BOUNDARY · RUNS AS TERMUX · WORKDIR IS NOT AN OS SANDBOX",
+                color = InterventionCoral,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            if (pending.reason.isNotBlank()) {
+                Text(pending.reason, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                when (pending.status) {
+                    "pending" -> {
+                        Button(
+                            onClick = { actions.onApproveExecutionAction(pending.id) },
+                            enabled = bridgeReady && !anotherActionBusy,
+                        ) { Text("APPROVE & RUN") }
+                        OutlinedButton(
+                            onClick = { actions.onDenyExecutionAction(pending.id) },
+                            enabled = !anotherActionBusy,
+                        ) { Text("DENY") }
+                    }
+                    "running" -> Button(
+                        onClick = { actions.onStopExecutionAction(pending.id) },
+                        enabled = !anotherActionBusy,
+                        colors = ButtonDefaults.buttonColors(containerColor = InterventionCoral),
+                    ) { Text("STOP", color = Obsidian, fontWeight = FontWeight.Bold) }
+                    "cancel_requested" -> Text(
+                        "STOP SENT · WAITING FOR TERMUX EXIT RECORD",
+                        color = InterventionCoral,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                    )
+                }
+            }
         }
     }
 }

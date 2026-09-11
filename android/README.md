@@ -2,7 +2,7 @@
 
 This module is the private Pixel 10 Pro reference cockpit for Project Intermix.
 The original disconnected shell has passed its first device test. The current
-`0.8.2-session-boundary` candidate combines the stable E4B LiteRT-LM boundary with
+`0.8.3-termux-execution` candidate combines the stable E4B LiteRT-LM boundary with
 the native Memory Matrix, controller-mediated project workspace, and the first
 checkpointed long-form work-session loop. Its cyan–magenta–violet spectral
 glass pass concentrates fluorescence on focus, mode, code, and mission progress
@@ -20,8 +20,8 @@ while preserving neutral long-form reading surfaces.
 - one resident E4B engine with GPU initialization first and CPU fallback;
 - an 8,000-token physical context and bounded per-mode output limits;
 - real native token streaming with an always-visible STOP control;
-- STOP recovery that cancels JNI inference, discards partial output, and
-  rebuilds conversation state before the next turn;
+- STOP recovery that cancels JNI inference, keeps the safe visible draft clearly
+  marked as non-canonical, and rebuilds conversation state before the next turn;
 - deterministic repetition, Unicode, output-length, and exact-number guards;
 - app-private SQLite/WAL conversation and durable-memory tables with FTS5
   retrieval, provenance, revision records, and one-time JSON-history migration;
@@ -37,13 +37,20 @@ while preserving neutral long-form reading surfaces.
   objective, up to 120 scoped controller actions, queued mid-run guidance,
   periodic Matrix context rebuilding, recursive-loop detection, and durable
   pause/resume checkpoints;
+- frozen interrupted/failed Work Session drafts that remain visible but are
+  explicitly excluded from canonical model history and Memory Matrix learning;
+- an opt-in Termux RUN_COMMAND bridge for typed inspect/run/test/build and
+  dependency-install plans, with exact command previews, declared packages and
+  network use, one-at-a-time dispatch, timeouts, bounded results, and STOP;
 - a real Agents approval queue plus pin/forget controls in the Matrix surface;
 - custom destination icons that preserve the cyan-purple cockpit language;
 - actual Android `MemAvailable` and categorical thermal-pressure signals; and
 - thermal-aware visual motion and model initialization.
 
-The app still has no online grounding, Android provider vault, Termux command
-bridge, Kokoro voice, isolated code runner, or unattended scheduler. E2B has a
+The app still has no online grounding, Android provider vault, Kokoro voice,
+in-process code sandbox, live terminal streaming, or unattended scheduler. Its
+execution lane is an explicit external Termux boundary, not unrestricted shell
+access. E2B has a
 fingerprint-locked Tensor G5 import and NPU route, but remains device-evidence
 gated rather than a general fallback.
 Those surfaces remain visibly unavailable instead of simulating success.
@@ -62,6 +69,42 @@ replacement, and directory creation must be approved in Agents. Starting a
 Long Forge work session visibly grants those three mutation types inside one
 named subdirectory for at most 120 actions and 1 MiB of attempted write content.
 Deletion remains disabled in this candidate.
+
+## Termux execution setup
+
+The bridge requires a current Termux build with RUN_COMMAND PendingIntent results
+(Termux `0.109` or newer). In Termux, enable external command requests once:
+
+```bash
+mkdir -p "$HOME/.termux"
+if grep -q '^allow-external-apps=' "$HOME/.termux/termux.properties" 2>/dev/null; then
+  sed -i 's/^allow-external-apps=.*/allow-external-apps=true/' "$HOME/.termux/termux.properties"
+else
+  printf '\nallow-external-apps=true\n' >> "$HOME/.termux/termux.properties"
+fi
+termux-reload-settings
+```
+
+Then open AniCloudAI → Agents and tap **GRANT TERMUX COMMAND PERMISSION**. In
+Chat, configure the Termux path resolving to the same project selected in
+Workspace (often beneath `$HOME/storage/shared`) and enable the bridge:
+
+```text
+/exec workdir /data/data/com.termux/files/home/storage/shared/YourProject
+/exec on
+/exec status
+```
+
+Sovereign Core can then inspect project manifests and propose a run, test,
+build, or dependency action. Every proposal remains inert until **APPROVE & RUN**
+is tapped in Agents. Dependency proposals must list packages and declare network
+use. Results return to the originating conversation/Work Session only after the
+process exits; stdout and stderr are sanitized, marked untrusted, and retained
+with 32 KiB controller ceilings. This bridge never opens the Termux Matrix
+database and never inherits a Long Forge filesystem grant. The configured
+working directory is not an OS sandbox: an approved project script runs as the
+Termux app and inherits Termux's existing storage and network reach. Approve
+only commands and scripts you trust.
 
 For the current Termux E4B package, make a temporary picker-visible copy:
 
@@ -161,7 +204,8 @@ bash tools/termux_dogfood_update.sh --open
     explicit Resume continues from the Matrix checkpoint rather than recent
     chat guesses.
 
-Do not import a live Termux SQLite database. A later bridge must use a reviewed
-export so two runtimes never concurrently open the same database. The next
+Do not import a live Termux SQLite database. The execution bridge exchanges only
+reviewed commands and bounded result records; a future memory bridge must use a
+reviewed export so two runtimes never concurrently open the same database. The next
 native gates are provider grounding and a Keystore-backed credential vault;
 dual-model routing begins only after a compatible E2B package exists.

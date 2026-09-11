@@ -9,7 +9,7 @@ continuity but never grants authority.
 
 ## 1. Long Forge workspace sessions — current build
 
-`0.8.2-session-boundary` separates ordinary Chat from long-running project work and
+`0.8.3-termux-execution` separates ordinary Chat from long-running project work and
 adds non-destructive fresh/reopen conversation controls. A work session has a
 complete objective, one ASCII workspace root, a selected model posture, a durable Matrix
 checkpoint, and a visible foreground STOP path.
@@ -39,21 +39,36 @@ its own results, correct at least one seeded defect, and finish with `[MISSION_C
 manual `RESUME` after every file. Closing the process must convert an in-flight mission to Paused;
 explicit Resume must continue from verified state.
 
-## 2. Native IDE execution
+## 2. Native IDE execution — first candidate
 
 Workspace becomes a usable IDE only after execution is a separate controller rather than a shell
 string emitted by the model.
 
-1. Define versioned `run`, `test`, `build`, and `inspect_environment` requests.
-2. Add a user-enabled, authenticated Termux companion bridge with a per-project working directory.
-3. Preview commands, environment changes, expected outputs, time limits, and network need.
-4. Run each process with stdout/stderr streaming, wall-clock and output ceilings, foreground STOP,
-   and a complete exit record in the Matrix.
-5. Detect project language and existing lockfiles before suggesting dependencies.
-6. Generate a dependency plan; require approval before package or network changes.
-7. Prefer project-local virtual environments and lockfiles. Never silently use root, alter Android
-   settings, or install globally.
-8. Re-open changed files in the syntax-colored editor and attach test evidence to the checkpoint.
+Implemented in `0.8.3-termux-execution`:
+
+1. Typed `run`, `test`, `build`, `inspect_environment`, and `install_dependencies` requests.
+2. A user-enabled Termux RUN_COMMAND bridge with Android permission, a configured project root,
+   and a project-relative working directory per action.
+3. Exact Agents previews for command, packages, network declaration, reason, and timeout.
+4. One-at-a-time background dispatch with a 5–1,800 second wall-clock limit, STOP, and a durable
+   exit record. Returned stdout/stderr are sanitized, marked untrusted, and bounded to 32 KiB each.
+5. A controller prompt that requires manifest/lockfile inspection before a dependency proposal;
+   dependency actions must name packages, declare network use, and receive separate approval.
+6. Fail-closed checks against destructive/privileged/Android-control commands, parent traversal,
+   and absolute Android data/storage paths. Long Forge write authority never grants execution.
+
+The project working directory is a review boundary, not an OS sandbox. An approved script runs
+with the Termux app's existing reach, so script provenance and exact-command review remain part of
+the acceptance contract.
+
+Remaining execution gates:
+
+1. Stream bounded stdout/stderr into a visible foreground terminal instead of returning only the
+   final PendingIntent result.
+2. Add deterministic language/lockfile detection and project-local environment policy rather than
+   relying only on the controller prompt and exact human review.
+3. Re-open changed files in the syntax-colored editor and attach structured test evidence to the
+   mission checkpoint.
 
 ## 3. Librarian and Memory Matrix offload
 
@@ -110,7 +125,7 @@ An AniCloudAI implementation would require its own security design:
 
 1. Prove Long Forge with the adversarial multi-file benchmark.
 2. Make mode selection and E2B eligibility visibly truthful.
-3. Add the isolated IDE runner and dependency approval flow.
+3. Prove the Termux IDE runner and dependency approval flow on-device, then add live result streaming.
 4. Add the native shared research browser and PDF evidence path.
 5. Validate E2B librarian offload on the exact Tensor G5 package.
 6. Prototype optional, tightly scoped screen control only after the earlier controllers pass audit.

@@ -25,8 +25,8 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("compileSdk = 36", app_build)
         self.assertIn("targetSdk = 36", app_build)
         self.assertIn("minSdk = 31", app_build)
-        self.assertIn("versionCode = 13", app_build)
-        self.assertIn('versionName = "0.8.2-session-boundary"', app_build)
+        self.assertIn("versionCode = 14", app_build)
+        self.assertIn('versionName = "0.8.3-termux-execution"', app_build)
         self.assertIn("compose-bom:2026.03.01", app_build)
         self.assertIn('abiFilters += "arm64-v8a"', app_build)
         self.assertIn(
@@ -55,14 +55,17 @@ class AndroidFoundationTests(unittest.TestCase):
                 "android.permission.POST_NOTIFICATIONS",
                 "android.permission.FOREGROUND_SERVICE",
                 "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
+                "com.termux.permission.RUN_COMMAND",
             },
         )
         services = root.findall("application/service")
-        self.assertEqual(len(services), 1)
         self.assertEqual(
-            services[0].attrib[android_name],
-            ".InferenceForegroundService",
+            {service.attrib[android_name] for service in services},
+            {".InferenceForegroundService", ".TermuxExecutionResultService"},
         )
+        queries = root.find("queries")
+        self.assertIsNotNone(queries)
+        self.assertEqual(queries.find("package").attrib[android_name], "com.termux")
 
     def test_composer_contract_is_native_multiline_and_visible_send(self):
         source = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
@@ -199,8 +202,34 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("LegacyHistoryName.migrated", repository)
         self.assertIn("memoryMatrix.loadMessages()", view_model)
         self.assertIn("memoryMatrix.recallContext", view_model)
-        self.assertIn("MatrixSchemaVersion = 2", repository)
+        self.assertIn("MatrixSchemaVersion = 3", repository)
         self.assertIn("undoLatestProfileChange", repository)
+
+    def test_termux_execution_is_typed_approval_gated_and_result_bounded(self):
+        manifest = (APP / "src/main/AndroidManifest.xml").read_text(encoding="utf-8")
+        protocol = (SOURCE / "ControllerProtocol.kt").read_text(encoding="utf-8")
+        bridge = (SOURCE / "TermuxExecutionBridge.kt").read_text(encoding="utf-8")
+        repository = (SOURCE / "MemoryMatrixRepository.kt").read_text(encoding="utf-8")
+        view_model = (SOURCE / "SovereignViewModel.kt").read_text(encoding="utf-8")
+        ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
+        self.assertIn("com.termux.permission.RUN_COMMAND", manifest)
+        self.assertIn("<INTERMIX_EXEC>", protocol)
+        self.assertIn("InstallDependencies", bridge)
+        self.assertIn("TermuxRunCommandPermission", bridge)
+        self.assertIn("permissionGranted", bridge)
+        self.assertIn("ActivityResultContracts.RequestPermission", ui)
+        self.assertIn("GRANT TERMUX COMMAND PERMISSION", ui)
+        self.assertIn("[UNTRUSTED OUTPUT]", repository)
+        self.assertIn("install_dependencies", protocol)
+        self.assertIn("queueExecutionAction", view_model)
+        self.assertIn("approveExecutionAction", view_model)
+        self.assertIn("validateExecutionProposal", bridge)
+        self.assertIn("PendingIntent.FLAG_ONE_SHOT", bridge)
+        self.assertIn("timeout", bridge)
+        self.assertIn("takeLast(32 * 1024)", repository)
+        self.assertIn("CREATE TABLE IF NOT EXISTS execution_actions", repository)
+        self.assertIn("APPROVE & RUN", ui)
+        self.assertIn("NETWORK · REQUIRED AND INCLUDED IN THIS APPROVAL", ui)
 
     def test_native_conversation_sessions_preserve_history_and_reset_model_context(self):
         repository = (SOURCE / "MemoryMatrixRepository.kt").read_text(
@@ -307,6 +336,16 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("GUIDANCE / INTERRUPTION", ui)
         self.assertIn("QUEUE GUIDANCE", ui)
         self.assertIn("120 ACTIONS · MATRIX OFFLOAD · RECURSION GUARD", ui)
+
+    def test_work_session_keeps_interrupted_generation_visible_and_auditable(self):
+        view_model = (SOURCE / "SovereignViewModel.kt").read_text(encoding="utf-8")
+        ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
+        self.assertIn("val raw = accumulated.toString()", view_model)
+        self.assertIn("it.copy(streamText = visible)", view_model)
+        self.assertIn('source = if (mission == null) "integrity" else "mission"', view_model)
+        self.assertIn('source = if (missionWasActive) "mission" else "chat"', view_model)
+        self.assertIn("mission?.active == true && cockpit.streamText.isNotBlank()", ui)
+        self.assertIn("INTERRUPTED DRAFT · NOT COMMITTED TO MEMORY", ui)
 
     def test_matrix_and_custom_destination_icons_are_real_surfaces(self):
         ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")

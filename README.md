@@ -80,8 +80,10 @@ the deterministic controller routes ordinary conversation through it and uses a
 bounded E2B intent/memory handoff before difficult E4B turns. The engine closes
 one profile before loading the other; this is not a simultaneous two-model RAM load.
 
-The native Android `0.8.2-session-boundary` candidate adds non-destructive native
-conversation creation and reopening to the existing fluorescent Long Forge build. It has separate import slots:
+The native Android `0.8.3-termux-execution` candidate adds non-destructive native
+conversation creation/reopening, visible interrupted Work Session drafts, and an
+opt-in approval-gated Termux execution bridge to the fluorescent Long Forge build.
+It has separate import slots:
 
 - **E2B conversation + Memory Matrix:** only the reviewed
   `gemma-4-E2B-it_Google_Tensor_G5.litertlm` fingerprint may use the Google

@@ -109,4 +109,60 @@ class FoundationContractTest {
         assertTrue(isSevereThermalStatus(3))
         assertFalse(isSevereThermalStatus(2))
     }
+
+    @Test
+    fun termuxExecutionRequiresAReviewedBoundedProjectPlan() {
+        val dependencyPlan = validateExecutionProposal(
+            ExecutionProposal(
+                kind = ExecutionKind.InstallDependencies,
+                command = "python -m pip install -r requirements.txt",
+                networkRequired = true,
+                dependencies = listOf("requirements.txt"),
+                timeoutSeconds = 9_999,
+            ),
+        )
+        assertEquals(1_800, dependencyPlan.timeoutSeconds)
+        assertEquals(
+            "/data/data/com.termux/files/home/project/tests",
+            resolveExecutionWorkdir(
+                "/data/data/com.termux/files/home/project",
+                "tests",
+            ),
+        )
+        assertTrue(
+            runCatching {
+                validateExecutionProposal(
+                    ExecutionProposal(ExecutionKind.Run, "rm -rf build"),
+                )
+            }.isFailure,
+        )
+        assertTrue(
+            runCatching {
+                validateExecutionProposal(
+                    ExecutionProposal(ExecutionKind.Run, "bash ../outside.sh"),
+                )
+            }.isFailure,
+        )
+        assertTrue(
+            runCatching {
+                validateExecutionProposal(
+                    ExecutionProposal(ExecutionKind.Run, "bash -lc 'rm -rf build'"),
+                )
+            }.isFailure,
+        )
+        assertTrue(
+            runCatching {
+                validateExecutionProposal(
+                    ExecutionProposal(ExecutionKind.Run, "python -m pip install requests"),
+                )
+            }.isFailure,
+        )
+        assertTrue(
+            runCatching {
+                validateExecutionProposal(
+                    ExecutionProposal(ExecutionKind.Run, "curl https://example.com"),
+                )
+            }.isFailure,
+        )
+    }
 }

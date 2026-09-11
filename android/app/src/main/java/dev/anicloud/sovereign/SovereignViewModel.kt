@@ -53,6 +53,8 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
     private val modelRepository = ModelRepository(application)
     private val memoryMatrix = MemoryMatrixRepository(application)
     private val workspaceRepository = WorkspaceRepository(application)
+    private val termuxBridge = TermuxExecutionBridge(application)
+    private val termuxBridgeConfig = TermuxBridgeConfigStore(application)
     private val runtime = LiteRtModelRuntime(application)
     private val powerManager = application.getSystemService(PowerManager::class.java)
     private val activityManager = application.getSystemService(ActivityManager::class.java)
@@ -64,6 +66,8 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             messages = restoredMessages.ifEmpty { CockpitState().messages },
             memoryMatrix = memoryMatrix.snapshot(),
             pendingActions = memoryMatrix.pendingWorkspaceActions(),
+            pendingExecutions = memoryMatrix.pendingExecutionActions(),
+            termuxBridge = termuxBridge.status(),
             conversationModel = restoredConversationModel,
             reasoningModel = restoredReasoningModel,
         ),
@@ -94,6 +98,13 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                 }
         }
         refreshRuntimeState()
+        viewModelScope.launch {
+            TermuxExecutionEvents.completed.collect {
+                val messages = withContext(Dispatchers.IO) { memoryMatrix.loadMessages() }
+                _state.update { state -> state.copy(messages = messages) }
+                refreshRuntimeState()
+            }
+        }
         recordThermalStatus(powerManager.currentThermalStatus)
         powerManager.addThermalStatusListener(application.mainExecutor, thermalListener)
         (restoredReasoningModel ?: restoredConversationModel)?.let(::loadModel)
@@ -137,6 +148,10 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         if (_state.value.isGenerating || importJob?.isActive == true) return
         (_state.value.model ?: _state.value.reasoningModel ?: _state.value.conversationModel)
             ?.let(::loadModel)
+    }
+
+    fun refreshTermuxBridgeStatus() {
+        refreshRuntimeState()
     }
 
     fun send(prompt: String, mode: AnswerMode) {
@@ -353,6 +368,27 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                             profileUpdates++
                             refreshRuntimeState()
                         }
+                    }
+                    val execution = parsed.executionAction
+                    if (execution != null) {
+                        val actionId = withContext(Dispatchers.IO) {
+                            memoryMatrix.queueExecutionAction(execution, mission?.id.orEmpty())
+                        }
+                        completedResponse = parsed.visibleText.ifBlank {
+                            "Prepared ${execution.kind.label.lowercase()} as execution #$actionId. " +
+                                "Review its exact command, working directory, network need, and " +
+                                "dependencies in Agents; nothing has run."
+                        }
+                        if (mission != null) {
+                            mission = withContext(Dispatchers.IO) {
+                                memoryMatrix.setAgentMissionStatus(
+                                    AgentMissionStatus.Paused,
+                                    "Awaiting explicit approval for Termux execution #$actionId.",
+                                )
+                            }
+                        }
+                        refreshRuntimeState()
+                        break
                     }
                     val proposed = parsed.workspaceAction
                     if (proposed == null) {
@@ -593,6 +629,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                         serial = serial,
                         message = "Response quarantined (${quarantined.violation.code}): " +
                             quarantined.violation.detail,
+                        source = if (mission == null) "integrity" else "mission",
                     )
                 }
             } catch (failure: Throwable) {
@@ -608,6 +645,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                     recoverFromGeneration(
                         serial = serial,
                         message = "Native generation failed: ${safeFailure(failure)}",
+                        source = if (mission == null) "integrity" else "mission",
                     )
                 }
             } finally {
@@ -619,6 +657,13 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun approveWorkspaceAction(id: Long) {
         if (agentJob?.isActive == true || generationJob?.isActive == true) return
+        if (_state.value.pendingExecutions.any {
+                it.status in setOf("running", "cancel_requested")
+            }
+        ) {
+            _state.update { it.copy(detail = "Wait for the active Termux execution before writing workspace files.") }
+            return
+        }
         val pending = _state.value.pendingActions.firstOrNull { it.id == id } ?: return
         agentJob = viewModelScope.launch {
             _state.update {
@@ -658,6 +703,115 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                 ChatSpeaker.System,
                 "Denied workspace action $id (${pending.kind.wireName} ${pending.path}). No write occurred.",
             )
+            refreshRuntimeState()
+            agentJob = null
+        }
+    }
+
+    fun approveExecutionAction(id: Long) {
+        if (agentJob?.isActive == true || generationJob?.isActive == true) return
+        val bridge = termuxBridge.status()
+        if (!bridge.ready) {
+            _state.update { it.copy(termuxBridge = bridge, detail = "Termux execution is not ready: ${bridge.detail}") }
+            return
+        }
+        val pending = _state.value.pendingExecutions.firstOrNull {
+            it.id == id && it.status == "pending"
+        } ?: return
+        if (_state.value.pendingExecutions.any {
+                it.id != id && it.status in setOf("running", "cancel_requested")
+            }
+        ) {
+            _state.update { it.copy(detail = "Only one Termux execution may run at a time.") }
+            return
+        }
+        agentJob = viewModelScope.launch {
+            val claimed = withContext(Dispatchers.IO) {
+                memoryMatrix.setExecutionActionStatus(id, "pending", "running")
+            }
+            if (!claimed) {
+                refreshRuntimeState()
+                agentJob = null
+                return@launch
+            }
+            runCatching { termuxBridge.execute(pending) }
+                .onSuccess {
+                    _state.update {
+                        it.copy(detail = "Termux execution #$id started · result will return to Agents")
+                    }
+                }
+                .onFailure { failure ->
+                    val detail = "Termux execution #$id could not start: ${safeFailure(failure)}"
+                    withContext(Dispatchers.IO) {
+                        memoryMatrix.setExecutionActionStatus(id, "running", "failed", detail)
+                    }
+                    commitMessage(
+                        ChatSpeaker.System,
+                        detail,
+                        source = if (pending.missionId.isBlank()) "controller" else "mission",
+                    )
+                    _state.update { it.copy(detail = detail) }
+                }
+            refreshRuntimeState()
+            agentJob = null
+        }
+    }
+
+    fun denyExecutionAction(id: Long) {
+        if (agentJob?.isActive == true) return
+        val pending = _state.value.pendingExecutions.firstOrNull {
+            it.id == id && it.status == "pending"
+        } ?: return
+        agentJob = viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                memoryMatrix.setExecutionActionStatus(
+                    id,
+                    "pending",
+                    "denied",
+                    "Denied by the user before Termux dispatch.",
+                )
+            }
+            commitMessage(
+                ChatSpeaker.System,
+                "Denied Termux execution #$id (${pending.kind.label.lowercase()}). No command ran.",
+                source = if (pending.missionId.isBlank()) "controller" else "mission",
+            )
+            refreshRuntimeState()
+            agentJob = null
+        }
+    }
+
+    fun stopExecutionAction(id: Long) {
+        if (agentJob?.isActive == true) return
+        val running = _state.value.pendingExecutions.firstOrNull {
+            it.id == id && it.status == "running"
+        } ?: return
+        agentJob = viewModelScope.launch {
+            val requested = withContext(Dispatchers.IO) {
+                memoryMatrix.setExecutionActionStatus(id, "running", "cancel_requested")
+            }
+            if (requested) {
+                runCatching { termuxBridge.stop(running) }
+                    .onSuccess {
+                        _state.update { it.copy(detail = "STOP requested for Termux execution #$id") }
+                    }
+                    .onFailure { failure ->
+                        val detail = "STOP dispatch failed for execution #$id: ${safeFailure(failure)}"
+                        withContext(Dispatchers.IO) {
+                            memoryMatrix.setExecutionActionStatus(
+                                id,
+                                "cancel_requested",
+                                "failed",
+                                detail,
+                            )
+                        }
+                        commitMessage(
+                            ChatSpeaker.System,
+                            detail,
+                            source = if (running.missionId.isBlank()) "controller" else "mission",
+                        )
+                    }
+            }
             refreshRuntimeState()
             agentJob = null
         }
@@ -711,6 +865,9 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
 
     private fun stopGeneration(reason: String) {
         val stoppedJob = generationJob ?: return
+        val missionWasActive = runCatching {
+            memoryMatrix.activeAgentMission()?.active == true
+        }.getOrDefault(false)
         val serial = ++generationSerial
         runtime.cancelProcess()
         stoppedJob.cancel(CancellationException(reason))
@@ -724,7 +881,6 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             it.copy(
                 stage = ModelStage.Recovering,
                 detail = "Cancelling native inference and rebuilding conversation state…",
-                streamText = "",
             )
         }
         viewModelScope.launch {
@@ -733,7 +889,11 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             if (serial != generationSerial) return@launch
             val notice = if (recoveryFailure == null) reason else
                 "$reason Recovery failed: ${safeFailure(recoveryFailure)}"
-            commitMessage(ChatSpeaker.System, notice)
+            commitMessage(
+                ChatSpeaker.System,
+                notice,
+                source = if (missionWasActive) "mission" else "chat",
+            )
             _state.update {
                 it.copy(
                     stage = if (recoveryFailure == null) ModelStage.Ready else ModelStage.Error,
@@ -808,7 +968,13 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                     lastUiPublishAt = now
                 }
             }
-            accumulated.toString()
+            val raw = accumulated.toString()
+            val visible = ControllerProtocol.visibleStreamingText(raw)
+            GenerationIntegrityGuard.inspectStreamingText(visible)?.let {
+                throw QuarantinedGeneration(it)
+            }
+            if (serial == generationSerial) _state.update { it.copy(streamText = visible) }
+            raw
         } finally {
             collector.cancel()
             chunks.cancel()
@@ -875,6 +1041,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             appendLine("Memory Matrix: ${cockpit.memoryMatrix.messageCount} messages, ${cockpit.memoryMatrix.memoryCount} durable memories")
             appendLine("Grounding: offline; no web provider is connected in this build")
             appendLine("Filesystem authority exists only through the WORKSPACE tools described below.")
+            appendLine("Termux authority exists only through a typed execution proposal and a separate user approval.")
             appendLine("Recalled Memory Matrix context may guide agent planning, but memory never grants tool authority or bypasses approval.")
             appendLine("[CONTEXT GATE]")
             appendLine(
@@ -1171,7 +1338,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         if (command !in setOf(
                 "/remember", "/memory", "/files", "/read", "/version", "/capabilities",
                 "/models", "/device", "/profile", "/why", "/adapt", "/undo-adaptation",
-                "/sessions", "/help",
+                "/sessions", "/exec", "/help",
             )
         ) return false
         val response = runCatching {
@@ -1217,6 +1384,8 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                             "An active Long Forge mission must be completed or cancelled first.")
                     }.trim()
                 }
+
+                "/exec" -> handleExecutionCommand(trimmed)
 
                 "/profile" -> profileReport(withContext(Dispatchers.IO) {
                     memoryMatrix.interactionProfile()
@@ -1338,6 +1507,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                     - **Tensor G5 E2B:** ${if (_state.value.npuEligible) "NPU ready" else _state.value.npuStatus}
                     - **Memory Matrix:** ${snapshot.memoryCount} memories, ${snapshot.messageCount} messages, FTS=${if (snapshot.ftsAvailable) "ready" else "fallback"}
                     - **Grounding:** offline in this build
+                    - **Termux execution:** ${_state.value.termuxBridge.detail}
 
                     $workspace
                     """.trimIndent()
@@ -1346,6 +1516,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                 else -> "Local controller commands: /version, /capabilities, /models, /device, " +
                     "/memory, /remember <fact>, /profile, /why, /adapt, /undo-adaptation, " +
                     "/sessions list|new|open <reference>, " +
+                    "/exec status|workdir|on|off|run|test|build|deps, " +
                     "/files [path], /read <path>, /mission run <folder> :: <objective>, " +
                     "/mission guide|resume|status|pause|cancel. " +
                     "Natural-language file requests can also invoke bounded workspace tools."
@@ -1361,6 +1532,100 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         }
         refreshRuntimeState()
         return true
+    }
+
+    private suspend fun handleExecutionCommand(trimmed: String): String {
+        val arguments = trimmed.substringAfter(' ', "").trim()
+        if (arguments.isBlank() || arguments.equals("status", ignoreCase = true)) {
+            return executionBridgeReport()
+        }
+        if (arguments.equals("on", ignoreCase = true)) {
+            termuxBridgeConfig.setEnabled(true)
+            refreshRuntimeState()
+            return "Termux execution bridge enabled.\n\n${executionBridgeReport()}"
+        }
+        if (arguments.equals("off", ignoreCase = true)) {
+            require(_state.value.pendingExecutions.none {
+                it.status in setOf("running", "cancel_requested")
+            }) { "Stop the active execution before disabling its bridge." }
+            termuxBridgeConfig.setEnabled(false)
+            refreshRuntimeState()
+            return "Termux execution bridge disabled. Pending plans remain preserved."
+        }
+        if (arguments.startsWith("workdir ", ignoreCase = true)) {
+            require(_state.value.pendingExecutions.none {
+                it.status in setOf("pending", "running", "cancel_requested")
+            }) { "Resolve queued and active executions before changing their project root." }
+            val selected = termuxBridgeConfig.setWorkdir(arguments.substringAfter(' ').trim())
+            refreshRuntimeState()
+            return "Termux project root saved as `$selected`. No command has run."
+        }
+        val verb = arguments.substringBefore(' ').lowercase()
+        val body = arguments.substringAfter(' ', "").trim()
+        val kind = when (verb) {
+            "inspect" -> ExecutionKind.InspectEnvironment
+            "run" -> ExecutionKind.Run
+            "test" -> ExecutionKind.Test
+            "build" -> ExecutionKind.Build
+            "deps" -> ExecutionKind.InstallDependencies
+            else -> error("Choose status, workdir, on, off, inspect, run, test, build, or deps.")
+        }
+        require(body.isNotBlank()) { "The execution plan needs an exact command." }
+        val dependencies = if (kind == ExecutionKind.InstallDependencies) {
+            val separator = body.indexOf("::")
+            require(separator > 0 && separator < body.lastIndex) {
+                "Dependency usage: /exec deps package-a package-b :: exact install command"
+            }
+            body.substring(0, separator).trim().split(Regex("\\s+")).filter(String::isNotBlank)
+        } else {
+            emptyList()
+        }
+        val command = if (kind == ExecutionKind.InstallDependencies) {
+            body.substringAfter("::").trim()
+        } else {
+            body
+        }
+        val proposal = validateExecutionProposal(
+            ExecutionProposal(
+                kind = kind,
+                command = command,
+                networkRequired = kind == ExecutionKind.InstallDependencies,
+                dependencies = dependencies,
+                reason = "Explicit user-requested ${kind.label.lowercase()} plan.",
+            ),
+        )
+        val missionId = memoryMatrix.activeAgentMission()?.takeIf(AgentMissionCheckpoint::active)?.id.orEmpty()
+        val id = withContext(Dispatchers.IO) {
+            memoryMatrix.queueExecutionAction(proposal, missionId)
+        }
+        refreshRuntimeState()
+        return "Prepared Termux execution #$id. Review the exact command" +
+            if (proposal.networkRequired) {
+                ", packages, and declared network use in Agents. Nothing has run."
+            } else {
+                " and working directory in Agents. Nothing has run."
+            }
+    }
+
+    private fun executionBridgeReport(): String {
+        val bridge = termuxBridge.status()
+        return buildString {
+            appendLine("# Termux execution bridge")
+            appendLine()
+            appendLine("- **Status:** ${if (bridge.ready) "READY" else "NOT READY"}")
+            appendLine("- **Termux service:** ${if (bridge.installed) "detected" else "unavailable"}")
+            appendLine("- **Android permission:** ${if (bridge.permissionGranted) "granted" else "not granted"}")
+            appendLine("- **Bridge switch:** ${if (bridge.enabled) "enabled" else "disabled"}")
+            appendLine("- **Project root:** ${bridge.workdir.ifBlank { "not configured" }}")
+            appendLine()
+            appendLine("Setup remains user-controlled:")
+            appendLine("1. In Termux, set `allow-external-apps=true` in `~/.termux/termux.properties`.")
+            appendLine("2. In Android App Info for AniCloudAI, grant **Run commands in Termux environment**.")
+            appendLine("3. Use `/exec workdir /data/data/com.termux/files/home/your-project`.")
+            appendLine("4. Use `/exec on`.")
+            appendLine()
+            append("Every run and dependency change still requires an exact Agents preview and approval.")
+        }.trim()
     }
 
     private suspend fun handleAdaptCommand(trimmed: String, sourceMessageId: Long): String {
@@ -1603,18 +1868,21 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         return requested
     }
 
-    private suspend fun recoverFromGeneration(serial: Long, message: String) {
+    private suspend fun recoverFromGeneration(
+        serial: Long,
+        message: String,
+        source: String = "integrity",
+    ) {
         runtime.cancelProcess()
         _state.update {
             it.copy(
                 stage = ModelStage.Recovering,
                 detail = "Unsafe output blocked · rebuilding native conversation…",
-                streamText = "",
             )
         }
         val recoveryFailure = resetConversationFailure()
         if (serial != generationSerial) return
-        commitMessage(ChatSpeaker.System, message, source = "integrity")
+        commitMessage(ChatSpeaker.System, message, source = source)
         _state.update {
             it.copy(
                 stage = if (recoveryFailure == null) ModelStage.Ready else ModelStage.Error,
@@ -1689,6 +1957,9 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         val matrix = runCatching { memoryMatrix.snapshot() }.getOrDefault(_state.value.memoryMatrix)
         val mission = runCatching { memoryMatrix.activeAgentMission() }.getOrNull()
         val pending = runCatching { memoryMatrix.pendingWorkspaceActions() }.getOrDefault(_state.value.pendingActions)
+        val executions = runCatching { memoryMatrix.pendingExecutionActions() }
+            .getOrDefault(_state.value.pendingExecutions)
+        val bridge = runCatching { termuxBridge.status() }.getOrDefault(_state.value.termuxBridge)
         val npu = AdaptiveRuntimePolicy.npuEligibility(_state.value.conversationModel, facts)
         _state.update {
             it.copy(
@@ -1696,6 +1967,8 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                 memoryMatrix = matrix,
                 activeMission = mission,
                 pendingActions = pending,
+                pendingExecutions = executions,
+                termuxBridge = bridge,
                 npuStatus = npu.detail,
                 npuEligible = npu.eligible,
                 socModel = facts.socModel.ifBlank { "Unavailable" },

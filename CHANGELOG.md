@@ -8,6 +8,12 @@ may still change.
 
 ### Added
 
+- An opt-in native Termux RUN_COMMAND bridge with typed inspect/run/test/build
+  and dependency-install proposals, exact Agents approval, project-root
+  working directories, declared network/package changes, 5–1,800 second timeouts,
+  single-process concurrency, STOP, and bounded untrusted result records.
+- An in-app request for Termux's custom RUN_COMMAND permission plus `/exec`
+  status, root, enable/disable, and manual proposal controls.
 - Native `/sessions list|new|open <reference>` controls that preserve prior
   SQLite history, durable memories, model files, and SAF grants while resetting
   the resident model conversation before a different session can accept input.
@@ -65,6 +71,11 @@ may still change.
 
 ### Fixed
 
+- Work Session now freezes an interrupted generation on screen as a clearly
+  non-canonical draft and records mission-scoped STOP, integrity, and controller
+  failure notices in the focused transcript instead of letting the stream appear
+  to vanish. Valid completed responses remain the only model output committed to
+  Memory Matrix history.
 - Restored valid GitHub Sponsors funding metadata and added a direct
   Buy Me a Coffee link to the repository header.
 - Installer validation no longer writes Python bytecode caches into the source
