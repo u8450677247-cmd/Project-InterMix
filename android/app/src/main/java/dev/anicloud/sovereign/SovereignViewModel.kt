@@ -13,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -31,6 +32,9 @@ private const val StreamUiPublishMillis = 90L
 private const val MaxControllerCycles = 3
 private const val MaxMissionControllerCycles = 121
 private const val MissionConversationResetInterval = 4
+private const val MaxMissionNoActionRetries = 2
+private const val NpuMemoryReleasePollMillis = 250L
+private const val NpuMemoryReleasePollAttempts = 5
 
 private sealed interface MissionCommand {
     data class Run(val rootPath: String, val objective: String) : MissionCommand
@@ -338,6 +342,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                 var profileProposalConsumed = false
                 var previousActionSignature: String? = null
                 var consecutiveToolFailures = 0
+                var consecutiveMissionNoAction = 0
 
                 val controllerLimit = if (mission == null) MaxControllerCycles else MaxMissionControllerCycles
                 while (controllerCycle < controllerLimit) {
@@ -415,6 +420,40 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                             }
                             continue
                         }
+                        val visible = parsed.visibleText.trim()
+                        val explicitlyFinished = visible.contains("[MISSION_COMPLETE]", ignoreCase = true)
+                        val explicitlyBlocked = visible.contains("[BLOCKED]", ignoreCase = true)
+                        val continuingMission = latestMission?.takeIf {
+                            it.status == AgentMissionStatus.Running
+                        }
+                        if (
+                            continuingMission != null &&
+                            !explicitlyFinished && !explicitlyBlocked &&
+                            consecutiveMissionNoAction < MaxMissionNoActionRetries
+                        ) {
+                            consecutiveMissionNoAction++
+                            mission = continuingMission
+                            request = buildString {
+                                appendLine("[CONTROLLER CORRECTION]")
+                                appendLine("Mission ${continuingMission.id} is still active inside ${continuingMission.rootPath}.")
+                                appendLine("The previous response narrated intent but emitted no controller action.")
+                                appendLine("Continue without waiting for another click: emit exactly one next workspace action.")
+                                appendLine("Paths without the mission-root prefix are interpreted relative to that root.")
+                                appendLine("If work is actually complete, return [MISSION_COMPLETE]. If human input is essential, return [BLOCKED].")
+                                if (visible.isNotBlank()) {
+                                    appendLine()
+                                    appendLine("Previous narration (not a verified tool result):")
+                                    append(visible.take(2_000))
+                                }
+                            }
+                            _state.update {
+                                it.copy(
+                                    detail = "${continuingMission.id} · narration-only response · requesting next action",
+                                    streamText = "",
+                                )
+                            }
+                            continue
+                        }
                         completedResponse = parsed.visibleText.ifBlank {
                             if (mission == null) "The native response contained no visible result." else
                                 "[PAUSED] ${mission?.id} yielded without a next controller action."
@@ -433,7 +472,11 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                         break
                     }
 
-                    val normalized = normalizeProposal(proposed)
+                    consecutiveMissionNoAction = 0
+                    val normalizedProposal = normalizeProposal(proposed)
+                    val normalized = mission?.let {
+                        scopeMissionProposal(normalizedProposal, it)
+                    } ?: normalizedProposal
                     val signature = "${normalized.kind.wireName}:${normalized.path}:${normalized.content.hashCode()}"
                     if (signature == previousActionSignature) {
                         throw QuarantinedGeneration(
@@ -1332,6 +1375,20 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         return proposal.copy(path = path)
     }
 
+    /** Mission model paths are relative to the explicitly granted mission root. */
+    private fun scopeMissionProposal(
+        proposal: WorkspaceActionProposal,
+        mission: AgentMissionCheckpoint,
+    ): WorkspaceActionProposal {
+        val scopedPath = when {
+            proposal.path.isBlank() -> mission.rootPath
+            proposal.path == mission.rootPath -> proposal.path
+            proposal.path.startsWith("${mission.rootPath}/") -> proposal.path
+            else -> "${mission.rootPath}/${proposal.path}"
+        }
+        return proposal.copy(path = normalizeWorkspacePath(scopedPath, allowRoot = false))
+    }
+
     private suspend fun handleLocalCommand(prompt: String, sourceMessageId: Long, serial: Long): Boolean {
         val trimmed = prompt.trim()
         val command = trimmed.substringBefore(' ').lowercase()
@@ -1709,7 +1766,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             )
         }
         if (model.role == ModelRole.Conversation) {
-            val eligibility = AdaptiveRuntimePolicy.npuEligibility(model, deviceRuntimeFacts())
+            val eligibility = AdaptiveRuntimePolicy.npuPackageEligibility(model, deviceRuntimeFacts())
             if (!eligibility.eligible) {
                 val hasResidentModel = _state.value.backend != null && _state.value.model != null
                 _state.update {
@@ -1748,6 +1805,24 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                 importBytesTotal = model.byteSize,
                 routeLabel = "$modelLabel initialization",
             )
+        }
+        if (model.role == ModelRole.Conversation) {
+            val eligibility = releaseResidentModelAndAwaitNpu(model)
+            if (!eligibility.eligible) {
+                val failure = IllegalStateException(eligibility.detail)
+                if (recoverReasoningAfterNpuFailure(failure)) return
+                _state.update {
+                    it.copy(
+                        stage = ModelStage.Empty,
+                        detail = "E2B retained but NPU is locked: ${eligibility.detail}",
+                        backend = null,
+                        activeModelRole = null,
+                        npuStatus = eligibility.detail,
+                        routeLabel = "No active model route",
+                    )
+                }
+                return
+            }
         }
         val loadStartedAt = SystemClock.elapsedRealtime()
         val loaded = try {
@@ -1829,31 +1904,27 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             )
         }
         val startedAt = SystemClock.elapsedRealtime()
+        if (requested.model.role == ModelRole.Conversation) {
+            val eligibility = releaseResidentModelAndAwaitNpu(requested.model)
+            if (!eligibility.eligible) {
+                return loadReasoningFallback(
+                    mode = mode,
+                    startedAt = startedAt,
+                    detail = "E2B NPU preflight refused the load: ${eligibility.detail}",
+                )
+            }
+        }
         val loaded = try {
             runtime.load(requested.model, requested.backendPreference)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Throwable) {
             if (requested.model.role != ModelRole.Conversation) throw failure
-            val fallback = _state.value.reasoningModel ?: throw failure
-            val fallbackLoaded = runtime.load(fallback, RuntimeBackendPreference.GpuThenCpu)
-            val fallbackRoute = AdaptiveModelRoute(
-                model = fallback,
-                backendPreference = RuntimeBackendPreference.GpuThenCpu,
-                label = "E4B · ${mode.label}",
-                reason = "E2B NPU load failed safely; GPU fallback was refused: ${safeFailure(failure)}",
+            return loadReasoningFallback(
+                mode = mode,
+                startedAt = startedAt,
+                detail = "E2B NPU load failed safely; GPU fallback was refused: ${safeFailure(failure)}",
             )
-            _state.update {
-                it.copy(
-                    model = fallback,
-                    activeModelRole = ModelRole.Reasoning,
-                    backend = fallbackLoaded.backend,
-                    modelLoadMillis = SystemClock.elapsedRealtime() - startedAt,
-                    routeLabel = "${fallbackRoute.label} · ${fallbackLoaded.backend.name}",
-                    routeReason = fallbackRoute.reason,
-                )
-            }
-            return fallbackRoute
         }
         _state.update {
             it.copy(
@@ -1866,6 +1937,51 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             )
         }
         return requested
+    }
+
+    /**
+     * E4B can hold enough GPU/native memory to make E2B look ineligible. Close
+     * the resident engine first, then give Android a bounded moment to publish
+     * the reclaimed MemAvailable value before applying the final NPU load gate.
+     */
+    private suspend fun releaseResidentModelAndAwaitNpu(model: ImportedModel): NpuEligibility {
+        withContext(Dispatchers.IO) { runtime.close() }
+        _state.update { it.copy(backend = null, activeModelRole = null) }
+        var eligibility = AdaptiveRuntimePolicy.npuEligibility(model, deviceRuntimeFacts())
+        repeat(NpuMemoryReleasePollAttempts) { attempt ->
+            if (eligibility.eligible) return eligibility
+            if (attempt + 1 < NpuMemoryReleasePollAttempts) {
+                delay(NpuMemoryReleasePollMillis)
+                eligibility = AdaptiveRuntimePolicy.npuEligibility(model, deviceRuntimeFacts())
+            }
+        }
+        return eligibility
+    }
+
+    private suspend fun loadReasoningFallback(
+        mode: AnswerMode,
+        startedAt: Long,
+        detail: String,
+    ): AdaptiveModelRoute {
+        val fallback = _state.value.reasoningModel ?: error(detail)
+        val fallbackLoaded = runtime.load(fallback, RuntimeBackendPreference.GpuThenCpu)
+        val fallbackRoute = AdaptiveModelRoute(
+            model = fallback,
+            backendPreference = RuntimeBackendPreference.GpuThenCpu,
+            label = "E4B · ${mode.label}",
+            reason = detail,
+        )
+        _state.update {
+            it.copy(
+                model = fallback,
+                activeModelRole = ModelRole.Reasoning,
+                backend = fallbackLoaded.backend,
+                modelLoadMillis = SystemClock.elapsedRealtime() - startedAt,
+                routeLabel = "${fallbackRoute.label} · ${fallbackLoaded.backend.name}",
+                routeReason = fallbackRoute.reason,
+            )
+        }
+        return fallbackRoute
     }
 
     private suspend fun recoverFromGeneration(
@@ -1910,11 +2026,13 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         text: String,
         source: String = "chat",
     ): ChatMessage {
-        val id = withContext(Dispatchers.IO) { memoryMatrix.appendMessage(speaker, text, source) }
-        val message = ChatMessage(id, speaker, text.trim(), source)
-        _state.update { state ->
-            state.copy(messages = state.messages.filterNot { it.id < 0 } + message)
+        val (id, committed) = withContext(Dispatchers.IO) {
+            val inserted = memoryMatrix.appendMessage(speaker, text, source)
+            inserted to memoryMatrix.loadMessages()
         }
+        val message = committed.lastOrNull { it.id == id }
+            ?: ChatMessage(id, speaker, text.trim(), source)
+        _state.update { it.copy(messages = committed.ifEmpty { listOf(message) }) }
         return message
     }
 

@@ -46,7 +46,8 @@ object AdaptiveRuntimePolicy {
         "preference", "decision", "earlier", "last time",
     )
 
-    fun npuEligibility(model: ImportedModel?, facts: DeviceRuntimeFacts): NpuEligibility {
+    /** Immutable package/device gates that are safe to evaluate with E4B resident. */
+    fun npuPackageEligibility(model: ImportedModel?, facts: DeviceRuntimeFacts): NpuEligibility {
         if (model == null) return NpuEligibility(false, "E2B package not installed")
         if (model.role != ModelRole.Conversation) {
             return NpuEligibility(false, "Only the reviewed E2B role may use Tensor NPU")
@@ -65,10 +66,17 @@ object AdaptiveRuntimePolicy {
         if (!facts.dispatcherAvailable) {
             return NpuEligibility(false, "Pinned Google Tensor 2.1.6 dispatcher is not packaged")
         }
+        return NpuEligibility(true, "Exact Tensor G5 E2B fingerprint + dispatcher verified")
+    }
+
+    /** Final load gate; call after releasing a resident E4B engine. */
+    fun npuEligibility(model: ImportedModel?, facts: DeviceRuntimeFacts): NpuEligibility {
+        val packageEligibility = npuPackageEligibility(model, facts)
+        if (!packageEligibility.eligible) return packageEligibility
         if (facts.availableMemoryBytes < MinimumNpuAvailableBytes) {
             return NpuEligibility(false, "Android MemAvailable is below the 1.75 GiB NPU load floor")
         }
-        return NpuEligibility(true, "Exact Tensor G5 E2B fingerprint + dispatcher verified")
+        return packageEligibility
     }
 
     fun select(
@@ -78,7 +86,10 @@ object AdaptiveRuntimePolicy {
         reasoningModel: ImportedModel?,
         facts: DeviceRuntimeFacts,
     ): AdaptiveModelRoute? {
-        val npu = npuEligibility(conversationModel, facts)
+        // Route selection must not reject E2B merely because the currently
+        // resident E4B engine depresses MemAvailable. The final memory check is
+        // performed after that engine is released by the runtime owner.
+        val npu = npuPackageEligibility(conversationModel, facts)
         val normalized = prompt.lowercase(Locale.ROOT)
         val needsReasoning = reasoningSignals.any(normalized::contains) || prompt.length > 1_600
         val memoryFirst = memorySignals.any(normalized::contains)

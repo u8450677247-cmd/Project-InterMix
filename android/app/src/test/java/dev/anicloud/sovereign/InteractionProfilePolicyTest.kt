@@ -14,7 +14,8 @@ class InteractionProfilePolicyTest {
 
         assertEquals(ContextScope.General, decision.scope)
         assertFalse(decision.includeWorkspace)
-        assertEquals(0, decision.recentMessageLimit)
+        assertEquals(12, decision.recentMessageLimit)
+        assertTrue(decision.characterBudget >= 8_000)
         assertFalse(decision.allowMemoryFallback)
     }
 

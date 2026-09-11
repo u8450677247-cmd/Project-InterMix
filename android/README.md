@@ -2,7 +2,7 @@
 
 This module is the private Pixel 10 Pro reference cockpit for Project Intermix.
 The original disconnected shell has passed its first device test. The current
-`0.8.3-termux-execution` candidate combines the stable E4B LiteRT-LM boundary with
+`0.8.4-continuity-routing` candidate combines the stable E4B LiteRT-LM boundary with
 the native Memory Matrix, controller-mediated project workspace, and the first
 checkpointed long-form work-session loop. Its cyan–magenta–violet spectral
 glass pass concentrates fluorescence on focus, mode, code, and mission progress
@@ -28,7 +28,8 @@ while preserving neutral long-form reading surfaces.
 - non-destructive `/sessions list|new|open <reference>` controls that reset native
   model context while preserving earlier sessions, durable memories, model files,
   and the SAF workspace grant;
-- bounded context rehydration before each model turn;
+- bounded recent-session context rehydration before every model turn, including
+  ordinary chat that does not use explicit continuity wording;
 - a versioned Interaction Profile Matrix with explicit-evidence adaptation,
   undo, and deterministic General/Continuity/Project context selection;
 - a persisted Storage Access Framework project tree with automatic list/read
@@ -37,6 +38,8 @@ while preserving neutral long-form reading surfaces.
   objective, up to 120 scoped controller actions, queued mid-run guidance,
   periodic Matrix context rebuilding, recursive-loop detection, and durable
   pause/resume checkpoints;
+- automatic correction of up to two narration-only mission responses before a
+  pause, plus mission-relative controller paths that remain inside the exact grant;
 - frozen interrupted/failed Work Session drafts that remain visible but are
   explicitly excluded from canonical model history and Memory Matrix learning;
 - an opt-in Termux RUN_COMMAND bridge for typed inspect/run/test/build and
@@ -52,7 +55,8 @@ in-process code sandbox, live terminal streaming, or unattended scheduler. Its
 execution lane is an explicit external Termux boundary, not unrestricted shell
 access. E2B has a
 fingerprint-locked Tensor G5 import and NPU route, but remains device-evidence
-gated rather than a general fallback.
+gated rather than a general fallback. The dispatcher is extracted into Android's
+native-library directory, and E4B is released before the final NPU memory gate.
 Those surfaces remain visibly unavailable instead of simulating success.
 
 ## Model import and storage

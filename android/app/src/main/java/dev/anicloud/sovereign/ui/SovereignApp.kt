@@ -2503,7 +2503,10 @@ private fun AgentSurface(cockpit: CockpitState, actions: CockpitActions) {
                     cockpit.termuxBridge.detail,
                     if (cockpit.termuxBridge.ready) ResonanceMint else WaitingAmber,
                 )
-                if (cockpit.termuxBridge.installed && !cockpit.termuxBridge.permissionGranted) {
+                if (
+                    cockpit.termuxBridge.installed && cockpit.termuxBridge.serviceAvailable &&
+                    !cockpit.termuxBridge.permissionGranted
+                ) {
                     Button(
                         onClick = actions.onRequestTermuxPermission,
                         modifier = Modifier.fillMaxWidth(),

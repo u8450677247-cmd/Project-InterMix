@@ -36,6 +36,28 @@ class AdaptiveRuntimePolicyTest {
     }
 
     @Test
+    fun residentE4bMemoryDoesNotBlockConversationRouteSelection() {
+        val factsWhileE4bIsResident = g5Facts.copy(
+            availableMemoryBytes = 1_400L * 1024L * 1024L,
+        )
+
+        assertFalse(AdaptiveRuntimePolicy.npuEligibility(e2b, factsWhileE4bIsResident).eligible)
+        assertTrue(
+            AdaptiveRuntimePolicy.npuPackageEligibility(e2b, factsWhileE4bIsResident).eligible,
+        )
+        val route = AdaptiveRuntimePolicy.select(
+            AnswerMode.Performance,
+            "hello",
+            e2b,
+            e4b,
+            factsWhileE4bIsResident,
+        )
+
+        assertEquals(ModelRole.Conversation, route?.model?.role)
+        assertEquals(RuntimeBackendPreference.NpuOnly, route?.backendPreference)
+    }
+
+    @Test
     fun wrongFingerprintCannotConsumeGpuAsE2bFallback() {
         val unknown = e2b.copy(sha256 = "unknown")
         assertFalse(AdaptiveRuntimePolicy.npuEligibility(unknown, g5Facts).eligible)

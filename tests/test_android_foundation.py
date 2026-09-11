@@ -25,8 +25,9 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("compileSdk = 36", app_build)
         self.assertIn("targetSdk = 36", app_build)
         self.assertIn("minSdk = 31", app_build)
-        self.assertIn("versionCode = 14", app_build)
-        self.assertIn('versionName = "0.8.3-termux-execution"', app_build)
+        self.assertIn("versionCode = 15", app_build)
+        self.assertIn('versionName = "0.8.4-continuity-routing"', app_build)
+        self.assertIn("jniLibs.useLegacyPackaging = true", app_build)
         self.assertIn("compose-bom:2026.03.01", app_build)
         self.assertIn('abiFilters += "arm64-v8a"', app_build)
         self.assertIn(
@@ -123,6 +124,7 @@ class AndroidFoundationTests(unittest.TestCase):
             policy,
         )
         self.assertIn("RuntimeBackendPreference.NpuOnly", policy)
+        self.assertIn("npuPackageEligibility", policy)
         self.assertIn("role: ModelRole", repository)
         self.assertIn("DEVICE CHECK-UP", ui)
         self.assertIn("IMPORT E2B · TENSOR G5", ui)
@@ -217,6 +219,9 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("InstallDependencies", bridge)
         self.assertIn("TermuxRunCommandPermission", bridge)
         self.assertIn("permissionGranted", bridge)
+        self.assertIn("getApplicationInfo(TermuxPackage", bridge)
+        self.assertIn("getServiceInfo(", bridge)
+        self.assertIn("serviceAvailable", bridge)
         self.assertIn("ActivityResultContracts.RequestPermission", ui)
         self.assertIn("GRANT TERMUX COMMAND PERMISSION", ui)
         self.assertIn("[UNTRUSTED OUTPUT]", repository)
@@ -261,7 +266,7 @@ class AndroidFoundationTests(unittest.TestCase):
         )
         self.assertIn("object InteractionProfilePolicy", policy)
         self.assertIn("ContextScope.General", policy)
-        self.assertIn("recentMessageLimit = 0", policy)
+        self.assertIn("recentMessageLimit = 12", policy)
         self.assertIn("allowMemoryFallback = false", policy)
         self.assertIn("<PROFILE_UPDATE>", protocol)
         self.assertIn("profilePayload", protocol)
@@ -325,6 +330,9 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn('put("action_trail"', repository)
         self.assertIn("MaxMissionControllerCycles = 121", view_model)
         self.assertIn("MissionConversationResetInterval = 4", view_model)
+        self.assertIn("MaxMissionNoActionRetries = 2", view_model)
+        self.assertIn("scopeMissionProposal", view_model)
+        self.assertIn("Continue without waiting for another click", view_model)
         self.assertIn("hasRecursiveActionTail", guard)
         self.assertIn("hasRecursiveActionTail", view_model)
         self.assertIn("guideActiveMission", view_model)
@@ -413,6 +421,13 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("WHERE source='runtime'", repository)
         self.assertIn("GROUP BY session_id, content", repository)
         self.assertIn("messages.none", view_model)
+
+    def test_chat_commit_reloads_the_full_active_session(self):
+        view_model = (SOURCE / "SovereignViewModel.kt").read_text(encoding="utf-8")
+        policy = (SOURCE / "InteractionProfile.kt").read_text(encoding="utf-8")
+        self.assertIn("inserted to memoryMatrix.loadMessages()", view_model)
+        self.assertIn("recentMessageLimit = 12", policy)
+        self.assertIn("ordinary chat; recent session continuity included", policy)
 
     def test_contract_freezes_security_and_sync_boundaries(self):
         contract = (ROOT / "docs/ANDROID_PRODUCT_CONTRACT.md").read_text(

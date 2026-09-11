@@ -11,8 +11,8 @@ android {
         applicationId = "dev.anicloud.sovereign.prototype"
         minSdk = 31
         targetSdk = 36
-        versionCode = 14
-        versionName = "0.8.3-termux-execution"
+        versionCode = 15
+        versionName = "0.8.4-continuity-routing"
 
         buildConfigField("String", "TENSOR_DISPATCH_VERSION", "\"2.1.6\"")
         buildConfigField(
@@ -51,6 +51,10 @@ android {
     }
 
     packaging {
+        // LiteRT's Tensor NPU backend receives applicationInfo.nativeLibraryDir.
+        // Keep the pinned dispatcher as a real extracted file at that path rather
+        // than loading it directly from the APK archive.
+        jniLibs.useLegacyPackaging = true
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
 

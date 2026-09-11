@@ -80,9 +80,11 @@ the deterministic controller routes ordinary conversation through it and uses a
 bounded E2B intent/memory handoff before difficult E4B turns. The engine closes
 one profile before loading the other; this is not a simultaneous two-model RAM load.
 
-The native Android `0.8.3-termux-execution` candidate adds non-destructive native
-conversation creation/reopening, visible interrupted Work Session drafts, and an
-opt-in approval-gated Termux execution bridge to the fluorescent Long Forge build.
+The native Android `0.8.4-continuity-routing` candidate keeps a bounded recent
+transcript in every ordinary turn, reloads the full committed session after each
+message, continues narration-only Work Sessions without another click, and treats
+their unprefixed controller paths as relative to the granted mission root. It also
+hardens Termux component discovery and the fingerprint-locked E2B route.
 It has separate import slots:
 
 - **E2B conversation + Memory Matrix:** only the reviewed

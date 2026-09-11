@@ -2,6 +2,7 @@ package dev.anicloud.sovereign.prototype
 
 import android.app.IntentService
 import android.app.PendingIntent
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -75,14 +76,17 @@ data class PendingExecutionAction(
 data class TermuxBridgeStatus(
     val enabled: Boolean = false,
     val installed: Boolean = false,
+    val serviceAvailable: Boolean = false,
     val permissionGranted: Boolean = false,
     val workdir: String = "",
 ) {
-    val ready: Boolean get() = enabled && installed && permissionGranted && workdir.isNotBlank()
+    val ready: Boolean
+        get() = enabled && installed && serviceAvailable && permissionGranted && workdir.isNotBlank()
 
     val detail: String
         get() = when {
-            !installed -> "Termux is not installed or its command service is unavailable"
+            !installed -> "The official com.termux app is not visible to AniCloudAI"
+            !serviceAvailable -> "Termux is installed, but RunCommandService is unavailable"
             !permissionGranted -> "Android permission to run commands in Termux is not granted"
             !enabled -> "disabled; use /exec on after completing bridge setup"
             workdir.isBlank() -> "project path missing; use /exec workdir <Termux path>"
@@ -115,12 +119,27 @@ object TermuxExecutionEvents {
 class TermuxExecutionBridge(private val context: Context) {
     private val config = TermuxBridgeConfigStore(context)
 
+    @Suppress("DEPRECATION")
     fun status(): TermuxBridgeStatus {
-        val intent = Intent(TermuxRunCommandAction).setClassName(TermuxPackage, TermuxRunCommandService)
-        val installed = context.packageManager.resolveService(intent, 0) != null
+        val packageManager = context.packageManager
+        val installed = runCatching { packageManager.getApplicationInfo(TermuxPackage, 0) }.isSuccess
+        // Query the explicit component rather than resolve an implicit action.
+        // This remains reliable under Android package-visibility filtering.
+        val serviceAvailable = installed && runCatching {
+            packageManager.getServiceInfo(
+                ComponentName(TermuxPackage, TermuxRunCommandService),
+                0,
+            )
+        }.isSuccess
         val permissionGranted =
             context.checkSelfPermission(TermuxRunCommandPermission) == PackageManager.PERMISSION_GRANTED
-        return TermuxBridgeStatus(config.enabled(), installed, permissionGranted, config.workdir())
+        return TermuxBridgeStatus(
+            enabled = config.enabled(),
+            installed = installed,
+            serviceAvailable = serviceAvailable,
+            permissionGranted = permissionGranted,
+            workdir = config.workdir(),
+        )
     }
 
     fun execute(action: PendingExecutionAction) {

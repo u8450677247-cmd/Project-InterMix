@@ -9,7 +9,7 @@ continuity but never grants authority.
 
 ## 1. Long Forge workspace sessions — current build
 
-`0.8.3-termux-execution` separates ordinary Chat from long-running project work and
+`0.8.4-continuity-routing` separates ordinary Chat from long-running project work and
 adds non-destructive fresh/reopen conversation controls. A work session has a
 complete objective, one ASCII workspace root, a selected model posture, a durable Matrix
 checkpoint, and a visible foreground STOP path.
@@ -31,6 +31,8 @@ checkpoint, and a visible foreground STOP path.
 - Guidance is appended to the checkpoint. It does not replace the original objective.
 - Guidance entered while generation is active is queued durably and injected at the next safe
   controller boundary instead of discarding partial work or replacing the objective.
+- Unprefixed action paths are resolved relative to the exact mission root. A narration-only model
+  response receives up to two automatic controller corrections before the mission pauses.
 - Work expected to exceed six actions maintains `PROJECT_STATE.md` in the project so architecture,
   decisions, validation, blockers, and the next action remain inspectable outside the database.
 
