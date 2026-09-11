@@ -214,7 +214,7 @@ class TermuxExecutionResultService : IntentService("AniCloudAI-Termux-Result") {
     override fun onHandleIntent(intent: Intent?) {
         val jobId = intent?.getLongExtra(ResultJobId, -1L) ?: -1L
         if (jobId <= 0L) return
-        val result = intent.getBundleExtra(TermuxResultBundle)
+        val result = intent?.getBundleExtra(TermuxResultBundle)
         val stdout = result?.getString(TermuxStdout).orEmpty()
         val stderr = result?.getString(TermuxStderr).orEmpty()
         val stdoutLength = result?.get(TermuxStdoutOriginalLength)?.toString()?.toLongOrNull()
