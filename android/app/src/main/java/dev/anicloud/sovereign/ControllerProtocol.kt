@@ -108,7 +108,8 @@ object ControllerProtocol {
         <INTERMIX_ACTION>{"kind":"read_file","path":"relative/file.kt"}</INTERMIX_ACTION>
 
         For a requested mutation, emit exactly one proposal. Android will show it in Agents and
-        nothing is written until the user approves it:
+        nothing is written until the user approves it. create_file and write_file must contain the
+        complete, non-empty final content; never create a placeholder and promise to fill it later:
         <INTERMIX_ACTION>{"kind":"create_file","path":"relative/file.md","content":"complete file text","reason":"short reason"}</INTERMIX_ACTION>
         <INTERMIX_ACTION>{"kind":"write_file","path":"existing/file.kt","content":"complete replacement text","reason":"short reason"}</INTERMIX_ACTION>
         <INTERMIX_ACTION>{"kind":"create_directory","path":"relative/folder","reason":"short reason"}</INTERMIX_ACTION>
@@ -181,7 +182,7 @@ object ControllerProtocol {
         Never invent tool results or claim access outside the connected workspace.
         For one read, emit <INTERMIX_ACTION>{"kind":"list_files|read_file","path":"relative/path"}</INTERMIX_ACTION>.
         For one requested write, emit kind create_file, write_file, or create_directory with a
-        relative path, complete content when applicable, and a short reason. Android requires
+        relative path, complete non-empty content for every file mutation, and a short reason. Android requires
         visible approval before ordinary-chat mutations.
         For one approval-gated Termux task, emit <INTERMIX_EXEC> JSON with kind, command, workdir,
         network_required, dependencies, reason, and timeout_seconds. Never emit deletion,
@@ -200,7 +201,8 @@ object ControllerProtocol {
         [SCOPED WORKSPACE CONTROLLER PROTOCOL]
         Emit exactly one raw <INTERMIX_ACTION> JSON block per response and no speculative result.
         Kinds: list_files, read_file, create_file, write_file, create_directory. Paths stay inside
-        the authorized mission root. Write proposals contain complete content. This active mission
+        the authorized mission root. File proposals contain complete, non-empty final content; never
+        create an empty placeholder or split create-then-fill into separate actions. This active mission
         is the bounded approval grant; Android executes, audits, checkpoints, and returns the result.
         Use <INTERMIX_CALC>{"expression":"decimal expression","reason":"why"}</INTERMIX_CALC> for
         derived arithmetic. Use <INTERMIX_EXEC> only when a separate Termux approval is genuinely
@@ -299,10 +301,15 @@ object ControllerProtocol {
         val kind = WorkspaceActionKind.fromWireName(payload.optString("kind")) ?: return null
         val path = payload.optString("path").trim()
         if (kind != WorkspaceActionKind.ListFiles && path.isBlank()) return null
+        val content = payload.optString("content").take(64 * 1024)
+        if (
+            kind in setOf(WorkspaceActionKind.CreateFile, WorkspaceActionKind.WriteFile) &&
+            (!payload.has("content") || payload.isNull("content") || content.isBlank())
+        ) return null
         return WorkspaceActionProposal(
             kind = kind,
             path = path,
-            content = payload.optString("content").take(64 * 1024),
+            content = content,
             reason = payload.optString("reason").trim().take(280),
         )
     }

@@ -183,6 +183,16 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun send(prompt: String, mode: AnswerMode) {
         if (prompt.isBlank() || !_state.value.canSend || generationJob?.isActive == true) return
+        val acceptedDetail = when {
+            prompt.trimStart().startsWith("/mission story ", ignoreCase = true) ->
+                "Story Forge request accepted · preparing the bounded one-file grant…"
+            prompt.trimStart().startsWith("/mission run ", ignoreCase = true) ->
+                "Scoped workspace request accepted · preparing the bounded write grant…"
+            else -> "Request accepted · preparing native inference…"
+        }
+        _state.update {
+            it.copy(stage = ModelStage.Generating, detail = acceptedDetail, streamText = "")
+        }
         val serial = ++generationSerial
         generationJob = viewModelScope.launch {
             val parsedSessionCommand = parseSessionTransitionCommand(prompt)
@@ -800,7 +810,9 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                     consecutiveMissionNoAction = 0
                     val normalizedProposal = normalizeProposal(proposed)
                     val normalized = mission?.let {
-                        scopeMissionProposal(normalizedProposal, it)
+                        normalizedProposal.copy(
+                            path = scopeWorkspaceMissionPath(normalizedProposal.path, it.rootPath),
+                        )
                     } ?: normalizedProposal
                     val signature = "${normalized.kind.wireName}:${normalized.path}:${normalized.content.hashCode()}"
                     if (signature == previousActionSignature) {
@@ -1027,7 +1039,19 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun approveWorkspaceAction(id: Long) {
-        if (agentJob?.isActive == true || generationJob?.isActive == true) return
+        if (generationJob?.isActive == true) {
+            _state.update {
+                it.copy(
+                    detail = "Workspace action #$id is waiting. Approval unlocks when the active " +
+                        "response reaches its safe boundary.",
+                )
+            }
+            return
+        }
+        if (agentJob?.isActive == true) {
+            _state.update { it.copy(detail = "Another approved action is still being finalized.") }
+            return
+        }
         if (_state.value.pendingExecutions.any {
                 it.status in setOf("running", "cancel_requested")
             }
@@ -1035,11 +1059,15 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             _state.update { it.copy(detail = "Wait for the active Termux execution before writing workspace files.") }
             return
         }
-        val pending = _state.value.pendingActions.firstOrNull { it.id == id } ?: return
+        val pending = _state.value.pendingActions.firstOrNull { it.id == id } ?: run {
+            _state.update { it.copy(detail = "Workspace action #$id is no longer pending; refreshing state.") }
+            refreshRuntimeState()
+            return
+        }
+        _state.update {
+            it.copy(activeAgentActionId = id, detail = "Executing approved ${pending.kind.wireName}…")
+        }
         agentJob = viewModelScope.launch {
-            _state.update {
-                it.copy(activeAgentActionId = id, detail = "Executing approved ${pending.kind.wireName}…")
-            }
             val proposal = WorkspaceActionProposal(pending.kind, pending.path, pending.content, pending.reason)
             runCatching { workspaceRepository.executeApproved(proposal) }
                 .onSuccess { result ->
@@ -1737,6 +1765,12 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         ) {
             "Mission ${mission.id} reserves its scoped root path for a directory."
         }
+        require(
+            proposal.kind !in setOf(WorkspaceActionKind.CreateFile, WorkspaceActionKind.WriteFile) ||
+                proposal.content.isNotBlank(),
+        ) {
+            "Mission ${mission.id} rejected an empty placeholder write; complete non-empty content is required."
+        }
         val nextBytes = mission.writtenBytes + when (proposal.kind) {
             WorkspaceActionKind.CreateFile, WorkspaceActionKind.WriteFile ->
                 proposal.content.toByteArray(Charsets.UTF_8).size.toLong()
@@ -1925,20 +1959,6 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             "The proposed file exceeds the 2 MiB write ceiling."
         }
         return proposal.copy(path = path)
-    }
-
-    /** Mission model paths are relative to the explicitly granted mission root. */
-    private fun scopeMissionProposal(
-        proposal: WorkspaceActionProposal,
-        mission: AgentMissionCheckpoint,
-    ): WorkspaceActionProposal {
-        val scopedPath = when {
-            proposal.path.isBlank() -> mission.rootPath
-            proposal.path == mission.rootPath -> proposal.path
-            proposal.path.startsWith("${mission.rootPath}/") -> proposal.path
-            else -> "${mission.rootPath}/${proposal.path}"
-        }
-        return proposal.copy(path = normalizeWorkspacePath(scopedPath, allowRoot = false))
     }
 
     private suspend fun handleLocalCommand(prompt: String, sourceMessageId: Long, serial: Long): Boolean {

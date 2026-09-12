@@ -108,6 +108,48 @@ class FoundationContractTest {
     }
 
     @Test
+    fun emptyWorkspaceMutationsNeverBecomeExecutableActions() {
+        listOf(
+            "<INTERMIX_ACTION>{\"kind\":\"create_file\",\"path\":\"draft.txt\"}</INTERMIX_ACTION>",
+            "<INTERMIX_ACTION>{\"kind\":\"write_file\",\"path\":\"draft.txt\",\"content\":\"\"}</INTERMIX_ACTION>",
+            "<INTERMIX_ACTION>{\"kind\":\"write_file\",\"path\":\"draft.txt\",\"content\":\"   \"}</INTERMIX_ACTION>",
+        ).forEach { raw ->
+            val parsed = ControllerProtocol.parse(raw)
+            assertEquals(null, parsed.workspaceAction)
+            assertTrue(parsed.malformedProtocolSuffix)
+        }
+    }
+
+    @Test
+    fun missionPathsAnchorOnceAndCollapseRootAliasDrift() {
+        val root = "story-forge-orbit"
+        assertEquals(root, scopeWorkspaceMissionPath("", root))
+        assertEquals(
+            "$root/installment_01.txt",
+            scopeWorkspaceMissionPath("installment_01.txt", root),
+        )
+        assertEquals(
+            "$root/installment_01.txt",
+            scopeWorkspaceMissionPath("story-forge-orbit/installment_01.txt", root),
+        )
+        assertEquals(
+            "$root/installment_01.txt",
+            scopeWorkspaceMissionPath("story-forge_orbit/installment_01.txt", root),
+        )
+        assertEquals(
+            "$root/installment_01.txt",
+            scopeWorkspaceMissionPath(
+                "story-forge-orbit/story-forge_orbit/installment_01.txt",
+                root,
+            ),
+        )
+        assertEquals(
+            "$root/chapters/001.txt",
+            scopeWorkspaceMissionPath("chapters/001.txt", root),
+        )
+    }
+
+    @Test
     fun recursiveMissionActionPatternsAreDetectedWithoutRejectingProgress() {
         assertTrue(hasRecursiveActionTail(listOf("read:a", "read:a", "read:a")))
         assertTrue(

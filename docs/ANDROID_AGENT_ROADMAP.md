@@ -9,7 +9,7 @@ continuity but never grants authority.
 
 ## 1. Long Forge workspace sessions — current build
 
-`0.8.9-continuity-recovery` separates ordinary Chat from long-running project work and
+`0.8.10-workspace-write-integrity` separates ordinary Chat from long-running project work and
 adds non-destructive fresh/reopen conversation controls. A work session has a
 complete objective, one ASCII workspace root, a selected model posture, a durable Matrix
 checkpoint, and a visible foreground STOP path.
@@ -35,6 +35,11 @@ checkpoint, and a visible foreground STOP path.
   controller boundary instead of discarding partial work or replacing the objective.
 - Unprefixed action paths are resolved relative to the exact mission root. A narration-only model
   response receives up to four automatic controller corrections before the mission pauses.
+- Start and approval controls expose accepted, waiting, executing, verified, and failed states.
+  File mutations require non-empty complete content and count as successful only after Android
+  reads the exact bytes back; an unverifiable replacement attempts to restore its snapshot.
+- A repeated mission-root alias—including dash/underscore spelling drift—is collapsed once before
+  scope validation so it cannot create `root/root_alias/file` recovery loops.
 - Work expected to exceed six actions maintains `PROJECT_STATE.md` in the project so architecture,
   decisions, validation, blockers, and the next action remain inspectable outside the database.
 

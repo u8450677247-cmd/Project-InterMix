@@ -2572,7 +2572,11 @@ private fun WorkSessionControlPanel(
                         ),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text("START SCOPED WORKSPACE RUN", fontWeight = FontWeight.Bold)
+                        Text(
+                            if (cockpit.isGenerating) "REQUEST ACCEPTED…" else
+                                "START SCOPED BUILD / FILE RUN",
+                            fontWeight = FontWeight.Bold,
+                        )
                     }
                     OutlinedButton(
                         onClick = onStoryStart,
@@ -2581,7 +2585,12 @@ private fun WorkSessionControlPanel(
                         border = BorderStroke(1.dp, HorizonCyan),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text("START STORY FORGE", color = HorizonCyan, fontWeight = FontWeight.Bold)
+                        Text(
+                            if (cockpit.isGenerating) "REQUEST ACCEPTED…" else
+                                "START STORY FORGE · ONE STORY.MD",
+                            color = HorizonCyan,
+                            fontWeight = FontWeight.Bold,
+                        )
                     }
                 } else {
                     Text(
@@ -2599,7 +2608,11 @@ private fun WorkSessionControlPanel(
                         ),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text("START 120-CHAPTER STORY FORGE", fontWeight = FontWeight.Bold)
+                        Text(
+                            if (cockpit.isGenerating) "STORY FORGE STARTING…" else
+                                "START 120-CHAPTER STORY FORGE",
+                            fontWeight = FontWeight.Bold,
+                        )
                     }
                 }
                 Text(
@@ -3124,7 +3137,8 @@ private fun AgentSurface(cockpit: CockpitState, actions: CockpitActions) {
             items(cockpit.pendingActions, key = { it.id }) { pending ->
                 PendingActionCard(
                     pending = pending,
-                    busy = cockpit.activeAgentActionId != null ||
+                    waitingForResponse = cockpit.isGenerating,
+                    busy = cockpit.isGenerating || cockpit.activeAgentActionId != null ||
                         cockpit.pendingExecutions.any {
                             it.status in setOf("running", "cancel_requested")
                         },
@@ -3384,6 +3398,7 @@ private fun AgentMemoryContext(matrix: MemoryMatrixSnapshot) {
 @Composable
 private fun PendingActionCard(
     pending: PendingWorkspaceAction,
+    waitingForResponse: Boolean,
     busy: Boolean,
     actions: CockpitActions,
 ) {
@@ -3437,7 +3452,13 @@ private fun PendingActionCard(
                     onClick = { actions.onApproveWorkspaceAction(pending.id) },
                     enabled = !busy,
                 ) {
-                    Text("APPROVE")
+                    Text(
+                        when {
+                            waitingForResponse -> "WAIT FOR SAFE BOUNDARY"
+                            busy -> "ANOTHER ACTION ACTIVE"
+                            else -> "APPROVE & WRITE"
+                        },
+                    )
                 }
                 OutlinedButton(
                     onClick = { actions.onDenyWorkspaceAction(pending.id) },

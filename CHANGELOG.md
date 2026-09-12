@@ -99,6 +99,13 @@ may still change.
 
 ### Fixed
 
+- Workspace approval controls no longer appear actionable while an inference or another write is
+  crossing its safe boundary. Start actions publish an immediate accepted/busy state, and every
+  blocked approval attempt now explains why instead of silently discarding the tap.
+- Controller-proposed file creation and replacement now require complete non-empty content.
+  Android reads every mutation back byte-for-byte before reporting success, attempts rollback after
+  an unverifiable replacement, and collapses dash/underscore mission-root aliases instead of
+  drifting into duplicated `root/root_alias/file` paths.
 - Explicit `Project goal:`, `Preference:`, `Decision:`, and `Open loop:` statements
   now enter the extractive session capsule deterministically. Ordinary recall defaults
   to visible prose, malformed controller-like suffixes remain non-executable and hidden,

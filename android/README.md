@@ -2,7 +2,7 @@
 
 This module is the private Pixel 10 Pro reference cockpit for Project Intermix.
 The original disconnected shell has passed its first device test. The current
-`0.8.9-continuity-recovery` source candidate combines the stable E4B boundary with
+`0.8.10-workspace-write-integrity` source candidate combines the stable E4B boundary with
 the native Memory Matrix, controller-mediated project workspace, and the first
 checkpointed long-form work-session loop. Its cyan–magenta–violet spectral
 glass pass concentrates fluorescence on focus, mode, code, and mission progress
@@ -42,6 +42,9 @@ while preserving neutral long-form reading surfaces.
 - a persisted Storage Access Framework project tree with automatic list/read
   tools, approval-gated create/write/mkdir actions, pre-write snapshots, Up/back
   navigation, whole-message copy, and explicitly confirmed recoverable trash;
+- immediate accepted/busy feedback for work-session launches and write approvals,
+  non-empty mutation contracts, byte-for-byte post-write verification with rollback
+  for failed replacements, and deterministic collapse of repeated mission-root aliases;
 - a dedicated Long Forge workspace session that accepts one complete
   objective, up to 120 scoped controller actions, queued mid-run guidance,
   fresh per-action Matrix context rebuilding, recursive-loop detection, and durable
