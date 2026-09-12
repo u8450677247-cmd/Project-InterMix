@@ -38,6 +38,7 @@ private const val NpuMemoryReleasePollAttempts = 5
 
 private sealed interface MissionCommand {
     data class Run(val rootPath: String, val objective: String) : MissionCommand
+    data class Story(val rootPath: String, val premise: String) : MissionCommand
     data class Guide(val instruction: String) : MissionCommand
     data object Resume : MissionCommand
     data object Status : MissionCommand
@@ -158,6 +159,27 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         refreshRuntimeState()
     }
 
+    fun setTermuxPluginEnabled(enabled: Boolean) {
+        if (!enabled && _state.value.pendingExecutions.any {
+                it.status in setOf("running", "cancel_requested")
+            }
+        ) {
+            _state.update { it.copy(detail = "Stop the active Termux command before disabling its plugin.") }
+            return
+        }
+        termuxBridgeConfig.setEnabled(enabled)
+        refreshRuntimeState()
+        _state.update {
+            it.copy(
+                detail = if (enabled) {
+                    "Developer plugin · Termux enabled; setup and per-command approval still apply."
+                } else {
+                    "Developer plugin · Termux disabled; native chat, Matrix, and Workspace remain available."
+                },
+            )
+        }
+    }
+
     fun send(prompt: String, mode: AnswerMode) {
         if (prompt.isBlank() || !_state.value.canSend || generationJob?.isActive == true) return
         val serial = ++generationSerial
@@ -206,6 +228,50 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                     refreshRuntimeState()
                 }
 
+                is MissionCommand.Story -> {
+                    val started = runCatching {
+                        withContext(Dispatchers.IO) {
+                            memoryMatrix.startAgentMission(
+                                rootPath = command.rootPath,
+                                objective = command.premise,
+                                mode = mode,
+                                startedMessageId = userMessage.id,
+                                maxActions = StoryForgeTargetChapters,
+                                maxWriteBytes = 2L * 1024L * 1024L,
+                                planKind = StoryForgeMissionKind,
+                            )
+                        }
+                    }.getOrElse { failure ->
+                        completeControllerResponse("[BLOCKED] ${safeFailure(failure)}")
+                        generationJob = null
+                        return@launch
+                    }
+                    val prepared = runCatching {
+                        workspaceRepository.prepareStoryForge(started.rootPath, started.objective)
+                    }.getOrElse { failure ->
+                        withContext(Dispatchers.IO) {
+                            memoryMatrix.setAgentMissionStatus(
+                                AgentMissionStatus.Failed,
+                                "Story Forge setup failed safely: ${safeFailure(failure)}",
+                            )
+                        }
+                        completeControllerResponse("[BLOCKED] Story Forge setup stopped safely: ${safeFailure(failure)}")
+                        generationJob = null
+                        return@launch
+                    }
+                    withContext(Dispatchers.IO) {
+                        memoryMatrix.recordProjectEvent(
+                            "prepare_story_forge",
+                            "${started.rootPath}/story.md",
+                            prepared,
+                        )
+                    }
+                    mission = started
+                    effectivePrompt = started.objective
+                    effectiveMode = started.mode
+                    refreshRuntimeState()
+                }
+
                 MissionCommand.Resume -> {
                     val resumed = runCatching {
                         withContext(Dispatchers.IO) { memoryMatrix.resumeAgentMission() }
@@ -215,6 +281,34 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                         return@launch
                     }
                     mission = resumed
+                    if (resumed.planKind == StoryForgeMissionKind) {
+                        val preparation = runCatching {
+                            workspaceRepository.prepareStoryForge(
+                                resumed.rootPath,
+                                resumed.objective,
+                                allowCommittedChapters = true,
+                            )
+                        }.getOrElse { failure ->
+                            withContext(Dispatchers.IO) {
+                                memoryMatrix.setAgentMissionStatus(
+                                    AgentMissionStatus.Paused,
+                                    "Story Forge recovery stopped safely: ${safeFailure(failure)}",
+                                )
+                            }
+                            completeControllerResponse(
+                                "[BLOCKED] Story Forge recovery stopped safely: ${safeFailure(failure)}",
+                            )
+                            generationJob = null
+                            return@launch
+                        }
+                        withContext(Dispatchers.IO) {
+                            memoryMatrix.recordProjectEvent(
+                                "recover_story_forge",
+                                "${resumed.rootPath}/story.md",
+                                preparation,
+                            )
+                        }
+                    }
                     effectivePrompt = "Resume ${resumed.id} from its controller-owned checkpoint. " +
                         "Verify the last result and continue until complete or genuinely blocked."
                     effectiveMode = resumed.mode
@@ -373,6 +467,189 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                             profileUpdates++
                             refreshRuntimeState()
                         }
+                    }
+                    val storyMission = mission?.takeIf {
+                        it.planKind == StoryForgeMissionKind && it.status == AgentMissionStatus.Running
+                    }
+                    if (storyMission != null) {
+                        val chapter = parsed.storyChapter
+                        if (chapter == null) {
+                            val visible = parsed.visibleText.trim()
+                            if (visible.isNotBlank()) {
+                                commitControllerCycleVisible(visible, missionActive = true)
+                            }
+                            if (visible.contains("[BLOCKED]", ignoreCase = true) ||
+                                consecutiveMissionNoAction >= MaxMissionNoActionRetries
+                            ) {
+                                completedResponse = visible.ifBlank {
+                                    "[PAUSED] ${storyMission.id} did not return a valid private Story Forge chapter."
+                                }
+                                mission = withContext(Dispatchers.IO) {
+                                    memoryMatrix.setAgentMissionStatus(
+                                        AgentMissionStatus.Paused,
+                                        completedResponse,
+                                    )
+                                }
+                                refreshRuntimeState()
+                                break
+                            }
+                            consecutiveMissionNoAction++
+                            request = storyCorrectionPrompt(storyMission, visible)
+                            _state.update {
+                                it.copy(
+                                    detail = "${storyMission.id} · invalid chapter envelope · retrying privately",
+                                    streamText = "",
+                                )
+                            }
+                            continue
+                        }
+
+                        consecutiveMissionNoAction = 0
+                        if (parsed.visibleText.isNotBlank()) {
+                            commitControllerCycleVisible(parsed.visibleText, missionActive = true)
+                        }
+                        val ordinal = storyMission.completedActions + 1
+                        val appendResult = runCatching {
+                            workspaceRepository.appendStoryChapter(
+                                storyMission.rootPath,
+                                ordinal,
+                                chapter,
+                            )
+                        }
+                        controllerCycle++
+                        if (appendResult.isFailure) {
+                            val failure = appendResult.exceptionOrNull() ?: error("Unknown Story Forge failure")
+                            commitMessage(
+                                ChatSpeaker.System,
+                                "[BLOCKED CHAPTER APPEND] ${safeFailure(failure)}",
+                                source = "mission-story",
+                            )
+                            completedResponse = "[PAUSED] ${storyMission.id} stopped at the durable " +
+                                "append boundary: ${safeFailure(failure)}. No chapter cursor advanced; " +
+                                "correct the workspace issue and use `/mission resume`."
+                            mission = withContext(Dispatchers.IO) {
+                                memoryMatrix.setAgentMissionStatus(
+                                    AgentMissionStatus.Paused,
+                                    completedResponse,
+                                )
+                            }
+                            refreshRuntimeState()
+                            break
+                        }
+
+                        consecutiveToolFailures = 0
+                        val commit = appendResult.getOrThrow()
+                        mission = withContext(Dispatchers.IO) {
+                            val checkpoint = memoryMatrix.recordStoryChapter(commit)
+                            memoryMatrix.recordProjectEvent(
+                                "append_story_chapter",
+                                "${checkpoint.rootPath}/story.md",
+                                WorkspaceActionResult(detail = commit.detail),
+                            )
+                            checkpoint
+                        }
+                        commitMessage(
+                            ChatSpeaker.Core,
+                            "**${commit.committedTitle}**\n\n${commit.committedBody}",
+                            source = "mission-story",
+                        )
+                        commitMessage(
+                            ChatSpeaker.System,
+                            storyChapterReport(commit, mission!!),
+                            source = "mission-story",
+                        )
+                        refreshRuntimeState()
+                        if (mission?.status == AgentMissionStatus.Completed) {
+                            completedResponse = "[MISSION_COMPLETE] Story Forge committed exactly " +
+                                "${mission?.completedActions} chapters to `${mission?.rootPath}/story.md` " +
+                                "(${mission?.writtenBytes} appended bytes). Android owned every ordinal, " +
+                                "durable append, recovery marker, checkpoint, and the final stop."
+                            break
+                        }
+                        if (controllerCycle >= controllerLimit) {
+                            completedResponse = "[PAUSED] ${mission?.id} reached its bounded native-cycle " +
+                                "limit. The story checkpoint is durable; use `/mission resume`."
+                            mission = withContext(Dispatchers.IO) {
+                                memoryMatrix.setAgentMissionStatus(
+                                    AgentMissionStatus.Paused,
+                                    completedResponse,
+                                )
+                            }
+                            refreshRuntimeState()
+                            break
+                        }
+                        val checkpoint = mission!!
+                        val latestMission = withContext(Dispatchers.IO) {
+                            memoryMatrix.activeAgentMission()
+                        } ?: checkpoint
+                        mission = latestMission
+                        if (controllerCycle % MissionConversationResetInterval == 0 ||
+                            latestMission.guidance != checkpoint.guidance
+                        ) {
+                            runtime.resetConversation()
+                            request = buildTurnPrompt(
+                                "Continue the private Story Forge payload from the durable checkpoint.",
+                                userMessage.id,
+                                effectiveMode,
+                            )
+                        } else {
+                            request = storyForgeFollowUp(latestMission)
+                        }
+                        _state.update {
+                            it.copy(
+                                detail = "${latestMission.id} · chapter safely committed · continuing",
+                                streamText = "",
+                            )
+                        }
+                        continue
+                    }
+
+                    val calculation = parsed.calculationAction
+                    if (calculation != null) {
+                        if (parsed.visibleText.isNotBlank()) {
+                            commitControllerCycleVisible(parsed.visibleText, missionActive = mission != null)
+                        }
+                        val signature = calculation.expression
+                        if (signature == previousActionSignature) {
+                            throw QuarantinedGeneration(
+                                IntegrityViolation("calculator-loop", "The model repeated one calculator request."),
+                            )
+                        }
+                        previousActionSignature = signature
+                        val verified = runCatching {
+                            DeterministicCalculator.evaluate(calculation.expression)
+                        }
+                        controllerCycle++
+                        request = verified.fold(
+                            onSuccess = { result ->
+                                val record = withContext(Dispatchers.IO) {
+                                    memoryMatrix.recordCalculation(result, calculation.reason, userMessage.id)
+                                }
+                                commitMessage(
+                                    ChatSpeaker.System,
+                                    "[NUMERIC ${record.id}] `${record.expression}` = `${record.result}` · ${record.engine}",
+                                    source = if (mission == null) "controller" else "mission",
+                                )
+                                refreshRuntimeState()
+                                calculationFollowUp(record)
+                            },
+                            onFailure = { failure -> calculationFailureFollowUp(calculation, failure) },
+                        )
+                        if (controllerCycle >= controllerLimit) {
+                            completedResponse = verified.fold(
+                                onSuccess = { result ->
+                                    "Verified `${result.expression}` = **${result.result}** with decimal128."
+                                },
+                                onFailure = { failure ->
+                                    "[BLOCKED] Calculator request failed safely: ${safeFailure(failure)}"
+                                },
+                            )
+                            break
+                        }
+                        _state.update {
+                            it.copy(detail = "Numeric Matrix verified the arithmetic · returning provenance", streamText = "")
+                        }
+                        continue
                     }
                     val execution = parsed.executionAction
                     if (execution != null) {
@@ -1059,7 +1336,15 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         }
         val activeMission = cockpit.activeMission?.takeIf(AgentMissionCheckpoint::active)
         val missionContext = withContext(Dispatchers.IO) { memoryMatrix.agentMissionContext() }
-        val recallForPrompt = recall.take(if (activeMission == null) 8_000 else 2_400)
+        val storyTail = if (activeMission?.planKind == StoryForgeMissionKind) {
+            runCatching { workspaceRepository.storyForgeTail(activeMission.rootPath) }.getOrDefault("")
+        } else {
+            ""
+        }
+        val recallForPrompt = prioritizedRecentRecall(
+            recall,
+            if (activeMission == null) 8_000 else 4_096,
+        )
         val currentRequest = if (
             activeMission != null && prompt.trim() == activeMission.objective.trim()
         ) {
@@ -1067,6 +1352,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         } else {
             prompt.take(if (activeMission == null) 10_000 else 4_000)
         }
+        val firstUseOrientation = firstUseOrientationContext(prompt, cockpit)
         val workspace = if (contextDecision.includeWorkspace) {
             workspaceRepository.controllerContext()
         } else {
@@ -1106,8 +1392,9 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             appendLine("Memory Matrix: ${cockpit.memoryMatrix.messageCount} messages, ${cockpit.memoryMatrix.memoryCount} durable memories")
             appendLine("Grounding: offline; no web provider is connected in this build")
             appendLine("Filesystem authority exists only through the WORKSPACE tools described below.")
-            appendLine("Termux authority exists only through a typed execution proposal and a separate user approval.")
+            appendLine("Termux is an optional developer plugin, disabled by default. It exists only through a typed execution proposal and separate user approval.")
             appendLine("Recalled Memory Matrix context may guide agent planning, but memory never grants tool authority or bypasses approval.")
+            if (firstUseOrientation.isNotBlank()) appendLine("\n$firstUseOrientation")
             appendLine("[CONTEXT GATE]")
             appendLine(
                 "Scope: ${contextDecision.scope.label.uppercase()} · score " +
@@ -1122,21 +1409,36 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                         "Do not ask what project the user means when this work session answers it.",
                 )
                 if (activeMission?.status == AgentMissionStatus.Running) {
-                    appendLine(
-                        "The user explicitly authorized autonomous create/write/mkdir operations only " +
-                            "inside ${activeMission.rootPath}, bounded by the controller budget. " +
-                            "Continue one action at a time until [MISSION_COMPLETE] or [BLOCKED].",
-                    )
-                    appendLine(
-                        "For work expected to exceed six actions, maintain PROJECT_STATE.md inside " +
-                            "the mission root as a concise plan, decision, verification, and next-action ledger.",
-                    )
-                    if (activeMission.completedActions == 0) {
+                    if (activeMission.planKind == StoryForgeMissionKind) {
                         appendLine(
-                            "First-cycle requirement: emit one workspace action now—do not return a " +
-                                "briefing-only response. If the mission folder is new, create_directory " +
-                                "${activeMission.rootPath} before proposing any child path.",
+                            "Story Forge is active. Emit exactly one INTERMIX_STORY payload now. " +
+                                "Never emit a workspace action, calculation, execution, ordinal, or completion claim.",
                         )
+                        appendLine(
+                            "Write one substantial scene that advances the arc while preserving established facts. " +
+                                "Android will privately validate, number, append, checkpoint, and continue.",
+                        )
+                        if (storyTail.isNotBlank()) {
+                            appendLine("[LATEST COMMITTED STORY PROSE · CONTROLLER MARKERS REMOVED]")
+                            appendLine(storyTail)
+                        }
+                    } else {
+                        appendLine(
+                            "The user explicitly authorized autonomous create/write/mkdir operations only " +
+                                "inside ${activeMission.rootPath}, bounded by the controller budget. " +
+                                "Continue one action at a time until [MISSION_COMPLETE] or [BLOCKED].",
+                        )
+                        appendLine(
+                            "For work expected to exceed six actions, maintain PROJECT_STATE.md inside " +
+                                "the mission root as a concise plan, decision, verification, and next-action ledger.",
+                        )
+                        if (activeMission.completedActions == 0) {
+                            appendLine(
+                                "First-cycle requirement: emit one workspace action now—do not return a " +
+                                    "briefing-only response. If the mission folder is new, create_directory " +
+                                    "${activeMission.rootPath} before proposing any child path.",
+                            )
+                        }
                     }
                 }
             }
@@ -1164,6 +1466,112 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                 "Detail: ${safeFailure(it)}\n\nExplain the limitation or choose one safe next read action."
         },
     )
+
+    private fun firstUseOrientationContext(prompt: String, cockpit: CockpitState): String {
+        val compact = prompt.trim().lowercase()
+        if (compact.length > 320) return ""
+        val orientationIntent = listOf(
+            "what's up",
+            "whats up",
+            "what can you do",
+            "who are you",
+            "where are you heading",
+            "where is this going",
+            "show me around",
+        ).any(compact::contains)
+        if (!orientationIntent) return ""
+        return buildString {
+            appendLine("[FIRST-USE ORIENTATION · VERIFIED AND ROADMAP-SEPARATED]")
+            appendLine("Present capabilities naturally, briefly, and with one inviting next action.")
+            appendLine("Available now: private native streaming chat; durable conversations and Memory Matrix; " +
+                "recent-message continuity; approval-scoped Workspace reads/writes; Numeric Matrix; and Story Forge.")
+            appendLine("Optional developer plugin: Termux (${if (cockpit.termuxBridge.enabled) "enabled" else "disabled"}).")
+            appendLine("Current resident route: ${cockpit.routeLabel}. E2B NPU: " +
+                if (cockpit.npuEligible) "controller-eligible." else "not yet device-verified: ${cockpit.npuStatus}.")
+            appendLine("Not connected in this build: web grounding and external API providers.")
+            append("Direction: prove seamless one-click continuity, E2B/NPU correctness, provider permissions, " +
+                "and release-grade mobile polish. Never present roadmap work as already shipped.")
+        }
+    }
+
+    private fun calculationFollowUp(record: NumericCalculationRecord): String =
+        "[VERIFIED NUMERIC RESULT]\n" +
+            "Record: ${record.id}\n" +
+            "Expression: ${record.expression}\n" +
+            "Result: ${record.result}\n" +
+            "Engine: ${record.engine}\n\n" +
+            "Use this controller-produced value in the answer. Do not recalculate or alter it."
+
+    private fun calculationFailureFollowUp(
+        proposal: NumericCalculationProposal,
+        failure: Throwable,
+    ): String = "[VERIFIED NUMERIC RESULT]\n" +
+        "Expression: ${proposal.expression}\nStatus: failed\n" +
+        "Detail: ${safeFailure(failure)}\n\n" +
+        "Explain the invalid expression or request a corrected arithmetic expression. Never guess a value."
+
+    private fun prioritizedRecentRecall(recall: String, limit: Int): String {
+        val marker = "[RECENT COMMITTED CONVERSATION]"
+        val markerIndex = recall.indexOf(marker)
+        if (markerIndex < 0) return recall.take(limit)
+        val support = recall.substring(0, markerIndex).trim()
+        val recentBody = recall.substring(markerIndex + marker.length).trim()
+        val recentBudget = (limit - marker.length - 1).coerceAtLeast(0)
+        val recent = "$marker\n${recentBody.takeLast(recentBudget)}"
+        val supportBudget = (limit - recent.length - 2).coerceAtLeast(0)
+        val fittedSupport = support.take(supportBudget)
+        return listOf(fittedSupport, recent).filter(String::isNotBlank).joinToString("\n\n")
+    }
+
+    private fun storyCorrectionPrompt(mission: AgentMissionCheckpoint, visible: String): String = buildString {
+        appendLine("[CONTROLLER CORRECTION · STORY FORGE]")
+        appendLine("The benchmark remains active and Android still owns its private chapter cursor.")
+        appendLine("Return exactly one valid payload and no narration, number, heading, or completion claim:")
+        appendLine("<INTERMIX_STORY>")
+        appendLine("<TITLE>Short unnumbered title</TITLE>")
+        appendLine("<BODY>One substantial, complete scene.</BODY>")
+        appendLine("<CONTINUITY>Compact facts, open threads, tone, and intended next movement.</CONTINUITY>")
+        appendLine("</INTERMIX_STORY>")
+        if (mission.planState.isNotBlank()) {
+            appendLine("Preserve this last committed continuity capsule:")
+            appendLine(mission.planState.take(1_200))
+        }
+        if (visible.isNotBlank()) {
+            appendLine("Previous narration was preserved in the transcript but was not appended:")
+            appendLine(visible.take(1_000))
+        }
+    }
+
+    private suspend fun storyForgeFollowUp(mission: AgentMissionCheckpoint): String {
+        val tail = runCatching { workspaceRepository.storyForgeTail(mission.rootPath) }.getOrDefault("")
+        return buildString {
+            appendLine("[VERIFIED STORY APPEND]")
+            appendLine("Android synced the previous prose, advanced its private cursor, and retained a snapshot.")
+            appendLine("Continue immediately with exactly one INTERMIX_STORY payload; do not count or announce progress.")
+            if (mission.planState.isNotBlank()) {
+                appendLine("Private continuity capsule:")
+                appendLine(mission.planState.take(1_200))
+            }
+            mission.guidance.lastOrNull()?.let {
+                appendLine("Latest user guidance:")
+                appendLine(it.take(1_200))
+            }
+            if (tail.isNotBlank()) {
+                appendLine("Latest committed prose (controller markers removed):")
+                appendLine(tail)
+            }
+        }
+    }
+
+    private fun storyChapterReport(
+        commit: StoryChapterCommit,
+        checkpoint: AgentMissionCheckpoint,
+    ): String = buildString {
+        append("[CHAPTER ${checkpoint.completedActions}/${checkpoint.maxActions}] ")
+        append(commit.detail)
+        if (commit.alreadyCommitted) append(" Crash-safe idempotency recovery was used.")
+        append(" File bytes: ${commit.totalFileBytes}.")
+    }
 
     private fun missionToolFollowUp(
         proposal: WorkspaceActionProposal,
@@ -1252,27 +1660,34 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                 MissionCommand.Guide(instruction)
             }
         }
-        if (!remainder.startsWith("run ", ignoreCase = true)) {
-            return MissionCommand.Invalid("Choose run, guide, resume, status, pause, or cancel.")
+        val isStory = remainder.startsWith("story ", ignoreCase = true)
+        if (!remainder.startsWith("run ", ignoreCase = true) && !isStory) {
+            return MissionCommand.Invalid("Choose run, story, guide, resume, status, pause, or cancel.")
         }
         val runBody = remainder.substringAfter(' ').trim()
         val separator = runBody.indexOf("::")
         if (separator <= 0) {
-            return MissionCommand.Invalid("A mission needs an explicit workspace root followed by :: and its objective.")
+            return MissionCommand.Invalid(
+                "A mission needs an explicit workspace root followed by :: and its objective or premise.",
+            )
         }
         val root = runBody.substring(0, separator).trim()
         val objective = runBody.substring(separator + 2).trim()
         if (root.isBlank() || objective.isBlank()) {
             return MissionCommand.Invalid("Both the scoped workspace root and mission objective are required.")
         }
-        return MissionCommand.Run(root, objective)
+        return if (isStory) MissionCommand.Story(root, objective) else MissionCommand.Run(root, objective)
     }
 
     private fun missionUsage(): String =
         "`/mission run project-folder :: describe the complete long-form objective`\n\n" +
             "The command grants up to 120 controller actions and 1 MiB of create/write content inside " +
             "that exact folder. Every replacement retains a snapshot; deletion, execution, installs, " +
-            "network access, and paths outside the folder remain unavailable."
+            "network access, and paths outside the folder remain unavailable.\n\n" +
+            "`/mission story story-folder :: describe the characters, world, arc, tone, and ending constraints`\n\n" +
+            "Story Forge generates one private prose installment per native cycle. Android numbers and " +
+            "durably commits exactly 120 chapters to one `story.md`, checkpoints continuity, " +
+            "and stops the benchmark without asking the model to count."
 
     private fun agentMissionReport(mission: AgentMissionCheckpoint?): String = if (mission == null) {
         "No long-form work-session checkpoint exists.\n\n${missionUsage()}"
@@ -1283,7 +1698,10 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             appendLine("- **Status:** ${mission.status.name}")
             appendLine("- **Scope:** `${mission.rootPath}`")
             appendLine("- **Mode:** ${mission.mode.label}")
-            appendLine("- **Actions:** ${mission.completedActions}/${mission.maxActions}")
+            appendLine(
+                "- **${if (mission.planKind == StoryForgeMissionKind) "Chapters" else "Actions"}:** " +
+                    "${mission.completedActions}/${mission.maxActions}",
+            )
             appendLine("- **Written:** ${mission.writtenBytes}/${mission.maxWriteBytes} bytes")
             if (mission.lastAction.isNotBlank()) appendLine("- **Last action:** `${mission.lastAction}`")
             if (mission.lastResult.isNotBlank()) appendLine("- **Last result:** ${mission.lastResult}")
@@ -1424,7 +1842,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         if (command !in setOf(
                 "/remember", "/memory", "/files", "/read", "/version", "/capabilities",
                 "/models", "/device", "/profile", "/why", "/adapt", "/undo-adaptation",
-                "/sessions", "/exec", "/help",
+                "/sessions", "/exec", "/calc", "/help",
             )
         ) return false
         val response = runCatching {
@@ -1443,6 +1861,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                         append("Memory Matrix is active: ${snapshot.messageCount} messages, ")
                         append("${snapshot.memoryCount} durable memories, ")
                         append("${snapshot.pendingActionCount} pending actions, ")
+                        append("${snapshot.numericCalculationCount} verified calculations, ")
                         append("${snapshot.databaseBytes} local bytes, FTS=")
                         append(if (snapshot.ftsAvailable) "ready" else "fallback")
                         if (snapshot.recentMemories.isNotEmpty()) {
@@ -1450,6 +1869,20 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                             append(snapshot.recentMemories.take(5).joinToString { "${it.id}:${it.value}" })
                         }
                     }
+                }
+
+                "/calc" -> {
+                    val expression = trimmed.substringAfter(' ', "").trim()
+                    val verified = DeterministicCalculator.evaluate(expression)
+                    val record = withContext(Dispatchers.IO) {
+                        memoryMatrix.recordCalculation(
+                            verified,
+                            reason = "Explicit local calculator command.",
+                            sourceMessageId = sourceMessageId,
+                        )
+                    }
+                    "# Numeric Matrix\n\n`${record.expression}` = **${record.result}**\n\n" +
+                        "Record ${record.id} · `${record.engine}` · computed locally without model arithmetic."
                 }
 
                 "/sessions" -> {
@@ -1592,6 +2025,8 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                     - **Backend:** ${_state.value.backend?.name ?: "unavailable"}
                     - **Tensor G5 E2B:** ${if (_state.value.npuEligible) "NPU ready" else _state.value.npuStatus}
                     - **Memory Matrix:** ${snapshot.memoryCount} memories, ${snapshot.messageCount} messages, FTS=${if (snapshot.ftsAvailable) "ready" else "fallback"}
+                    - **Numeric Matrix:** ${snapshot.numericCalculationCount} controller-verified calculations · decimal128 provenance
+                    - **Story Forge:** one-click, controller-numbered, checkpointed 120-chapter single-file benchmark
                     - **Grounding:** offline in this build
                     - **Termux execution:** ${_state.value.termuxBridge.detail}
 
@@ -1601,9 +2036,11 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
 
                 else -> "Local controller commands: /version, /capabilities, /models, /device, " +
                     "/memory, /remember <fact>, /profile, /why, /adapt, /undo-adaptation, " +
+                    "/calc <arithmetic expression>, " +
                     "/sessions list|new|open <reference>, " +
                     "/exec status|workdir|on|off|run|test|build|deps, " +
                     "/files [path], /read <path>, /mission run <folder> :: <objective>, " +
+                    "/mission story <folder> :: <premise>, " +
                     "/mission guide|resume|status|pause|cancel. " +
                     "Natural-language file requests can also invoke bounded workspace tools."
             }
@@ -1696,7 +2133,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
     private fun executionBridgeReport(): String {
         val bridge = termuxBridge.status()
         return buildString {
-            appendLine("# Termux execution bridge")
+            appendLine("# Developer plugin · Termux")
             appendLine()
             appendLine("- **Status:** ${if (bridge.ready) "READY" else "NOT READY"}")
             appendLine("- **Termux service:** ${if (bridge.installed) "detected" else "unavailable"}")
@@ -1704,11 +2141,11 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             appendLine("- **Bridge switch:** ${if (bridge.enabled) "enabled" else "disabled"}")
             appendLine("- **Project root:** ${bridge.workdir.ifBlank { "not configured" }}")
             appendLine()
-            appendLine("Setup remains user-controlled:")
-            appendLine("1. In Termux, set `allow-external-apps=true` in `~/.termux/termux.properties`.")
-            appendLine("2. In Android App Info for AniCloudAI, grant **Run commands in Termux environment**.")
-            appendLine("3. Use `/exec workdir /data/data/com.termux/files/home/your-project`.")
-            appendLine("4. Use `/exec on`.")
+            appendLine("Optional setup remains user-controlled:")
+            appendLine("1. Enable the developer plugin here or with `/exec on`.")
+            appendLine("2. In Termux, set `allow-external-apps=true` in `~/.termux/termux.properties`.")
+            appendLine("3. Grant **Run commands in Termux environment** only after enabling the plugin.")
+            appendLine("4. Use `/exec workdir /data/data/com.termux/files/home/your-project`.")
             appendLine()
             append("Every run and dependency change still requires an exact Agents preview and approval.")
         }.trim()

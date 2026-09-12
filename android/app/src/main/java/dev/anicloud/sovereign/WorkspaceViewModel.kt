@@ -25,6 +25,8 @@ data class WorkspaceState(
     val selected: WorkspaceEntry? = null,
     val editorText: String = "",
     val savedText: String = "",
+    val newFolderOpen: Boolean = false,
+    val newFolderName: String = "",
     val pendingTrash: WorkspaceEntry? = null,
     val lastTrash: WorkspaceTrashReceipt? = null,
     val busy: Boolean = false,
@@ -133,7 +135,70 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
         _state.update { it.copy(editorText = text) }
     }
 
+    fun requestNewFolder() {
+        val state = _state.value
+        if (state.rootUri == null || state.currentUri == null || state.busy) return
+        if (state.pendingTrash != null || state.lastTrash != null) {
+            _state.update {
+                it.copy(detail = "Finish the current trash review before creating a folder.")
+            }
+            return
+        }
+        if (state.isDirty) {
+            _state.update { it.copy(detail = "Save or revert the current draft before creating a folder.") }
+            return
+        }
+        _state.update {
+            it.copy(
+                newFolderOpen = true,
+                newFolderName = "",
+                detail = "Name one folder inside ${it.currentLabel}; nothing is created until confirmation.",
+            )
+        }
+    }
+
+    fun updateNewFolderName(name: String) {
+        _state.update { it.copy(newFolderName = name.take(160)) }
+    }
+
+    fun cancelNewFolder() {
+        _state.update {
+            it.copy(
+                newFolderOpen = false,
+                newFolderName = "",
+                detail = "Folder creation cancelled; no workspace entries changed.",
+            )
+        }
+    }
+
+    fun confirmNewFolder() {
+        val state = _state.value
+        val root = state.rootUri?.let(Uri::parse) ?: return
+        val parent = state.currentUri?.let(Uri::parse) ?: return
+        if (!state.newFolderOpen || state.busy || state.isDirty) return
+        viewModelScope.launch {
+            _state.update { it.copy(busy = true, detail = "Creating reviewed folder…") }
+            runCatching {
+                repository.createUserDirectory(root, parent, state.newFolderName)
+            }.onSuccess { created ->
+                _state.update {
+                    it.copy(
+                        newFolderOpen = false,
+                        newFolderName = "",
+                        busy = false,
+                        detail = "Created ${created.displayName} inside ${it.currentLabel}.",
+                    )
+                }
+                refresh()
+            }.onFailure(::showFailure)
+        }
+    }
+
     fun returnToRoot() {
+        if (_state.value.newFolderOpen) {
+            _state.update { it.copy(detail = "Create or cancel the pending folder before navigating.") }
+            return
+        }
         if (_state.value.pendingTrash != null) {
             _state.update { it.copy(detail = "Confirm or cancel the reviewed trash request before navigating.") }
             return
@@ -158,6 +223,10 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun navigateUp() {
         val state = _state.value
+        if (state.newFolderOpen) {
+            cancelNewFolder()
+            return
+        }
         if (state.pendingTrash != null) {
             _state.update { it.copy(detail = "Confirm or cancel the reviewed trash request before navigating.") }
             return
@@ -194,6 +263,10 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
     fun requestTrash(entry: WorkspaceEntry) {
         val state = _state.value
         if (state.busy) return
+        if (state.newFolderOpen) {
+            _state.update { it.copy(detail = "Create or cancel the pending folder before reviewing trash.") }
+            return
+        }
         if (state.lastTrash != null) {
             _state.update { it.copy(detail = "Undo or keep the previous trash move before reviewing another.") }
             return

@@ -86,10 +86,9 @@ class LiteRtModelRuntime(private val context: Context) {
             AnswerMode.Adaptive -> AdaptiveOutputTokens
             AnswerMode.Quality -> QualityOutputTokens
         }
-        // Do not use LiteRT-LM 0.16.1's Flow overload here. Its precompiled
-        // callbackFlow adapter invokes SendChannel.close$default, which is not
-        // present in the Android coroutines runtime and terminates the process.
-        // The callback overload stays below that incompatible adapter.
+        // Keep the callback overload even after aligning LiteRT-LM 0.17.0 with
+        // coroutines 1.11.0. AniCloudAI owns close/error/cancellation boundaries
+        // and does not depend on a precompiled Flow adapter for stream recovery.
         return callbackFlow {
             activeConversation.sendMessageAsync(
                 text = prompt,

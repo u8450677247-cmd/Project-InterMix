@@ -19,10 +19,12 @@ decision.
 
 ## Supply-chain pins
 
-- LiteRT-LM Android: `com.google.ai.edge.litertlm:litertlm-android:0.16.1`
-- Google Tensor dispatcher release: LiteRT `2.1.6`
+- LiteRT-LM Android: `com.google.ai.edge.litertlm:litertlm-android:0.17.0`
+- Google Tensor dispatcher release: LiteRT `2.2.0`
 - Dispatcher archive SHA-256:
-  `98aabbdce8607f6dc6ab7cb92217326eef24a8c97b973b69e62bd0ce14b7495b`
+  `b4c8380df3e9652677dbb93a5aad4499eb756a9b7d9651a9baacb122faadbf0d`
+- Extracted arm64 dispatcher SHA-256:
+  `35b59265eb8595a1d28c2f69693b1cad39d1fa4a38c2c18d5d54550d079264ac`
 - Reviewed Tensor G5 E2B SHA-256:
   `af1082986639ecde7db95d91be6fe54f8b6b458104734c5bafc204e69d6852dc`
 - Packaged native library: `libLiteRtDispatch_GoogleTensor.so`
@@ -36,7 +38,8 @@ Primary upstream references:
 
 - [LiteRT-LM Android Kotlin API](https://developers.google.com/edge/litert-lm/android)
 - [LiteRT NPU acceleration](https://ai.google.dev/edge/litert/next/acceleration/npu)
-- [LiteRT 2.1.6 release](https://github.com/google-ai-edge/LiteRT/releases/tag/v2.1.6)
+- [LiteRT-LM 0.17.0 release](https://github.com/google-ai-edge/LiteRT-LM/releases/tag/v0.17.0)
+- [LiteRT 2.2.0 release](https://github.com/google-ai-edge/LiteRT/releases/tag/v2.2.0)
 
 ## Device check-up gate
 

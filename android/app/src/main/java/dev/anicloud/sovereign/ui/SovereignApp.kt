@@ -41,6 +41,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -115,6 +116,7 @@ import dev.anicloud.sovereign.prototype.PendingWorkspaceAction
 import dev.anicloud.sovereign.prototype.PendingExecutionAction
 import dev.anicloud.sovereign.prototype.RuntimePhase
 import dev.anicloud.sovereign.prototype.SovereignViewModel
+import dev.anicloud.sovereign.prototype.StoryForgeMissionKind
 import dev.anicloud.sovereign.prototype.TermuxRunCommandPermission
 import dev.anicloud.sovereign.prototype.WorkspaceEntry
 import dev.anicloud.sovereign.prototype.WorkspaceState
@@ -138,6 +140,7 @@ private data class CockpitActions(
     val onDenyExecutionAction: (Long) -> Unit,
     val onStopExecutionAction: (Long) -> Unit,
     val onRequestTermuxPermission: () -> Unit,
+    val onSetTermuxPluginEnabled: (Boolean) -> Unit,
     val onForgetMemory: (Long) -> Unit,
     val onSetMemoryPinned: (Long, Boolean) -> Unit,
 )
@@ -155,6 +158,7 @@ private val SlashCommands = listOf(
     SlashCommand("/models", "inspect adaptive routing", "Show E2B/E4B roles and residency"),
     SlashCommand("/capabilities", "show verified controllers", "List what this APK can really do"),
     SlashCommand("/memory", "inspect Matrix state", "Show durable-memory health"),
+    SlashCommand("/calc", "enter an arithmetic expression", "Use verified local decimal arithmetic", true),
     SlashCommand("/remember", "enter the durable fact", "Store an explicit safe memory", true),
     SlashCommand(
         "/sessions",
@@ -176,8 +180,8 @@ private val SlashCommands = listOf(
     ),
     SlashCommand(
         "/mission",
-        "run project-folder :: describe the complete objective",
-        "Start a scoped, checkpointed long-form work session",
+        "run <folder> :: <objective>, or story <folder> :: <premise>",
+        "Start scoped project work or the 120-chapter Story Forge",
         true,
     ),
     SlashCommand("/version", "show build provenance", "Display the installed build and backend"),
@@ -222,6 +226,7 @@ fun AniCloudApp(
         onDenyExecutionAction = sovereignViewModel::denyExecutionAction,
         onStopExecutionAction = sovereignViewModel::stopExecutionAction,
         onRequestTermuxPermission = { termuxPermission.launch(TermuxRunCommandPermission) },
+        onSetTermuxPluginEnabled = sovereignViewModel::setTermuxPluginEnabled,
         onForgetMemory = sovereignViewModel::forgetMemory,
         onSetMemoryPinned = sovereignViewModel::setMemoryPinned,
     )
@@ -530,7 +535,7 @@ private fun PhoneShell(
                     selected = destination == item,
                     onClick = { onDestination(item) },
                     icon = { DestinationIcon(item, selected = destination == item) },
-                    label = { Text(item.label) },
+                    label = { Text(phoneDestinationLabel(item)) },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = accent,
                         selectedTextColor = accent,
@@ -1407,11 +1412,13 @@ private fun MessageBlock(message: ChatMessage) {
                     copied = true
                 },
             ) {
-                Text(if (copied) "COPIED" else "COPY", color = accent, fontSize = 10.sp)
+                Text(if (copied) "COPIED" else "COPY ALL", color = accent, fontSize = 10.sp)
             }
         }
         Spacer(Modifier.height(6.dp))
-        SovereignMarkdown(message.text)
+        SelectionContainer {
+            SovereignMarkdown(message.text)
+        }
     }
 }
 
@@ -1818,9 +1825,10 @@ private fun WorkspaceSurface(
         uri?.let(workspaceViewModel::attachRoot)
     }
     BackHandler(
-        enabled = !workSessionOpen && state.canNavigateUp && !state.busy && state.pendingTrash == null,
+        enabled = !workSessionOpen && (state.newFolderOpen || state.canNavigateUp) &&
+            !state.busy && state.pendingTrash == null,
     ) {
-        workspaceViewModel.navigateUp()
+        if (state.newFolderOpen) workspaceViewModel.cancelNewFolder() else workspaceViewModel.navigateUp()
     }
 
     Column(
@@ -1851,6 +1859,11 @@ private fun WorkspaceSurface(
                 onClick = workspaceViewModel::refresh,
                 enabled = state.rootUri != null && !state.busy,
             ) { Text("REFRESH") }
+            OutlinedButton(
+                onClick = workspaceViewModel::requestNewFolder,
+                enabled = state.rootUri != null && !workSessionOpen && !state.busy &&
+                    !state.newFolderOpen && state.pendingTrash == null && state.lastTrash == null,
+            ) { Text("NEW FOLDER") }
             FluorescentChip(
                 selected = !workSessionOpen,
                 onClick = { workSessionOpen = false },
@@ -1873,7 +1886,7 @@ private fun WorkspaceSurface(
 
         if (state.rootUri != null) {
             Text(
-                "CHAT TOOLS · LIST/READ AUTO · CREATE/WRITE/MKDIR REQUIRE AGENTS APPROVAL · UI TRASH IS CONFIRM-ONLY",
+                "USER NEW FOLDER · AGENT CREATE/WRITE/MKDIR STAY APPROVAL-SCOPED · UI TRASH IS RECOVERABLE",
                 color = ResonanceMint,
                 fontSize = 11.sp,
                 fontFamily = FontFamily.Monospace,
@@ -1886,6 +1899,50 @@ private fun WorkspaceSurface(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
+        }
+
+        if (state.newFolderOpen) {
+            OutlinedCard(
+                border = BorderStroke(1.dp, HorizonCyan.copy(alpha = 0.72f)),
+                colors = CardDefaults.outlinedCardColors(containerColor = Color.Transparent),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("CREATE FOLDER", color = HorizonCyan, fontWeight = FontWeight.Bold)
+                    Text(
+                        "Location: ${state.breadcrumb.ifBlank { state.rootLabel }}",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    OutlinedTextField(
+                        value = state.newFolderName,
+                        onValueChange = workspaceViewModel::updateNewFolderName,
+                        label = { Text("FOLDER NAME") },
+                        placeholder = { Text("new-component") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = workspaceViewModel::confirmNewFolder,
+                            enabled = state.newFolderName.isNotBlank() && !state.busy,
+                        ) { Text("CREATE", fontWeight = FontWeight.Bold) }
+                        OutlinedButton(
+                            onClick = workspaceViewModel::cancelNewFolder,
+                            enabled = !state.busy,
+                        ) { Text("CANCEL") }
+                    }
+                    Text(
+                        "Uses the project’s existing Android folder permission; no additional device-wide permission is requested.",
+                        color = ResonanceMint,
+                        fontSize = 10.sp,
+                    )
+                }
+            }
         }
 
         state.pendingTrash?.let { pending ->
@@ -1990,9 +2047,13 @@ private fun WorkspaceSurface(
                             state,
                             workspaceViewModel::open,
                             workspaceViewModel::requestTrash,
-                            Modifier.weight(0.38f),
+                            Modifier.weight(if (state.selected == null) 0.58f else 0.30f),
                         )
-                        WorkspaceEditor(state, workspaceViewModel, Modifier.weight(0.62f))
+                        WorkspaceEditor(
+                            state,
+                            workspaceViewModel,
+                            Modifier.weight(if (state.selected == null) 0.42f else 0.70f),
+                        )
                     }
                 }
             }
@@ -2048,6 +2109,12 @@ private fun WorkSessionSurface(
                             selectedMode,
                         )
                     },
+                    onStoryStart = {
+                        actions.onSend(
+                            "/mission story ${rootPath.trim()} :: ${objective.trim()}",
+                            selectedMode,
+                        )
+                    },
                     onGuide = {
                         val submitted = guidance.trim()
                         if (submitted.isNotEmpty()) {
@@ -2089,6 +2156,12 @@ private fun WorkSessionSurface(
                             selectedMode,
                         )
                     },
+                    onStoryStart = {
+                        actions.onSend(
+                            "/mission story ${rootPath.trim()} :: ${objective.trim()}",
+                            selectedMode,
+                        )
+                    },
                     onGuide = {
                         val submitted = guidance.trim()
                         if (submitted.isNotEmpty()) {
@@ -2098,14 +2171,18 @@ private fun WorkSessionSurface(
                     },
                     onCommand = { command -> actions.onSend(command, selectedMode) },
                     onStop = actions.onStop,
-                    modifier = Modifier.weight(0.60f).fillMaxWidth(),
+                    modifier = Modifier
+                        .weight(if (mission?.active == true) 0.40f else 0.68f)
+                        .fillMaxWidth(),
                 )
                 WorkSessionThread(
                     missionMessages = missionMessages,
                     streamText = if (streamVisible) cockpit.streamText else "",
                     streamActive = cockpit.isGenerating,
                     listState = threadState,
-                    modifier = Modifier.weight(0.40f).fillMaxWidth(),
+                    modifier = Modifier
+                        .weight(if (mission?.active == true) 0.60f else 0.32f)
+                        .fillMaxWidth(),
                 )
             }
         }
@@ -2125,6 +2202,7 @@ private fun WorkSessionControlPanel(
     onGuidance: (String) -> Unit,
     onMode: (AnswerMode) -> Unit,
     onStart: () -> Unit,
+    onStoryStart: () -> Unit,
     onGuide: () -> Unit,
     onCommand: (String) -> Unit,
     onStop: () -> Unit,
@@ -2169,7 +2247,7 @@ private fun WorkSessionControlPanel(
                 OutlinedTextField(
                     value = objective,
                     onValueChange = onObjective,
-                    label = { Text("COMPLETE OBJECTIVE") },
+                    label = { Text("OBJECTIVE / STORY PREMISE") },
                     placeholder = {
                         Text("Describe the finished artifact, constraints, checks, and completion standard.")
                     },
@@ -2208,6 +2286,15 @@ private fun WorkSessionControlPanel(
                 ) {
                     Text("START SCOPED RUN", fontWeight = FontWeight.Bold)
                 }
+                OutlinedButton(
+                    onClick = onStoryStart,
+                    enabled = workspaceConnected && cockpit.canSend && rootPath.isNotBlank() &&
+                        objective.isNotBlank(),
+                    border = BorderStroke(1.dp, HorizonCyan),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("START 120-CHAPTER STORY FORGE", color = HorizonCyan, fontWeight = FontWeight.Bold)
+                }
                 if (!workspaceConnected) {
                     Text("Connect a project before starting a work session.", color = WaitingAmber, fontSize = 11.sp)
                 }
@@ -2232,7 +2319,9 @@ private fun WorkSessionControlPanel(
                     fontSize = 12.sp,
                 )
                 Text(
-                    "SCOPE ${mission.rootPath} · ACTIONS ${mission.completedActions}/${mission.maxActions}",
+                    "SCOPE ${mission.rootPath} · " +
+                        "${if (mission.planKind == StoryForgeMissionKind) "CHAPTERS" else "ACTIONS"} " +
+                        "${mission.completedActions}/${mission.maxActions}",
                     color = MutedText,
                     fontFamily = FontFamily.Monospace,
                     fontSize = 10.sp,
@@ -2243,6 +2332,7 @@ private fun WorkSessionControlPanel(
                     completedActions = mission.completedActions,
                     maxActions = mission.maxActions,
                     status = mission.status,
+                    story = mission.planKind == StoryForgeMissionKind,
                 )
                 FluorescentProgress(
                     progress = (mission.completedActions.toFloat() / mission.maxActions.toFloat())
@@ -2332,7 +2422,11 @@ private fun WorkSessionControlPanel(
             }
 
             Text(
-                "GRANT · 120 ACTIONS · MATRIX OFFLOAD · RECURSION GUARD · 1 MiB WRITES · AGENT DELETE OFF · EXEC/NET NEED AGENTS APPROVAL",
+                if (mission?.planKind == StoryForgeMissionKind) {
+                    "STORY GRANT · 120 CONTROLLER COMMITS · ONE FILE · POST-SYNC RECOVERY MARKERS · EXACT AUTO-STOP"
+                } else {
+                    "GRANT · 120 ACTIONS · MATRIX OFFLOAD · RECURSION GUARD · 1 MiB WRITES · AGENT DELETE OFF · EXEC/NET NEED AGENTS APPROVAL"
+                },
                 color = ResonanceMint,
                 fontFamily = FontFamily.Monospace,
                 fontSize = 9.sp,
@@ -2395,17 +2489,20 @@ private fun WorkSessionThread(
 }
 
 private val LongForgePhases = listOf("BRIEF", "PLAN", "BUILD", "VERIFY", "HANDOFF")
+private val StoryForgePhases = listOf("SEED", "RISING", "TURN", "CLIMAX", "CODA")
 
 @Composable
 private fun LongForgePhaseRail(
     completedActions: Int,
     maxActions: Int,
     status: AgentMissionStatus,
+    story: Boolean = false,
 ) {
+    val phases = if (story) StoryForgePhases else LongForgePhases
     val fraction = (completedActions.toFloat() / maxActions.coerceAtLeast(1).toFloat())
         .coerceIn(0f, 1f)
     val activeIndex = when {
-        status == AgentMissionStatus.Completed -> LongForgePhases.lastIndex
+        status == AgentMissionStatus.Completed -> phases.lastIndex
         completedActions == 0 -> 0
         fraction < 0.08f -> 1
         fraction < 0.78f -> 2
@@ -2416,7 +2513,7 @@ private fun LongForgePhaseRail(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
     ) {
-        LongForgePhases.forEachIndexed { index, label ->
+        phases.forEachIndexed { index, label ->
             val complete = index < activeIndex || status == AgentMissionStatus.Completed
             val current = index == activeIndex && status != AgentMissionStatus.Completed
             val accent = when {
@@ -2622,12 +2719,29 @@ private fun AgentSurface(cockpit: CockpitState, actions: CockpitActions) {
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 StatusCard(
-                    "TERMUX EXECUTION BRIDGE",
-                    if (cockpit.termuxBridge.ready) "Ready" else "Setup required",
+                    "DEVELOPER PLUGIN · TERMUX",
+                    when {
+                        !cockpit.termuxBridge.enabled -> "Disabled"
+                        cockpit.termuxBridge.ready -> "Ready"
+                        else -> "Setup required"
+                    },
                     cockpit.termuxBridge.detail,
-                    if (cockpit.termuxBridge.ready) ResonanceMint else WaitingAmber,
+                    when {
+                        !cockpit.termuxBridge.enabled -> MutedText
+                        cockpit.termuxBridge.ready -> ResonanceMint
+                        else -> WaitingAmber
+                    },
                 )
+                OutlinedButton(
+                    onClick = {
+                        actions.onSetTermuxPluginEnabled(!cockpit.termuxBridge.enabled)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (cockpit.termuxBridge.enabled) "DISABLE DEVELOPER PLUGIN" else "ENABLE DEVELOPER PLUGIN")
+                }
                 if (
+                    cockpit.termuxBridge.enabled &&
                     cockpit.termuxBridge.installed && cockpit.termuxBridge.serviceAvailable &&
                     !cockpit.termuxBridge.permissionGranted
                 ) {
@@ -2895,6 +3009,26 @@ private fun AgentMemoryContext(matrix: MemoryMatrixSnapshot) {
                         )
                     }
                 }
+            }
+        }
+        if (matrix.recentCalculations.isNotEmpty()) {
+            HorizontalDivider(color = HorizonCyan.copy(alpha = 0.24f))
+            Text(
+                "NUMERIC MATRIX · ${matrix.numericCalculationCount} VERIFIED",
+                color = HorizonCyan,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            matrix.recentCalculations.take(3).forEach { calculation ->
+                Text(
+                    "#${calculation.id}  ${calculation.expression} = ${calculation.result}",
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
     }
@@ -3277,6 +3411,11 @@ private fun destinationAccent(destination: Destination): Color = when (destinati
     Destination.Home, Destination.Workspace -> HorizonCyan
     Destination.Chat, Destination.Agents -> PulseMagenta
     Destination.Memory, Destination.System -> CognitionViolet
+}
+
+private fun phoneDestinationLabel(destination: Destination): String = when (destination) {
+    Destination.Workspace -> "Files"
+    else -> destination.label
 }
 
 @Composable

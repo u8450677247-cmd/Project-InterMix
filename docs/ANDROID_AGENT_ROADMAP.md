@@ -9,7 +9,7 @@ continuity but never grants authority.
 
 ## 1. Long Forge workspace sessions — current build
 
-`0.8.5-ship-hardening` separates ordinary Chat from long-running project work and
+`0.8.6-surgical-fluency` separates ordinary Chat from long-running project work and
 adds non-destructive fresh/reopen conversation controls. A work session has a
 complete objective, one ASCII workspace root, a selected model posture, a durable Matrix
 checkpoint, and a visible foreground STOP path.
@@ -37,10 +37,12 @@ checkpoint, and a visible foreground STOP path.
 - Work expected to exceed six actions maintains `PROJECT_STATE.md` in the project so architecture,
   decisions, validation, blockers, and the next action remain inspectable outside the database.
 
-Acceptance uses the exact
-[`120-action Long Forge benchmark`](ANICLOUDAI_120_ACTION_FORGE_BENCHMARK.md) to create a multi-file project, update `PROJECT_STATE.md`, inspect
-its own results, correct at least one seeded defect, and finish with `[MISSION_COMPLETE]` without a
-manual `RESUME` after every file. Closing the process must convert an in-flight mission to Paused;
+Primary endurance acceptance uses the
+[`120-chapter Story Forge benchmark`](ANICLOUDAI_120_CHAPTER_STORY_FORGE.md). Android owns every
+ordinal, single-file append, idempotency marker, checkpoint, and exact stop while the model writes
+only the next unnumbered scene. The separate
+[`120-action Long Forge benchmark`](ANICLOUDAI_120_ACTION_FORGE_BENCHMARK.md) remains the adversarial
+multi-file engineering gate. Closing the process must convert an in-flight mission to Paused;
 explicit Resume must continue from verified state.
 
 ## 2. Native IDE execution — first candidate

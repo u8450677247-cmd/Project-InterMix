@@ -12,12 +12,16 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.security.MessageDigest
+import java.util.Base64
 
 private const val WorkspacePreferences = "anicloud_workspace"
 private const val WorkspaceRootKey = "root_uri"
 private const val WorkspaceTrashReceiptKey = "last_trash_receipt"
 private const val MaxEditableBytes = 2L * 1024L * 1024L
 private const val MaxModelReadCharacters = 16 * 1024
+private const val StoryForgeFileName = "story.md"
+private const val StoryForgeHeaderMarker = "<!-- ANICLOUD_STORY_FORGE_V1 -->"
+private const val StoryForgeContextCharacters = 4_096
 
 data class WorkspaceEntry(
     val uri: String,
@@ -95,6 +99,193 @@ class WorkspaceRepository(private val context: Context) {
 
     suspend fun writeText(entry: WorkspaceEntry, text: String): WorkspaceSnapshot =
         withContext(Dispatchers.IO) { writeTextNow(entry, text) }
+
+    /** Explicit user creation inside the folder currently open in Workspace Lens. */
+    suspend fun createUserDirectory(
+        root: Uri,
+        parent: Uri,
+        rawName: String,
+    ): WorkspaceEntry = withContext(Dispatchers.IO) {
+        val name = normalizeWorkspaceLeafName(rawName)
+        require(name != ".anicloud-trash") { "The recoverable trash name is reserved." }
+        require(
+            listChildrenNow(root, parent).none { it.displayName.equals(name, ignoreCase = true) },
+        ) { "An entry named $name already exists in this folder." }
+        val created = DocumentsContract.createDocument(
+            context.contentResolver,
+            documentUriForQuery(parent),
+            DocumentsContract.Document.MIME_TYPE_DIR,
+            name,
+        ) ?: error("The document provider refused to create folder $name.")
+        WorkspaceEntry(
+            uri = created.toString(),
+            displayName = name,
+            mimeType = DocumentsContract.Document.MIME_TYPE_DIR,
+            byteSize = null,
+            isDirectory = true,
+        )
+    }
+
+    /** Creates or safely reopens the one-file Story Forge benchmark workspace. */
+    suspend fun prepareStoryForge(
+        rawRootPath: String,
+        rawPremise: String,
+        allowCommittedChapters: Boolean = false,
+    ): WorkspaceActionResult =
+        withContext(Dispatchers.IO) {
+            val root = storedRoot() ?: error("Connect a Workspace project before starting Story Forge.")
+            val rootPath = normalizeWorkspacePath(rawRootPath)
+            val premise = rawPremise.replace("\u0000", "").trim().take(16 * 1024)
+            require(premise.isNotBlank()) { "Story Forge needs a premise." }
+            require("ANICLOUD_CHAPTER:" !in premise.uppercase()) {
+                "The premise cannot contain a controller chapter marker."
+            }
+
+            if (resolveEntry(root, rootPath) == null) createDirectory(root, rootPath)
+            val storyRoot = resolveEntry(root, rootPath)
+                ?: error("Story Forge could not open $rootPath after creating it.")
+            require(storyRoot.isDirectory) { "Story Forge root $rootPath is not a directory." }
+            val children = listChildrenNow(root, Uri.parse(storyRoot.uri))
+            val existing = children.firstOrNull { it.displayName == StoryForgeFileName }
+            if (existing == null) {
+                require(children.isEmpty()) {
+                    "Story Forge will not claim a non-empty folder without its own story.md marker."
+                }
+                val header = buildString {
+                    appendLine(StoryForgeHeaderMarker)
+                    appendLine("# AniCloudAI Story Forge")
+                    appendLine()
+                    appendLine("## Premise")
+                    appendLine()
+                    appendLine(premise)
+                    appendLine()
+                    append("---")
+                }
+                val created = createFile(root, "$rootPath/$StoryForgeFileName", header)
+                return@withContext created.copy(
+                    detail = "Prepared $rootPath/$StoryForgeFileName for controller-owned chapter appends.",
+                )
+            }
+            require(!existing.isDirectory) { "$StoryForgeFileName is a directory, not a story file." }
+            val existingText = readTextNow(existing)
+            require(existingText.startsWith(StoryForgeHeaderMarker)) {
+                "Existing $rootPath/$StoryForgeFileName is not an AniCloudAI Story Forge file."
+            }
+            require("## Premise\n\n$premise\n\n---" in existingText) {
+                "Existing Story Forge premise does not match this durable mission checkpoint."
+            }
+            require(allowCommittedChapters || "<!-- ANICLOUD_CHAPTER:" !in existingText) {
+                "Story Forge found committed chapters in this folder; choose a new benchmark folder."
+            }
+            WorkspaceActionResult(
+                detail = "Recovered the marked Story Forge file at $rootPath/$StoryForgeFileName.",
+                afterSha256 = sha256(existingText.toByteArray(Charsets.UTF_8)),
+            )
+        }
+
+    /**
+     * Appends one controller-numbered chapter with a hidden idempotency marker. If Android died
+     * after the file sync but before the Matrix checkpoint, replay recovers that exact append.
+     */
+    suspend fun appendStoryChapter(
+        rawRootPath: String,
+        ordinal: Int,
+        rawProposal: StoryChapterProposal,
+    ): StoryChapterCommit = withContext(Dispatchers.IO) {
+        val root = storedRoot() ?: error("The connected Workspace project is unavailable.")
+        val rootPath = normalizeWorkspacePath(rawRootPath)
+        val proposal = validateStoryChapterProposal(rawProposal)
+        val storyPath = "$rootPath/$StoryForgeFileName"
+        val entry = resolveEntry(root, storyPath) ?: error("Story Forge file is missing: $storyPath")
+        val current = readTextNow(entry)
+        require(current.startsWith(StoryForgeHeaderMarker)) {
+            "Story Forge stopped because its file identity marker changed."
+        }
+        val marker = storyChapterMarker(ordinal)
+        val markerPattern = Regex("<!-- ANICLOUD_CHAPTER:(\\d{3}) -->")
+        val committedMarkers = markerPattern.findAll(current).toList()
+        val committedOrdinals = committedMarkers.map { it.groupValues[1].toInt() }
+        val existingStart = current.indexOf(marker)
+        if (existingStart >= 0) {
+            require(committedOrdinals == (1..ordinal).toList()) {
+                "Story Forge stopped because its committed marker sequence is not canonical."
+            }
+            val nextStart = current.indexOf("<!-- ANICLOUD_CHAPTER:", existingStart + marker.length)
+                .takeIf { it >= 0 } ?: current.length
+            val existingSectionStart = (existingStart - 2).takeIf {
+                it >= 0 && current.substring(it, existingStart) == "\n\n"
+            } ?: existingStart
+            val existingSection = current.substring(existingStart, nextStart).trim()
+            val existingLines = existingSection.lines()
+            val existingTitle = existingLines.getOrNull(1)
+                ?.substringAfter(" · ", "Recovered chapter")
+                ?.trim()
+                .orEmpty()
+            val continuityLine = existingLines.getOrNull(2).orEmpty()
+            val encodedContinuity = continuityLine
+                .removePrefix("<!-- ANICLOUD_CONTINUITY:")
+                .removeSuffix(" -->")
+            val existingContinuity = runCatching {
+                Base64.getUrlDecoder().decode(encodedContinuity).toString(Charsets.UTF_8)
+            }.getOrDefault("Continue from the recovered prose and preserve every established fact.")
+            val existingBody = existingLines.drop(3).joinToString("\n").trim()
+            val existingBytes = current.substring(existingSectionStart, nextStart)
+                .toByteArray(Charsets.UTF_8).size.toLong()
+            return@withContext StoryChapterCommit(
+                ordinal = ordinal,
+                chapterBytes = existingBytes,
+                totalFileBytes = current.toByteArray(Charsets.UTF_8).size.toLong(),
+                alreadyCommitted = true,
+                committedTitle = existingTitle,
+                committedBody = existingBody,
+                committedContinuity = existingContinuity,
+                detail = "Recovered the already-synced chapter marker for $storyPath.",
+            )
+        }
+        require(committedOrdinals == (1 until ordinal).toList()) {
+            "Story Forge expected a canonical sequence through the preceding chapter marker."
+        }
+        val displayOrdinal = ordinal.toString().padStart(3, '0')
+        val encodedContinuity = Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(proposal.continuity.toByteArray(Charsets.UTF_8))
+        val section = buildString {
+            appendLine()
+            appendLine()
+            appendLine(marker)
+            appendLine("## Chapter $displayOrdinal · ${proposal.title}")
+            appendLine("<!-- ANICLOUD_CONTINUITY:$encodedContinuity -->")
+            appendLine()
+            append(proposal.body)
+            appendLine()
+        }
+        val next = current + section
+        require(next.toByteArray(Charsets.UTF_8).size <= MaxEditableBytes) {
+            "Story Forge reached the 2 MiB workspace file ceiling."
+        }
+        writeTextNow(entry, next)
+        StoryChapterCommit(
+            ordinal = ordinal,
+            chapterBytes = section.toByteArray(Charsets.UTF_8).size.toLong(),
+            totalFileBytes = next.toByteArray(Charsets.UTF_8).size.toLong(),
+            alreadyCommitted = false,
+            committedTitle = proposal.title,
+            committedBody = proposal.body,
+            committedContinuity = proposal.continuity,
+            detail = "Synced chapter $displayOrdinal to $storyPath with a pre-write snapshot.",
+        )
+    }
+
+    /** Latest prose only: controller markers and chapter numbers never enter the model prompt. */
+    suspend fun storyForgeTail(rawRootPath: String): String = withContext(Dispatchers.IO) {
+        val root = storedRoot() ?: return@withContext ""
+        val rootPath = normalizeWorkspacePath(rawRootPath)
+        val entry = resolveEntry(root, "$rootPath/$StoryForgeFileName") ?: return@withContext ""
+        val text = readTextNow(entry)
+        val markerStart = text.lastIndexOf("<!-- ANICLOUD_CHAPTER:")
+        if (markerStart < 0) return@withContext ""
+        val chapterSection = text.substring(markerStart).lineSequence().drop(3).joinToString("\n").trim()
+        chapterSection.takeLast(StoryForgeContextCharacters)
+    }
 
     suspend fun moveToTrash(
         root: Uri,
@@ -499,4 +690,17 @@ fun normalizeWorkspacePath(raw: String, allowRoot: Boolean = false): String {
     val normalized = segments.joinToString("/")
     require(allowRoot || normalized.isNotBlank()) { "A workspace-relative path is required." }
     return normalized
+}
+
+/** A user-entered folder name is one leaf, never a path or controller instruction. */
+fun normalizeWorkspaceLeafName(raw: String): String {
+    val name = raw.replace("\u0000", "").trim()
+    require(name.isNotBlank()) { "Enter a folder name." }
+    require(name !in setOf(".", "..")) { "Choose a normal folder name." }
+    require('/' !in name && '\\' !in name) { "Folder names cannot contain path separators." }
+    require(name.length <= 120) { "Folder names are limited to 120 characters." }
+    require(name.none { it.code < 0x20 || it.code == 0x7f }) {
+        "Folder names cannot contain control characters."
+    }
+    return name
 }

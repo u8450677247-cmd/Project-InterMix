@@ -6,7 +6,7 @@ Compatibility is evidence-based and dated. Similar hardware, the same Android ve
 
 | Device / platform | Intermix status | Evidence as of 2026-08-25 | Next required evidence |
 |---|---|---|---|
-| Pixel 10 Pro, Tensor G5, Android 17 | **Reference verified for Termux; native NPU candidate** | Owner-tested 8K E4B GPU/OpenCL inference plus native memory/workspace/glass dogfood; exact G5 E2B and LiteRT 2.1.6 dispatcher are integrated behind a fail-closed check | Native NPU initialization, first-token, warm-turn, STOP, RAM, thermal, and restart report |
+| Pixel 10 Pro, Tensor G5, Android 17 | **Reference verified for Termux; native NPU candidate** | Owner-tested 8K E4B GPU/OpenCL inference plus native memory/workspace/glass dogfood; exact G5 E2B and LiteRT 2.2.0 dispatcher are integrated behind a fail-closed check | Native NPU initialization, first-token, warm-turn, STOP, RAM, thermal, and restart report |
 | Galaxy S26 Ultra | **Runtime candidate** | Google's Gemma 4 guide publishes Android E2B/E4B CPU and GPU benchmarks on this device | Intermix clean install, DeX geometry, OpenCL/GPU behavior, memory pressure, restart recall |
 | Pixel 11 family | **Candidate, unverified** | No Project Intermix test report | Exact model/backend probe and complete test protocol; do not infer from Pixel 10 behavior |
 | Other Pixel desktop-mode devices | **Community experimental** | Shared OS concepts only | Device report, model smoke test, cold/warm latency, compact/desktop captures |

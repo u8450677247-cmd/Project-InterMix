@@ -25,21 +25,21 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("compileSdk = 36", app_build)
         self.assertIn("targetSdk = 36", app_build)
         self.assertIn("minSdk = 31", app_build)
-        self.assertIn("versionCode = 16", app_build)
-        self.assertIn('versionName = "0.8.5-ship-hardening"', app_build)
+        self.assertIn("versionCode = 17", app_build)
+        self.assertIn('versionName = "0.8.6-surgical-fluency"', app_build)
         self.assertIn("jniLibs.useLegacyPackaging = true", app_build)
         self.assertIn("compose-bom:2026.03.01", app_build)
         self.assertIn('abiFilters += "arm64-v8a"', app_build)
         self.assertIn(
-            'com.google.ai.edge.litertlm:litertlm-android:0.16.1', app_build
+            'com.google.ai.edge.litertlm:litertlm-android:0.17.0', app_build
         )
         self.assertIn(
-            'kotlinx-coroutines-android:1.9.0', app_build
+            'kotlinx-coroutines-android:1.11.0', app_build
         )
         self.assertIn(
-            'kotlinx-coroutines-core-jvm:1.9.0', app_build
+            'kotlinx-coroutines-core-jvm:1.11.0', app_build
         )
-        self.assertNotIn('kotlinx-coroutines-android:1.10.2', app_build)
+        self.assertNotIn('kotlinx-coroutines-android:1.9.0', app_build)
 
     def test_manifest_declares_biometric_and_visible_inference_service(self):
         manifest = APP / "src/main/AndroidManifest.xml"
@@ -204,7 +204,7 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("LegacyHistoryName.migrated", repository)
         self.assertIn("memoryMatrix.loadMessages()", view_model)
         self.assertIn("memoryMatrix.recallContext", view_model)
-        self.assertIn("MatrixSchemaVersion = 3", repository)
+        self.assertIn("MatrixSchemaVersion = 4", repository)
         self.assertIn("undoLatestProfileChange", repository)
 
     def test_termux_execution_is_typed_approval_gated_and_result_bounded(self):
@@ -235,6 +235,8 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("CREATE TABLE IF NOT EXISTS execution_actions", repository)
         self.assertIn("APPROVE & RUN", ui)
         self.assertIn("NETWORK · REQUIRED AND INCLUDED IN THIS APPROVAL", ui)
+        self.assertIn("DEVELOPER PLUGIN · TERMUX", ui)
+        self.assertIn("cockpit.termuxBridge.enabled &&", ui)
 
     def test_native_conversation_sessions_preserve_history_and_reset_model_context(self):
         repository = (SOURCE / "MemoryMatrixRepository.kt").read_text(
@@ -345,6 +347,51 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("QUEUE GUIDANCE", ui)
         self.assertIn("120 ACTIONS · MATRIX OFFLOAD · RECURSION GUARD", ui)
 
+    def test_story_forge_is_one_file_controller_counted_and_crash_safe(self):
+        story = (SOURCE / "StoryForge.kt").read_text(encoding="utf-8")
+        protocol = (SOURCE / "ControllerProtocol.kt").read_text(encoding="utf-8")
+        repository = (SOURCE / "WorkspaceRepository.kt").read_text(encoding="utf-8")
+        matrix = (SOURCE / "MemoryMatrixRepository.kt").read_text(encoding="utf-8")
+        view_model = (SOURCE / "SovereignViewModel.kt").read_text(encoding="utf-8")
+        ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
+        self.assertIn("StoryForgeTargetChapters = 120", story)
+        self.assertIn("ANICLOUD_CHAPTER:", story)
+        self.assertIn("<INTERMIX_STORY>", protocol)
+        self.assertIn("fun prepareStoryForge", repository)
+        self.assertIn("fun appendStoryChapter", repository)
+        self.assertIn("alreadyCommitted = true", repository)
+        self.assertIn("Base64.getUrlEncoder().withoutPadding()", repository)
+        self.assertIn("fun recordStoryChapter", matrix)
+        self.assertIn("planState = commit.committedContinuity", matrix)
+        self.assertIn("MissionCommand.Story", view_model)
+        self.assertIn("Android owned every ordinal", view_model)
+        self.assertIn("START 120-CHAPTER STORY FORGE", ui)
+        self.assertIn('"CHAPTERS" else "ACTIONS"', ui)
+
+    def test_numeric_matrix_calculates_outside_model_and_records_provenance(self):
+        numeric = (SOURCE / "NumericMatrix.kt").read_text(encoding="utf-8")
+        protocol = (SOURCE / "ControllerProtocol.kt").read_text(encoding="utf-8")
+        repository = (SOURCE / "MemoryMatrixRepository.kt").read_text(encoding="utf-8")
+        view_model = (SOURCE / "SovereignViewModel.kt").read_text(encoding="utf-8")
+        ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
+        self.assertIn("BigDecimal", numeric)
+        self.assertIn("MathContext(34, RoundingMode.HALF_EVEN)", numeric)
+        self.assertNotIn("ScriptEngine", numeric)
+        self.assertIn("<INTERMIX_CALC>", protocol)
+        self.assertIn("CREATE TABLE IF NOT EXISTS numeric_calculations", repository)
+        self.assertIn("fun recordCalculation", repository)
+        self.assertIn("DeterministicCalculator.evaluate", view_model)
+        self.assertIn('"/calc"', view_model)
+        self.assertIn("NUMERIC MATRIX", ui)
+
+    def test_recent_committed_chat_is_reserved_before_retrieval_context(self):
+        repository = (SOURCE / "MemoryMatrixRepository.kt").read_text(encoding="utf-8")
+        view_model = (SOURCE / "SovereignViewModel.kt").read_text(encoding="utf-8")
+        self.assertIn("Immediate continuity is a hard reservation", repository)
+        self.assertIn("val fittedRecent", repository)
+        self.assertIn("prioritizedRecentRecall", view_model)
+        self.assertIn("recentBody.takeLast(recentBudget)", view_model)
+
     def test_work_session_keeps_interrupted_generation_visible_and_auditable(self):
         view_model = (SOURCE / "SovereignViewModel.kt").read_text(encoding="utf-8")
         ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
@@ -389,8 +436,12 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn('Text("UNDO")', ui)
         self.assertIn('Text("KEEP IN TRASH"', ui)
         self.assertIn("LocalClipboardManager.current", ui)
-        self.assertIn('if (copied) "COPIED" else "COPY"', ui)
+        self.assertIn('if (copied) "COPIED" else "COPY ALL"', ui)
+        self.assertIn("SelectionContainer {\n            SovereignMarkdown(message.text)", ui)
         self.assertIn("BackHandler(", ui)
+        self.assertIn("fun createUserDirectory", repository)
+        self.assertIn("fun requestNewFolder", view_model)
+        self.assertIn('Text("NEW FOLDER")', ui)
 
     def test_external_data_boundary_is_visible_and_offline_by_default(self):
         manifest = (APP / "src/main/AndroidManifest.xml").read_text(encoding="utf-8")
@@ -516,7 +567,11 @@ class AndroidFoundationTests(unittest.TestCase):
         )
         self.assertIn("v${VERSION}/litert_npu_runtime_libraries.zip", dispatcher)
         self.assertIn(
-            "98aabbdce8607f6dc6ab7cb92217326eef24a8c97b973b69e62bd0ce14b7495b",
+            "b4c8380df3e9652677dbb93a5aad4499eb756a9b7d9651a9baacb122faadbf0d",
+            dispatcher,
+        )
+        self.assertIn(
+            "35b59265eb8595a1d28c2f69693b1cad39d1fa4a38c2c18d5d54550d079264ac",
             dispatcher,
         )
         self.assertIn("libLiteRtDispatch_GoogleTensor.so", dispatcher)

@@ -14,7 +14,7 @@ import java.util.Locale
 import java.util.UUID
 
 private const val MatrixDatabaseName = "sovereign_memory_v1.db"
-private const val MatrixSchemaVersion = 3
+private const val MatrixSchemaVersion = 4
 private const val LegacyHistoryName = "conversation_history_v1.json"
 private const val MaxStoredMessageCharacters = 32 * 1024
 private const val RecentConversationCharacterBudget = 4_096
@@ -41,6 +41,8 @@ data class MemoryMatrixSnapshot(
     val databaseBytes: Long = 0,
     val ftsAvailable: Boolean = false,
     val recentMemories: List<MatrixMemory> = emptyList(),
+    val numericCalculationCount: Int = 0,
+    val recentCalculations: List<NumericCalculationRecord> = emptyList(),
     val interactionProfile: InteractionProfile = InteractionProfile(),
 )
 
@@ -199,6 +201,7 @@ class MemoryMatrixRepository(private val context: Context) :
         )
         db.execSQL("CREATE INDEX idx_agent_actions_status ON agent_actions(status, id DESC)")
         installExecutionActions(db)
+        installNumericMatrix(db)
         installInteractionProfile(db)
         installFts(db)
         ensureSession(db)
@@ -207,6 +210,7 @@ class MemoryMatrixRepository(private val context: Context) :
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) installInteractionProfile(db)
         if (oldVersion < 3) installExecutionActions(db)
+        if (oldVersion < 4) installNumericMatrix(db)
     }
 
     @Synchronized
@@ -393,24 +397,29 @@ class MemoryMatrixRepository(private val context: Context) :
         startedMessageId: Long,
         maxActions: Int = 120,
         maxWriteBytes: Long = 1024L * 1024L,
+        planKind: String = WorkspaceMissionKind,
     ): AgentMissionCheckpoint {
         val normalizedRoot = normalizeWorkspacePath(rootPath)
         require(Regex("[A-Za-z0-9][A-Za-z0-9._/-]{0,511}").matches(normalizedRoot)) {
             "Long-form mission roots use ASCII letters, numbers, dots, dashes, underscores, and slashes."
         }
         require(objective.isNotBlank()) { "A long-form mission objective is required." }
+        require(planKind in setOf(WorkspaceMissionKind, StoryForgeMissionKind)) {
+            "Unknown controller mission plan."
+        }
         val existing = activeAgentMission()
         require(existing == null || !existing.active) {
             "Mission ${existing?.id} is still ${existing?.status?.name?.lowercase()}; resume or cancel it first."
         }
         val checkpoint = AgentMissionCheckpoint(
-            id = missionId(objective),
+            id = missionId(objective, planKind),
             rootPath = normalizedRoot,
             objective = objective.replace("\u0000", "").trim().take(MaxMissionObjectiveCharacters),
             mode = mode,
             startedMessageId = startedMessageId.coerceAtLeast(0L),
             maxActions = maxActions.coerceIn(1, 120),
             maxWriteBytes = maxWriteBytes.coerceIn(64L * 1024L, 2L * 1024L * 1024L),
+            planKind = planKind,
             updatedAt = now(),
         )
         persistAgentMission(checkpoint)
@@ -487,6 +496,39 @@ class MemoryMatrixRepository(private val context: Context) :
     }
 
     @Synchronized
+    fun recordStoryChapter(
+        commit: StoryChapterCommit,
+    ): AgentMissionCheckpoint {
+        val current = activeAgentMission() ?: error("No Story Forge mission is active.")
+        require(current.status == AgentMissionStatus.Running) { "The Story Forge mission is not running." }
+        require(current.planKind == StoryForgeMissionKind) { "The active mission is not Story Forge." }
+        require(commit.ordinal == current.completedActions + 1) {
+            "Story Forge received an out-of-order controller commit."
+        }
+        val nextCount = current.completedActions + 1
+        val nextBytes = current.writtenBytes + commit.chapterBytes
+        require(nextBytes <= current.maxWriteBytes) { "Story Forge exhausted its write grant." }
+        val next = current.copy(
+            status = if (nextCount == current.maxActions) {
+                AgentMissionStatus.Completed
+            } else {
+                AgentMissionStatus.Running
+            },
+            completedActions = nextCount,
+            writtenBytes = nextBytes,
+            planState = commit.committedContinuity,
+            actionTrail = (current.actionTrail + "story:${commit.ordinal}:${commit.committedBody.hashCode()}")
+                .takeLast(StoryForgeTargetChapters),
+            lastAction = "append $StoryForgeTargetChapters-chapter benchmark story.md",
+            lastResult = commit.detail.take(2_000),
+            updatedAt = now(),
+        )
+        persistAgentMission(next)
+        updateActiveSessionTask(next)
+        return next
+    }
+
+    @Synchronized
     fun setAgentMissionStatus(
         status: AgentMissionStatus,
         detail: String,
@@ -504,6 +546,27 @@ class MemoryMatrixRepository(private val context: Context) :
 
     fun agentMissionContext(): String {
         val mission = activeAgentMission()?.takeIf(AgentMissionCheckpoint::active) ?: return ""
+        if (mission.planKind == StoryForgeMissionKind) {
+            val guidanceBlock = mission.guidance.joinToString("\n") { "- $it" }.take(2_400)
+            return buildString {
+                appendLine("[CONTROLLER-OWNED STORY FORGE]")
+                appendLine("Mission: ${mission.id}")
+                appendLine("Status: ${mission.status.name.lowercase()}")
+                appendLine("Authorized workspace root: ${mission.rootPath}")
+                appendLine("Android owns chapter numbering, append persistence, and the stop boundary.")
+                appendLine("Do not infer, state, or emit the chapter ordinal.")
+                appendLine("Premise (durable controller objective):")
+                appendLine(mission.objective.take(6_000))
+                if (mission.planState.isNotBlank()) {
+                    appendLine("Private continuity capsule from the last committed chapter:")
+                    appendLine(mission.planState.take(1_200))
+                }
+                if (guidanceBlock.isNotBlank()) {
+                    appendLine("User guidance, oldest to newest:")
+                    appendLine(guidanceBlock)
+                }
+            }.take(10 * 1024)
+        }
         val recentEvents = recentMissionEvents(mission)
         val guidanceBlock = mission.guidance.joinToString("\n") { "- $it" }.take(2_400)
         val eventBlock = recentEvents.joinToString("\n") { "- $it" }.take(3_600)
@@ -541,7 +604,7 @@ class MemoryMatrixRepository(private val context: Context) :
         val archived = searchArchivedMessages(query, beforeMessageId, decision.archivedMessageLimit)
         val session = activeSession(writableDatabase)
 
-        val blocks = mutableListOf<String>()
+        val supportBlocks = mutableListOf<String>()
         if (session != null && decision.scope != ContextScope.General) {
             val sessionLines = buildList {
                 session.getString("summary").takeIf(String::isNotBlank)?.let { add("Summary: $it") }
@@ -549,22 +612,85 @@ class MemoryMatrixRepository(private val context: Context) :
                 session.getString("active_project").takeIf(String::isNotBlank)?.let { add("Project: $it") }
             }
             if (sessionLines.isNotEmpty()) {
-                blocks += "[ACTIVE SESSION CHECKPOINT]\n${sessionLines.joinToString("\n")}"
+                val sessionBlock = sessionLines.joinToString("\n")
+                supportBlocks += "[ACTIVE SESSION CHECKPOINT]\n$sessionBlock"
             }
         }
         if (memories.isNotEmpty()) {
-            blocks += "[RELEVANT DURABLE MEMORY]\n" + memories.joinToString("\n") {
+            supportBlocks += "[RELEVANT DURABLE MEMORY]\n" + memories.joinToString("\n") {
                 "- [${it.kind}] ${it.value} (memory ${it.id})"
             }
         }
         if (archived.isNotEmpty()) {
-            blocks += "[RECALLED CONVERSATION]\n" + archived.joinToString("\n") { it }
+            supportBlocks += "[RECALLED CONVERSATION]\n" + archived.joinToString("\n") { it }
         }
-        if (recent.isNotEmpty()) {
-            blocks += "[RECENT COMMITTED CONVERSATION]\n" + recent.joinToString("\n") { it }
-        }
-        return fitBlocks(blocks, budget)
+        val recentBlock = recent.takeIf(List<String>::isNotEmpty)?.let {
+            "[RECENT COMMITTED CONVERSATION]\n" + it.joinToString("\n")
+        }.orEmpty()
+        if (recentBlock.isBlank()) return fitBlocks(supportBlocks, budget)
+
+        // Immediate continuity is a hard reservation. Retrieval results may use only the
+        // remaining room, so a large archived match can never starve the last ~1K tokens.
+        val fittedRecent = recentBlock.take(minOf(budget, RecentConversationCharacterBudget + 40))
+        val separatorLength = if (supportBlocks.isEmpty()) 0 else 2
+        val supportBudget = (budget - fittedRecent.length - separatorLength).coerceAtLeast(0)
+        val fittedSupport = fitBlocks(supportBlocks, supportBudget)
+        return listOf(fittedSupport, fittedRecent).filter(String::isNotBlank).joinToString("\n\n")
     }
+
+    @Synchronized
+    fun recordCalculation(
+        verified: VerifiedCalculation,
+        reason: String,
+        sourceMessageId: Long,
+    ): NumericCalculationRecord {
+        val timestamp = now()
+        val cleanReason = reason.replace("\u0000", "").trim().take(280)
+        val values = ContentValues().apply {
+            put("session_id", activeSessionId(writableDatabase))
+            put("source_message_id", sourceMessageId.coerceAtLeast(0L))
+            put("expression", verified.expression)
+            put("result", verified.result)
+            put("engine", verified.engine)
+            put("reason", cleanReason)
+            put("created_at", timestamp)
+        }
+        val id = writableDatabase.insertOrThrow("numeric_calculations", null, values)
+        return NumericCalculationRecord(
+            id = id,
+            expression = verified.expression,
+            result = verified.result,
+            engine = verified.engine,
+            reason = cleanReason,
+            createdAt = timestamp,
+        )
+    }
+
+    @Synchronized
+    fun recentCalculations(limit: Int = 12): List<NumericCalculationRecord> =
+        readableDatabase.rawQuery(
+            """
+            SELECT id,expression,result,engine,reason,created_at
+            FROM numeric_calculations
+            ORDER BY id DESC LIMIT ?
+            """.trimIndent(),
+            arrayOf(limit.coerceIn(1, 100).toString()),
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    add(
+                        NumericCalculationRecord(
+                            id = cursor.getLong(0),
+                            expression = cursor.getString(1),
+                            result = cursor.getString(2),
+                            engine = cursor.getString(3),
+                            reason = cursor.getString(4),
+                            createdAt = cursor.getString(5),
+                        ),
+                    )
+                }
+            }
+        }
 
     @Synchronized
     fun rememberExplicit(value: String, sourceMessageId: Long): Long {
@@ -673,6 +799,8 @@ class MemoryMatrixRepository(private val context: Context) :
             databaseBytes = databaseFootprint(),
             ftsAvailable = ftsAvailable(db),
             recentMemories = listMemories(12),
+            numericCalculationCount = scalarInt(db, "SELECT COUNT(*) FROM numeric_calculations"),
+            recentCalculations = recentCalculations(12),
             interactionProfile = interactionProfile(),
         )
     }
@@ -1350,6 +1478,8 @@ class MemoryMatrixRepository(private val context: Context) :
             .put("max_actions", mission.maxActions)
             .put("written_bytes", mission.writtenBytes)
             .put("max_write_bytes", mission.maxWriteBytes)
+            .put("plan_kind", mission.planKind)
+            .put("plan_state", mission.planState)
             .put("guidance", JSONArray(mission.guidance))
             .put("action_trail", JSONArray(mission.actionTrail))
             .put("last_action", mission.lastAction)
@@ -1375,6 +1505,10 @@ class MemoryMatrixRepository(private val context: Context) :
         writtenBytes = payload.optLong("written_bytes", 0L).coerceAtLeast(0L),
         maxWriteBytes = payload.optLong("max_write_bytes", 1024L * 1024L)
             .coerceIn(64L * 1024L, 2L * 1024L * 1024L),
+        planKind = payload.optString("plan_kind", WorkspaceMissionKind)
+            .takeIf { it in setOf(WorkspaceMissionKind, StoryForgeMissionKind) }
+            ?: WorkspaceMissionKind,
+        planState = payload.optString("plan_state").replace("\u0000", "").trim().take(1_200),
         guidance = buildList {
             val entries = payload.optJSONArray("guidance") ?: JSONArray()
             for (index in 0 until entries.length()) {
@@ -1430,11 +1564,12 @@ class MemoryMatrixRepository(private val context: Context) :
         }
     }
 
-    private fun missionId(objective: String): String = Regex("\\b[A-Za-z]{2,8}-\\d{1,6}\\b")
+    private fun missionId(objective: String, planKind: String): String = Regex("\\b[A-Za-z]{2,8}-\\d{1,6}\\b")
         .find(objective)
         ?.value
         ?.uppercase(Locale.ROOT)
-        ?: "LF-${UUID.randomUUID().toString().take(8).uppercase(Locale.ROOT)}"
+        ?: "${if (planKind == StoryForgeMissionKind) "SF" else "LF"}-" +
+            UUID.randomUUID().toString().take(8).uppercase(Locale.ROOT)
 
     private fun profilesEquivalent(left: InteractionProfile, right: InteractionProfile): Boolean =
         InteractionTrait.entries.all { left.valueOf(it) == right.valueOf(it) } &&
@@ -1500,6 +1635,27 @@ class MemoryMatrixRepository(private val context: Context) :
         db.execSQL(
             "CREATE INDEX IF NOT EXISTS idx_execution_actions_status " +
                 "ON execution_actions(status, id DESC)",
+        )
+    }
+
+    private fun installNumericMatrix(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS numeric_calculations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+                source_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+                expression TEXT NOT NULL,
+                result TEXT NOT NULL,
+                engine TEXT NOT NULL,
+                reason TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS idx_numeric_calculations_recent " +
+                "ON numeric_calculations(session_id, id DESC)",
         )
     }
 

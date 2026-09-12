@@ -135,6 +135,8 @@ data class AgentMissionCheckpoint(
     val maxActions: Int = 120,
     val writtenBytes: Long = 0L,
     val maxWriteBytes: Long = 1024L * 1024L,
+    val planKind: String = WorkspaceMissionKind,
+    val planState: String = "",
     val guidance: List<String> = emptyList(),
     val actionTrail: List<String> = emptyList(),
     val lastAction: String = "",

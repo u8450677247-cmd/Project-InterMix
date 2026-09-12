@@ -87,8 +87,8 @@ data class TermuxBridgeStatus(
         get() = when {
             !installed -> "The official com.termux app is not visible to AniCloudAI"
             !serviceAvailable -> "Termux is installed, but RunCommandService is unavailable"
+            !enabled -> "optional developer plugin disabled; native AniCloudAI remains fully local"
             !permissionGranted -> "Android permission to run commands in Termux is not granted"
-            !enabled -> "disabled; use /exec on after completing bridge setup"
             workdir.isBlank() -> "project path missing; use /exec workdir <Termux path>"
             else -> "ready at $workdir"
         }

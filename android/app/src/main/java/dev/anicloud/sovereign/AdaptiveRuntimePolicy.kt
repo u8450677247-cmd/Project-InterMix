@@ -64,7 +64,10 @@ object AdaptiveRuntimePolicy {
             return NpuEligibility(false, "Device does not identify as the Tensor G5 reference target")
         }
         if (!facts.dispatcherAvailable) {
-            return NpuEligibility(false, "Pinned Google Tensor 2.1.6 dispatcher is not packaged")
+            return NpuEligibility(
+                false,
+                "Pinned Google Tensor ${BuildConfig.TENSOR_DISPATCH_VERSION} dispatcher is not packaged",
+            )
         }
         return NpuEligibility(true, "Exact Tensor G5 E2B fingerprint + dispatcher verified")
     }

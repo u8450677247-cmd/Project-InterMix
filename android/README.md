@@ -2,7 +2,7 @@
 
 This module is the private Pixel 10 Pro reference cockpit for Project Intermix.
 The original disconnected shell has passed its first device test. The current
-`0.8.5-ship-hardening` candidate combines the stable E4B LiteRT-LM boundary with
+`0.8.6-surgical-fluency` source candidate combines the stable E4B boundary with
 the native Memory Matrix, controller-mediated project workspace, and the first
 checkpointed long-form work-session loop. Its cyan–magenta–violet spectral
 glass pass concentrates fluorescence on focus, mode, code, and mission progress
@@ -44,7 +44,11 @@ while preserving neutral long-form reading surfaces.
 - append-only controller-cycle messages and safe interrupted Work Session drafts
   that remain visible while draft sources are excluded from model recall and
   Memory Matrix learning;
-- an opt-in Termux RUN_COMMAND bridge for typed inspect/run/test/build and
+- a Story Forge lane that appends one unnumbered model installment at a time
+  into a crash-idempotent, controller-numbered 120-chapter `story.md`;
+- a decimal128 Numeric Matrix that computes arithmetic outside the language model
+  and stores expression/result/engine provenance;
+- an optional developer-plugin Termux RUN_COMMAND bridge for typed inspect/run/test/build and
   dependency-install plans, with exact command previews, declared packages and
   network use, one-at-a-time dispatch, timeouts, bounded results, and STOP;
 - a real Agents approval queue plus pin/forget controls in the Matrix surface;
@@ -137,7 +141,8 @@ the staging copy may be removed deliberately. The app-private copy remains.
 | minimum SDK | 31 |
 | built-in Kotlin | 2.3.10 |
 | Compose BOM | 2026.03.01 |
-| LiteRT-LM Android | 0.16.1 |
+| LiteRT-LM Android | 0.17.0 candidate |
+| LiteRT Tensor dispatcher | 2.2.0, checksum-pinned |
 | packaged ABI | arm64-v8a |
 | physical context | 8,000 tokens |
 
@@ -209,9 +214,10 @@ bash tools/termux_dogfood_update.sh --open
 10. Connect a disposable project tree, ask chat to list and read a file, then
     request an edit and verify no bytes change before approval in Agents.
 11. Run the exact
+    [`120-chapter Story Forge benchmark`](../docs/ANICLOUDAI_120_CHAPTER_STORY_FORGE.md)
+    as the single-file one-click endurance gate. Then run the separate
     [`120-action Long Forge benchmark`](../docs/ANICLOUDAI_120_ACTION_FORGE_BENCHMARK.md)
-    and verify all action cards, transcript entries, scope checks, and restart
-    recovery before separately claiming that the generated product executes.
+    for multi-file engineering, scope checks, and artifact verification.
 
 Do not import a live Termux SQLite database. The execution bridge exchanges only
 reviewed commands and bounded result records; a future memory bridge must use a

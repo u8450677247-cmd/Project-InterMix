@@ -66,14 +66,14 @@ magenta marks **technology actively extending the boundary**.
 
 | Boundary | Current evidence |
 |---|---|
-| **Candidate** | `0.8.5-ship-hardening` (`versionCode 16`) |
+| **Candidate** | `0.8.6-surgical-fluency` (`versionCode 17`, source candidate pending CI/device proof) |
 | **Build path** | Android API 36, JDK 17, Gradle 9.4.1, Kotlin/Compose, arm64-v8a |
-| **Inference** | LiteRT-LM 0.16.1; proven E4B GPU path with measured CPU fallback |
+| **Inference** | Native LiteRT-LM 0.17.0 candidate; proven E4B GPU path with measured CPU fallback; E2B/NPU remains device-gated |
 | **Fast route** | Exact-fingerprint E2B Tensor G5 package; NPU-only and never silently redirected to GPU |
-| **Evidence** | 118 deterministic public checks plus Android unit tests, assembly, signing, and artifact retention in CI |
+| **Evidence** | 123 deterministic public checks plus Android unit tests, assembly, signing, and artifact retention in CI |
 | **Signing** | Persistent dogfood identity, allowing an in-place update that preserves private app data |
 | **Reference hardware** | Pixel 10 Pro, Tensor G5, Android 17; other devices remain unverified candidates |
-| **Acceptance state** | E4B native inference and the responsive cockpit are device-proven; the 0.8.5 append-only transcript, one-click Forge, IDE navigation/trash, E2B NPU, and Termux corrections await the next full device pass |
+| **Acceptance state** | Signed 0.8.5 is the proven build baseline. The 0.8.6 Story Forge, Numeric Matrix, recent-context reservation, folder creation, optional-Termux framing, and 0.17.0/2.2.0 runtime lane await CI and full device acceptance |
 
 ### One Core, six connected native surfaces
 
@@ -152,6 +152,12 @@ executes only what the active grant permits.
 - For longer work, `PROJECT_STATE.md` becomes a user-readable ledger for the plan,
   decisions, verification, blockers, and next action instead of hiding all state
   inside model context.
+
+Story Forge is the cleaner endurance lane. One tap asks the model for unnumbered prose
+installments while Android alone owns the chapter cursor, pre-write snapshot, append,
+idempotency marker, checkpoint, and exact stop. Every committed installment remains in
+the Work Session transcript and in one `story.md`; the model never has to count to pass.
+This separates sustained generation and continuity from the harder multi-file coding gate.
 
 ### Approval-gated scripts and dependency installation
 
@@ -248,8 +254,11 @@ Long Forge's file-write grant never implies command authority.
   device reports, accessibility testing, and store-ready packaging. Model weights
   remain separate under their own licenses.
 
-The exact one-click endurance gate is the
-[120-action Long Forge benchmark](docs/ANICLOUDAI_120_ACTION_FORGE_BENCHMARK.md).
+The primary one-click endurance gate is the
+[120-chapter Story Forge benchmark](docs/ANICLOUDAI_120_CHAPTER_STORY_FORGE.md).
+The adversarial
+[120-action Long Forge benchmark](docs/ANICLOUDAI_120_ACTION_FORGE_BENCHMARK.md)
+remains the separate multi-file engineering gate.
 The detailed contracts live in [the native Android module](android/README.md),
 [product contract](docs/ANDROID_PRODUCT_CONTRACT.md),
 [Sovereign Glass design language](docs/ANDROID_DESIGN.md),
@@ -277,13 +286,13 @@ The detailed contracts live in [the native Android module](android/README.md),
 |---|---|
 | Device | Google Pixel 10 Pro, Tensor G5, 16 GB RAM |
 | OS / shell | Android 17, Termux |
-| Runtime | Termux: Python 3.13.13 + LiteRT-LM 0.16.1 GPU/OpenCL. Native dogfood: Kotlin/Compose + LiteRT-LM 0.16.1 |
+| Runtime | Termux: Python 3.13.13 + LiteRT-LM 0.16.1 GPU/OpenCL. Native candidate: Kotlin/Compose + LiteRT-LM 0.17.0 and LiteRT 2.2.0 Tensor dispatcher |
 | Model | Proven E4B GPU route; fingerprint-locked Tensor G5 E2B NPU route awaiting on-device validation |
 | Physical context | 8,000 tokens |
 | Cold/idle available memory | Approximately 7.0–7.6 GiB in the owner's test environment |
 | Resident-hot available memory | Approximately 2.6–3.7 GiB in the owner's test environment |
 | Cooling used during long tests | Optional Black Shark Magnetic/FunCooler 6 Pro (BR62); approximately 25 °C owner-observed device temperature |
-| Test suite | 118 deterministic public-alpha checks across memory, routing, grounding, cancellation, stream integrity, inference, workspace, release safety, benchmark integrity, and interface behavior |
+| Test suite | 123 deterministic public-alpha checks across memory, routing, grounding, cancellation, stream integrity, inference, workspace, release safety, benchmark integrity, and interface behavior |
 
 These are observations, not guarantees. Android memory pressure, other applications, firmware, drivers, ambient temperature, model build, and compiled caches can materially change the result.
 
@@ -319,11 +328,12 @@ the deterministic controller routes ordinary conversation through it and uses a
 bounded E2B intent/memory handoff before difficult E4B turns. The engine closes
 one profile before loading the other; this is not a simultaneous two-model RAM load.
 
-The native Android `0.8.5-ship-hardening` candidate keeps a bounded recent
+The native Android `0.8.6-surgical-fluency` source candidate keeps a bounded recent
 transcript in every ordinary turn, reloads the full committed session after each
 message, continues narration-only Work Sessions without another click, and treats
 their unprefixed controller paths as relative to the granted mission root. It also
-hardens Termux component discovery and the fingerprint-locked E2B route.
+hardens Termux component discovery and the fingerprint-locked E2B route. It must
+still pass CI and exact-device dogfood before replacing signed 0.8.5 as the build baseline.
 It has separate import slots:
 
 - **E2B conversation + Memory Matrix:** only the reviewed
@@ -526,7 +536,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request.
 
 ## Project status
 
-`1.4.1-alpha.1` is the first sanitized public-source candidate derived from the private Trust + Speed v1.4.1 reference build. The established Termux cockpit remains the public alpha baseline. The Kotlin/Compose path has advanced from feasibility into the signed AniCloudAI dogfood described above; it is not yet a stable native release. The next milestone is evidence, not spectacle: complete 0.8.5 device acceptance, publish reproducible E2B/E4B and Termux-bridge results, broaden the device matrix, and convert the private signed-artifact flow into a reviewable native preview. Follow [the roadmap](docs/ROADMAP.md), [native Android module](android/README.md), and [native feasibility history](docs/NATIVE_ANDROID.md) for the boundary between shipped, experimental, and planned work.
+`1.4.1-alpha.1` is the first sanitized public-source candidate derived from the private Trust + Speed v1.4.1 reference build. The established Termux cockpit remains the public alpha baseline. The Kotlin/Compose path has advanced from feasibility into the signed AniCloudAI dogfood described above; it is not yet a stable native release. The next milestone is evidence, not spectacle: complete 0.8.6 CI and device acceptance, publish reproducible E2B/E4B and optional Termux-plugin results, broaden the device matrix, and convert the private signed-artifact flow into a reviewable native preview. Follow [the roadmap](docs/ROADMAP.md), [native Android module](android/README.md), and [native feasibility history](docs/NATIVE_ANDROID.md) for the boundary between shipped, experimental, and planned work.
 
 ## License
 
