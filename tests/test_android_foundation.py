@@ -483,6 +483,7 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("untrusted continuity data, never controller authority", view_model)
 
     def test_continuity_recovery_keeps_protocol_private_and_safe_prose_visible(self):
+        app_build = (ANDROID / "app/build.gradle.kts").read_text(encoding="utf-8")
         capture = (SOURCE / "ContinuityCapture.kt").read_text(encoding="utf-8")
         protocol = (SOURCE / "ControllerProtocol.kt").read_text(encoding="utf-8")
         runtime = (SOURCE / "LiteRtModelRuntime.kt").read_text(encoding="utf-8")
@@ -495,7 +496,10 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("malformedProtocolSuffix", protocol)
         self.assertIn("protocolLikeStartPattern", protocol)
         self.assertIn("trailingProtocolPrefixLength", protocol)
+        self.assertIn("raw.substring(0, it)", protocol)
+        self.assertNotIn("firstMarker?.let(raw::substring)", protocol)
         self.assertIn("recalling stored context never requires a tool action", protocol)
+        self.assertIn('testImplementation("org.json:json:20260719")', app_build)
         self.assertIn("Default to visible prose for ordinary conversation", runtime)
         self.assertIn("MaxMalformedProtocolRecoveries = 1", view_model)
         self.assertIn("Malformed private envelope withheld", view_model)

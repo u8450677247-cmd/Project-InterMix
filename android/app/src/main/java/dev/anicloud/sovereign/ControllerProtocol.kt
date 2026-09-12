@@ -238,7 +238,7 @@ object ControllerProtocol {
 
     fun parse(raw: String): ControllerProtocolResult {
         val firstMarker = firstProtocolMarkerIndex(raw)
-        val visible = (firstMarker?.let(raw::substring) ?: raw).trim()
+        val visible = (firstMarker?.let { raw.substring(0, it) } ?: raw).trim()
         val workspaceAction = extractWorkspaceJson(raw)?.let(::parseWorkspaceAction)
         val executionAction = extractJson(raw, ExecutionActionOpenMarker, ExecutionActionCloseMarker)
             ?.let(::parseExecutionAction)

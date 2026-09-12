@@ -86,6 +86,9 @@ dependencies {
     implementation("com.google.ai.edge.litertlm:litertlm-android:0.17.0")
 
     testImplementation("junit:junit:4.13.2")
+    // Android's org.json implementation is available on-device, while local JVM tests otherwise
+    // receive only the throwing Android SDK stubs. Keep protocol parsing executable in CI.
+    testImplementation("org.json:json:20260719")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-tooling")
