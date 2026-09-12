@@ -1,5 +1,6 @@
 package dev.anicloud.sovereign.prototype.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.Crossfade
@@ -65,6 +66,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -76,7 +78,9 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -119,6 +123,7 @@ import dev.anicloud.sovereign.prototype.allowsAmbientMotion
 import dev.anicloud.sovereign.prototype.resolveFoundationLayout
 import dev.anicloud.sovereign.prototype.thermalStatusLabel
 import java.util.Locale
+import kotlinx.coroutines.flow.collect
 
 private data class CockpitActions(
     val onImportConversationModel: () -> Unit,
@@ -1260,9 +1265,7 @@ private fun ChatSurface(
     val tailIndex = leadingItems + cockpit.messages.size +
         (if (cockpit.streamText.isNotBlank()) 1 else 0) - 1
 
-    LaunchedEffect(tailIndex, cockpit.streamText.length / 128) {
-        if (tailIndex >= 0) threadState.scrollToItem(tailIndex)
-    }
+    AutoFollowTail(threadState, tailIndex, cockpit.streamText.length / 128)
 
     Column(Modifier.fillMaxSize()) {
         TruthThread(
@@ -1316,6 +1319,26 @@ private fun ChatSurface(
     }
 }
 
+/** Follow live output only while the reader remains at the end of the transcript. */
+@Composable
+private fun AutoFollowTail(
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    tailIndex: Int,
+    streamRevision: Int,
+) {
+    var followTail by remember(listState) { mutableStateOf(true) }
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            val layout = listState.layoutInfo
+            val lastVisible = layout.visibleItemsInfo.lastOrNull()?.index ?: -1
+            layout.totalItemsCount == 0 || lastVisible >= layout.totalItemsCount - 2
+        }.collect { nearTail -> followTail = nearTail }
+    }
+    LaunchedEffect(tailIndex, streamRevision) {
+        if (followTail && tailIndex >= 0) listState.scrollToItem(tailIndex)
+    }
+}
+
 @Composable
 private fun TruthThread(phase: RuntimePhase, detail: String, active: Boolean) {
     val color = when (phase) {
@@ -1348,6 +1371,8 @@ private fun TruthThread(phase: RuntimePhase, detail: String, active: Boolean) {
 @Composable
 private fun MessageBlock(message: ChatMessage) {
     val isUser = message.speaker == ChatSpeaker.User
+    val clipboard = LocalClipboardManager.current
+    var copied by remember(message.id, message.text) { mutableStateOf(false) }
     val accent = when (message.speaker) {
         ChatSpeaker.User -> PulseMagenta
         ChatSpeaker.Core -> HorizonCyan
@@ -1364,16 +1389,27 @@ private fun MessageBlock(message: ChatMessage) {
             )
             .padding(start = 12.dp, top = 10.dp, end = 12.dp, bottom = 12.dp),
     ) {
-        Text(
-            when (message.speaker) {
-                ChatSpeaker.User -> "YOU"
-                ChatSpeaker.Core -> "SOVEREIGN CORE"
-                ChatSpeaker.System -> "SYSTEM LENS"
-            },
-            color = accent,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text(
+                when (message.speaker) {
+                    ChatSpeaker.User -> "YOU"
+                    ChatSpeaker.Core -> "SOVEREIGN CORE"
+                    ChatSpeaker.System -> "SYSTEM LENS"
+                },
+                color = accent,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(
+                onClick = {
+                    clipboard.setText(AnnotatedString(message.text))
+                    copied = true
+                },
+            ) {
+                Text(if (copied) "COPIED" else "COPY", color = accent, fontSize = 10.sp)
+            }
+        }
         Spacer(Modifier.height(6.dp))
         SovereignMarkdown(message.text)
     }
@@ -1384,7 +1420,7 @@ private fun StreamingBlock(text: String, active: Boolean = true) {
     val visible = if (active) {
         "$text▌"
     } else {
-        "$text\n\n[INTERRUPTED DRAFT · NOT COMMITTED TO MEMORY]"
+        "$text\n\n[INTERRUPTED DRAFT · NOT A VERIFIED FINAL ANSWER]"
     }
     MessageBlock(ChatMessage(-1, ChatSpeaker.Core, visible))
 }
@@ -1781,6 +1817,11 @@ private fun WorkspaceSurface(
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri?.let(workspaceViewModel::attachRoot)
     }
+    BackHandler(
+        enabled = !workSessionOpen && state.canNavigateUp && !state.busy && state.pendingTrash == null,
+    ) {
+        workspaceViewModel.navigateUp()
+    }
 
     Column(
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -1798,8 +1839,13 @@ private fun WorkspaceSurface(
                 Text(if (state.rootUri == null) "CONNECT PROJECT" else "CHANGE PROJECT")
             }
             OutlinedButton(
+                onClick = workspaceViewModel::navigateUp,
+                enabled = state.canNavigateUp && !state.busy && state.pendingTrash == null,
+            ) { Text("UP") }
+            OutlinedButton(
                 onClick = workspaceViewModel::returnToRoot,
-                enabled = state.rootUri != null && state.currentUri != state.rootUri && !state.busy,
+                enabled = state.rootUri != null && state.currentUri != state.rootUri && !state.busy &&
+                    state.pendingTrash == null,
             ) { Text("ROOT") }
             OutlinedButton(
                 onClick = workspaceViewModel::refresh,
@@ -1827,11 +1873,69 @@ private fun WorkspaceSurface(
 
         if (state.rootUri != null) {
             Text(
-                "CHAT TOOLS · LIST/READ AUTO · CREATE/WRITE/MKDIR REQUIRE AGENTS APPROVAL · DELETE DISABLED",
+                "CHAT TOOLS · LIST/READ AUTO · CREATE/WRITE/MKDIR REQUIRE AGENTS APPROVAL · UI TRASH IS CONFIRM-ONLY",
                 color = ResonanceMint,
                 fontSize = 11.sp,
                 fontFamily = FontFamily.Monospace,
             )
+            Text(
+                "PATH · ${state.breadcrumb.ifBlank { state.rootLabel }}",
+                color = HorizonCyan,
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+
+        state.pendingTrash?.let { pending ->
+            OutlinedCard(
+                border = BorderStroke(1.dp, InterventionCoral.copy(alpha = 0.72f)),
+                colors = CardDefaults.outlinedCardColors(containerColor = Color.Transparent),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("MOVE TO RECOVERABLE TRASH?", color = InterventionCoral, fontWeight = FontWeight.Bold)
+                    Text(
+                        "${if (pending.isDirectory) "Folder" else "File"}: ${pending.displayName}",
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        "This moves the entry into .anicloud-trash inside the granted project. " +
+                            "It does not permanently delete data.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = workspaceViewModel::confirmTrash,
+                            colors = ButtonDefaults.buttonColors(containerColor = InterventionCoral),
+                        ) { Text("MOVE TO TRASH", color = Obsidian, fontWeight = FontWeight.Bold) }
+                        OutlinedButton(onClick = workspaceViewModel::cancelTrash) { Text("CANCEL") }
+                    }
+                }
+            }
+        } ?: state.lastTrash?.let { receipt ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    "${receipt.displayName} is in recoverable trash.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp,
+                    modifier = Modifier.weight(1f),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedButton(onClick = workspaceViewModel::undoTrash, enabled = !state.busy) {
+                        Text("UNDO")
+                    }
+                    TextButton(onClick = workspaceViewModel::keepTrash, enabled = !state.busy) {
+                        Text("KEEP IN TRASH", color = InterventionCoral)
+                    }
+                }
+            }
         }
 
         if (workSessionOpen) {
@@ -1855,7 +1959,8 @@ private fun WorkspaceSurface(
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                     Text(
-                        "Deletion is intentionally unavailable in this build. Every SAVE retains the previous bytes first.",
+                        "Every SAVE retains the previous bytes first. Removing an entry uses an explicit, " +
+                            "recoverable move to project-local trash.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -1868,7 +1973,12 @@ private fun WorkspaceSurface(
                         horizontalArrangement = Arrangement.spacedBy(14.dp),
                         modifier = Modifier.fillMaxSize(),
                     ) {
-                        WorkspaceBrowser(state, workspaceViewModel::open, Modifier.width(300.dp))
+                        WorkspaceBrowser(
+                            state,
+                            workspaceViewModel::open,
+                            workspaceViewModel::requestTrash,
+                            Modifier.width(300.dp),
+                        )
                         WorkspaceEditor(state, workspaceViewModel, Modifier.weight(1f))
                     }
                 } else {
@@ -1876,7 +1986,12 @@ private fun WorkspaceSurface(
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                         modifier = Modifier.fillMaxSize(),
                     ) {
-                        WorkspaceBrowser(state, workspaceViewModel::open, Modifier.weight(0.38f))
+                        WorkspaceBrowser(
+                            state,
+                            workspaceViewModel::open,
+                            workspaceViewModel::requestTrash,
+                            Modifier.weight(0.38f),
+                        )
                         WorkspaceEditor(state, workspaceViewModel, Modifier.weight(0.62f))
                     }
                 }
@@ -1900,16 +2015,14 @@ private fun WorkSessionSurface(
     val selectedMode = enumOrDefault(modeName, defaultMode)
     val mission = cockpit.activeMission
     val missionMessages = cockpit.messages.filter {
-        it.source == "mission" && it.speaker != ChatSpeaker.User &&
+        it.source.startsWith("mission") &&
             (mission == null || it.id >= mission.startedMessageId)
     }
     val threadState = rememberLazyListState()
     val streamVisible = mission?.active == true && cockpit.streamText.isNotBlank()
     val threadTail = missionMessages.size + if (streamVisible) 1 else 0
 
-    LaunchedEffect(threadTail, cockpit.streamText.length / 128) {
-        if (threadTail > 0) threadState.scrollToItem(threadTail - 1)
-    }
+    AutoFollowTail(threadState, threadTail - 1, cockpit.streamText.length / 128)
 
     BoxWithConstraints(modifier.fillMaxSize()) {
         val wide = maxWidth >= 900.dp
@@ -2219,7 +2332,7 @@ private fun WorkSessionControlPanel(
             }
 
             Text(
-                "GRANT · 120 ACTIONS · MATRIX OFFLOAD · RECURSION GUARD · 1 MiB WRITES · NO DELETE · EXEC/NET NEED AGENTS APPROVAL",
+                "GRANT · 120 ACTIONS · MATRIX OFFLOAD · RECURSION GUARD · 1 MiB WRITES · AGENT DELETE OFF · EXEC/NET NEED AGENTS APPROVAL",
                 color = ResonanceMint,
                 fontFamily = FontFamily.Monospace,
                 fontSize = 9.sp,
@@ -2396,6 +2509,7 @@ private fun answerModeRouteHint(mode: AnswerMode, cockpit: CockpitState): String
 private fun WorkspaceBrowser(
     state: WorkspaceState,
     onOpen: (WorkspaceEntry) -> Unit,
+    onTrash: (WorkspaceEntry) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     OutlinedCard(
@@ -2410,18 +2524,28 @@ private fun WorkspaceBrowser(
             Spacer(Modifier.height(8.dp))
             LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.fillMaxSize()) {
                 items(state.entries, key = { it.uri }) { entry ->
-                    TextButton(
-                        onClick = { onOpen(entry) },
-                        enabled = !state.busy,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(
-                            (if (entry.isDirectory) "▸  " else "·  ") + entry.displayName,
-                            color = if (entry.isDirectory) SoftViolet else MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        TextButton(
+                            onClick = { onOpen(entry) },
+                            enabled = !state.busy && state.pendingTrash == null,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(
+                                (if (entry.isDirectory) "▸  " else "·  ") + entry.displayName,
+                                color = if (entry.isDirectory) SoftViolet else MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        if (state.currentLabel != ".anicloud-trash" && entry.displayName != ".anicloud-trash") {
+                            TextButton(
+                                onClick = { onTrash(entry) },
+                                enabled = !state.busy && state.pendingTrash == null && state.lastTrash == null,
+                            ) {
+                                Text("TRASH", color = InterventionCoral, fontSize = 9.sp)
+                            }
+                        }
                     }
                 }
             }
@@ -2878,6 +3002,9 @@ private fun SystemSurface(
         item {
             PrivacyStateCard()
         }
+        item {
+            DataBoundaryCard()
+        }
     }
 }
 
@@ -3028,6 +3155,42 @@ private fun PrivacyStateCard() {
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun DataBoundaryCard() {
+    OutlinedCard {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    "EXTERNAL DATA BOUNDARY",
+                    color = HorizonCyan,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                )
+                Text("OFFLINE", color = ResonanceMint, fontFamily = FontFamily.Monospace)
+            }
+            Text(
+                "This APK does not declare Android INTERNET access and cannot send prompts to an " +
+                    "external provider.",
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                "Android does not show a runtime Internet permission dialog. Before a future API " +
+                    "request, AniCloudAI must show its own review with provider, purpose, outbound " +
+                    "data preview, duration, spending scope, retention, and revoke controls.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp,
+            )
+            Text(
+                "API TOKEN VAULT · NOT ENABLED",
+                color = PulseMagenta,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+            )
         }
     }
 }

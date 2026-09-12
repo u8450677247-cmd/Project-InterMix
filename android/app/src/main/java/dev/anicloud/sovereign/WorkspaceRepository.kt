@@ -6,6 +6,7 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -14,6 +15,7 @@ import java.security.MessageDigest
 
 private const val WorkspacePreferences = "anicloud_workspace"
 private const val WorkspaceRootKey = "root_uri"
+private const val WorkspaceTrashReceiptKey = "last_trash_receipt"
 private const val MaxEditableBytes = 2L * 1024L * 1024L
 private const val MaxModelReadCharacters = 16 * 1024
 
@@ -32,6 +34,14 @@ data class WorkspaceSnapshot(
     val afterSha256: String,
 )
 
+data class WorkspaceTrashReceipt(
+    val rootUri: String,
+    val movedUri: String,
+    val trashParentUri: String,
+    val originalParentUri: String,
+    val displayName: String,
+)
+
 data class WorkspaceActionResult(
     val detail: String,
     val toolContent: String = "",
@@ -44,6 +54,25 @@ class WorkspaceRepository(private val context: Context) {
     private val preferences = context.getSharedPreferences(WorkspacePreferences, Context.MODE_PRIVATE)
 
     fun storedRoot(): Uri? = preferences.getString(WorkspaceRootKey, null)?.let(Uri::parse)
+
+    fun lastTrashReceipt(root: Uri? = storedRoot()): WorkspaceTrashReceipt? {
+        val expectedRoot = root?.toString() ?: return null
+        val raw = preferences.getString(WorkspaceTrashReceiptKey, null) ?: return null
+        return runCatching {
+            val payload = JSONObject(raw)
+            WorkspaceTrashReceipt(
+                rootUri = payload.getString("root_uri"),
+                movedUri = payload.getString("moved_uri"),
+                trashParentUri = payload.getString("trash_parent_uri"),
+                originalParentUri = payload.getString("original_parent_uri"),
+                displayName = payload.getString("display_name"),
+            )
+        }.getOrNull()?.takeIf { it.rootUri == expectedRoot }
+    }
+
+    fun clearTrashReceipt() {
+        preferences.edit().remove(WorkspaceTrashReceiptKey).apply()
+    }
 
     fun attachRoot(uri: Uri) {
         val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
@@ -66,6 +95,17 @@ class WorkspaceRepository(private val context: Context) {
 
     suspend fun writeText(entry: WorkspaceEntry, text: String): WorkspaceSnapshot =
         withContext(Dispatchers.IO) { writeTextNow(entry, text) }
+
+    suspend fun moveToTrash(
+        root: Uri,
+        parent: Uri,
+        entry: WorkspaceEntry,
+    ): WorkspaceTrashReceipt = withContext(Dispatchers.IO) {
+        moveToTrashNow(root, parent, entry)
+    }
+
+    suspend fun restoreFromTrash(root: Uri, receipt: WorkspaceTrashReceipt) =
+        withContext(Dispatchers.IO) { restoreFromTrashNow(root, receipt) }
 
     /** Controller truth supplied to the model on every turn. */
     suspend fun controllerContext(): String = withContext(Dispatchers.IO) {
@@ -189,6 +229,94 @@ class WorkspaceRepository(private val context: Context) {
             name,
         ) ?: error("The document provider refused to create $path.")
         return WorkspaceActionResult(detail = "Created directory $path.")
+    }
+
+    /**
+     * User-driven removal is a reversible move inside the granted tree. The controller still
+     * has no delete tool, and provider refusal leaves the source in place.
+     */
+    private fun moveToTrashNow(
+        root: Uri,
+        parent: Uri,
+        entry: WorkspaceEntry,
+    ): WorkspaceTrashReceipt {
+        require(entry.displayName != ".anicloud-trash") { "The recoverable trash folder is protected." }
+        require(listChildrenNow(root, parent).any { it.uri == entry.uri }) {
+            "The selected entry is no longer inside the open folder. Refresh and review it again."
+        }
+        val trash = ensureTrashDirectory(root)
+        require(
+            listChildrenNow(root, Uri.parse(trash.uri)).none { it.displayName == entry.displayName },
+        ) {
+            "Trash already contains ${entry.displayName}; restore or rename it before trying again."
+        }
+        val sourceParent = documentUriForQuery(parent)
+        val trashParent = documentUriForQuery(Uri.parse(trash.uri))
+        val moved = DocumentsContract.moveDocument(
+            context.contentResolver,
+            Uri.parse(entry.uri),
+            sourceParent,
+            trashParent,
+        ) ?: error("The document provider does not support recoverable moves for this entry.")
+        val receipt = WorkspaceTrashReceipt(
+            rootUri = root.toString(),
+            movedUri = moved.toString(),
+            trashParentUri = trashParent.toString(),
+            originalParentUri = sourceParent.toString(),
+            displayName = entry.displayName,
+        )
+        persistTrashReceipt(receipt)
+        return receipt
+    }
+
+    private fun restoreFromTrashNow(root: Uri, receipt: WorkspaceTrashReceipt) {
+        require(receipt.rootUri == root.toString()) { "This undo receipt belongs to a different project tree." }
+        val trashParent = Uri.parse(receipt.trashParentUri)
+        val originalParent = Uri.parse(receipt.originalParentUri)
+        require(
+            listChildrenNow(root, originalParent).none { it.displayName == receipt.displayName },
+        ) {
+            "Restore stopped because ${receipt.displayName} now exists in the original folder."
+        }
+        require(listChildrenNow(root, trashParent).any { it.uri == receipt.movedUri }) {
+            "The trashed entry is no longer available to restore."
+        }
+        DocumentsContract.moveDocument(
+            context.contentResolver,
+            Uri.parse(receipt.movedUri),
+            trashParent,
+            originalParent,
+        ) ?: error("The document provider refused to restore ${receipt.displayName}.")
+        clearTrashReceipt()
+    }
+
+    private fun ensureTrashDirectory(root: Uri): WorkspaceEntry {
+        listChildrenNow(root, root).firstOrNull { entry ->
+            entry.isDirectory && entry.displayName == ".anicloud-trash"
+        }?.let { return it }
+        val created = DocumentsContract.createDocument(
+            context.contentResolver,
+            documentUriForQuery(root),
+            DocumentsContract.Document.MIME_TYPE_DIR,
+            ".anicloud-trash",
+        ) ?: error("The document provider refused to create recoverable project trash.")
+        return WorkspaceEntry(
+            uri = created.toString(),
+            displayName = ".anicloud-trash",
+            mimeType = DocumentsContract.Document.MIME_TYPE_DIR,
+            byteSize = null,
+            isDirectory = true,
+        )
+    }
+
+    private fun persistTrashReceipt(receipt: WorkspaceTrashReceipt) {
+        val payload = JSONObject()
+            .put("root_uri", receipt.rootUri)
+            .put("moved_uri", receipt.movedUri)
+            .put("trash_parent_uri", receipt.trashParentUri)
+            .put("original_parent_uri", receipt.originalParentUri)
+            .put("display_name", receipt.displayName)
+        preferences.edit().putString(WorkspaceTrashReceiptKey, payload.toString()).apply()
     }
 
     private fun listChildrenNow(root: Uri, directory: Uri): List<WorkspaceEntry> {

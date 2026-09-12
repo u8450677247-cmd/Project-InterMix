@@ -9,7 +9,7 @@ continuity but never grants authority.
 
 ## 1. Long Forge workspace sessions — current build
 
-`0.8.4-continuity-routing` separates ordinary Chat from long-running project work and
+`0.8.5-ship-hardening` separates ordinary Chat from long-running project work and
 adds non-destructive fresh/reopen conversation controls. A work session has a
 complete objective, one ASCII workspace root, a selected model posture, a durable Matrix
 checkpoint, and a visible foreground STOP path.
@@ -17,8 +17,9 @@ checkpoint, and a visible foreground STOP path.
 - A single launch may execute at most 120 verified `list_files`, `read_file`, `create_directory`,
   `create_file`, or `write_file` actions.
 - The grant covers at most 1 MiB of generated write content inside the exact mission root.
-- Replacements retain a private pre-write snapshot. Delete, code execution, package installation,
-  network access, and paths outside the mission root are unavailable.
+- Replacements retain a private pre-write snapshot. Model-generated delete, code execution,
+  package installation, network access, and paths outside the mission root are unavailable.
+  Human IDE removal is a separate confirmed move into recoverable project-local trash.
 - The controller refreshes model context from the Memory Matrix every four actions. It injects the
   objective, user guidance, last verified result, and a recent project-event ledger instead of
   trusting the latest chat turns.
@@ -32,11 +33,12 @@ checkpoint, and a visible foreground STOP path.
 - Guidance entered while generation is active is queued durably and injected at the next safe
   controller boundary instead of discarding partial work or replacing the objective.
 - Unprefixed action paths are resolved relative to the exact mission root. A narration-only model
-  response receives up to two automatic controller corrections before the mission pauses.
+  response receives up to four automatic controller corrections before the mission pauses.
 - Work expected to exceed six actions maintains `PROJECT_STATE.md` in the project so architecture,
   decisions, validation, blockers, and the next action remain inspectable outside the database.
 
-Acceptance requires one prompt to create a multi-file project, update `PROJECT_STATE.md`, inspect
+Acceptance uses the exact
+[`120-action Long Forge benchmark`](ANICLOUDAI_120_ACTION_FORGE_BENCHMARK.md) to create a multi-file project, update `PROJECT_STATE.md`, inspect
 its own results, correct at least one seeded defect, and finish with `[MISSION_COMPLETE]` without a
 manual `RESUME` after every file. Closing the process must convert an in-flight mission to Paused;
 explicit Resume must continue from verified state.

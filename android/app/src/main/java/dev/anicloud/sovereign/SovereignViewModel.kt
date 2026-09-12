@@ -32,7 +32,7 @@ private const val StreamUiPublishMillis = 90L
 private const val MaxControllerCycles = 3
 private const val MaxMissionControllerCycles = 121
 private const val MissionConversationResetInterval = 4
-private const val MaxMissionNoActionRetries = 2
+private const val MaxMissionNoActionRetries = 4
 private const val NpuMemoryReleasePollMillis = 250L
 private const val NpuMemoryReleasePollAttempts = 5
 
@@ -404,6 +404,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                             latestMission?.status == AgentMissionStatus.Running &&
                             latestMission.guidance != mission?.guidance
                         ) {
+                            commitControllerCycleVisible(parsed.visibleText, missionActive = true)
                             mission = latestMission
                             runtime.resetConversation()
                             request = buildTurnPrompt(
@@ -431,6 +432,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                             !explicitlyFinished && !explicitlyBlocked &&
                             consecutiveMissionNoAction < MaxMissionNoActionRetries
                         ) {
+                            commitControllerCycleVisible(visible, missionActive = true)
                             consecutiveMissionNoAction++
                             mission = continuingMission
                             request = buildString {
@@ -439,6 +441,12 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                                 appendLine("The previous response narrated intent but emitted no controller action.")
                                 appendLine("Continue without waiting for another click: emit exactly one next workspace action.")
                                 appendLine("Paths without the mission-root prefix are interpreted relative to that root.")
+                                if (continuingMission.completedActions == 0) {
+                                    appendLine(
+                                        "If this is a new mission folder, the next action must be " +
+                                            "create_directory for ${continuingMission.rootPath}.",
+                                    )
+                                }
                                 appendLine("If work is actually complete, return [MISSION_COMPLETE]. If human input is essential, return [BLOCKED].")
                                 if (visible.isNotBlank()) {
                                     appendLine()
@@ -497,6 +505,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                         break
                     }
 
+                    commitControllerCycleVisible(parsed.visibleText, missionActive = mission != null)
                     mission?.let { validateMissionProposal(normalized, it) }
                     var auditActionId: Long? = null
                     if (mission != null && normalized.kind.requiresApproval) {
@@ -544,6 +553,13 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                         }
                     }
                     controllerCycle++
+                    mission?.let { checkpoint ->
+                        commitMessage(
+                            ChatSpeaker.System,
+                            missionActionReport(normalized, toolResult, checkpoint),
+                            source = "mission",
+                        )
+                    }
                     if (toolResult.isFailure) {
                         val failure = toolResult.exceptionOrNull() ?: error("Unknown workspace failure")
                         if (mission == null) {
@@ -878,7 +894,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun stopGeneration() {
-        stopGeneration("Stopped by user. Partial output was discarded and not committed.")
+        stopGeneration("Stopped by user. Any safe partial draft was preserved separately.")
     }
 
     fun guideActiveMission(instruction: String) {
@@ -908,6 +924,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
 
     private fun stopGeneration(reason: String) {
         val stoppedJob = generationJob ?: return
+        val interruptedDraft = _state.value.streamText
         val missionWasActive = runCatching {
             memoryMatrix.activeAgentMission()?.active == true
         }.getOrDefault(false)
@@ -932,6 +949,10 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             if (serial != generationSerial) return@launch
             val notice = if (recoveryFailure == null) reason else
                 "$reason Recovery failed: ${safeFailure(recoveryFailure)}"
+            preserveInterruptedDraft(
+                interruptedDraft,
+                source = if (missionWasActive) "mission" else "chat",
+            )
             commitMessage(
                 ChatSpeaker.System,
                 notice,
@@ -945,6 +966,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                     } else {
                         "STOP completed, but the model must be reloaded"
                     },
+                    streamText = "",
                 )
             }
             refreshRuntimeState()
@@ -1109,6 +1131,13 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                         "For work expected to exceed six actions, maintain PROJECT_STATE.md inside " +
                             "the mission root as a concise plan, decision, verification, and next-action ledger.",
                     )
+                    if (activeMission.completedActions == 0) {
+                        appendLine(
+                            "First-cycle requirement: emit one workspace action now—do not return a " +
+                                "briefing-only response. If the mission folder is new, create_directory " +
+                                "${activeMission.rootPath} before proposing any child path.",
+                        )
+                    }
                 }
             }
             appendLine("\n$workspace")
@@ -1989,6 +2018,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         message: String,
         source: String = "integrity",
     ) {
+        val interruptedDraft = _state.value.streamText
         runtime.cancelProcess()
         _state.update {
             it.copy(
@@ -1998,15 +2028,17 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         }
         val recoveryFailure = resetConversationFailure()
         if (serial != generationSerial) return
+        preserveInterruptedDraft(interruptedDraft, source)
         commitMessage(ChatSpeaker.System, message, source = source)
         _state.update {
             it.copy(
                 stage = if (recoveryFailure == null) ModelStage.Ready else ModelStage.Error,
                 detail = if (recoveryFailure == null) {
-                    "Recovered · unsafe partial output was not committed"
+                    "Recovered · unsafe fragments blocked · safe draft preserved when valid"
                 } else {
                     "Output blocked, but the model must be reloaded"
                 },
+                streamText = "",
             )
         }
         refreshRuntimeState()
@@ -2035,6 +2067,48 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         _state.update { it.copy(messages = committed.ifEmpty { listOf(message) }) }
         return message
     }
+
+    /**
+     * A completed controller cycle is durable before its stream slot is reused by the next
+     * action. Status badges such as [INFO] are presentation metadata and never replace prose.
+     */
+    private suspend fun commitControllerCycleVisible(text: String, missionActive: Boolean) {
+        val visible = text.trim()
+        if (visible.isBlank()) return
+        commitMessage(
+            ChatSpeaker.Core,
+            visible,
+            source = if (missionActive) "mission" else "chat",
+        )
+        _state.update { it.copy(streamText = "") }
+    }
+
+    /** Safe interrupted prose remains inspectable, but draft sources are excluded from recall. */
+    private suspend fun preserveInterruptedDraft(text: String, source: String) {
+        val visible = text.trim()
+        if (visible.isBlank() || GenerationIntegrityGuard.inspectStreamingText(visible) != null) return
+        _state.update { it.copy(streamText = "") }
+        commitMessage(
+            ChatSpeaker.Core,
+            "$visible\n\n[INTERRUPTED DRAFT · NOT A VERIFIED FINAL ANSWER]",
+            source = "${source.take(32)}-draft",
+        )
+    }
+
+    private fun missionActionReport(
+        proposal: WorkspaceActionProposal,
+        result: Result<WorkspaceActionResult>,
+        checkpoint: AgentMissionCheckpoint,
+    ): String = result.fold(
+        onSuccess = {
+            "[ACTION ${checkpoint.completedActions}/${checkpoint.maxActions}] " +
+                "`${proposal.kind.wireName} ${proposal.path}`\n${it.detail}"
+        },
+        onFailure = {
+            "[BLOCKED ACTION ${checkpoint.completedActions}/${checkpoint.maxActions}] " +
+                "`${proposal.kind.wireName} ${proposal.path}`\n${safeFailure(it)}"
+        },
+    )
 
     private fun showLoadFailure(
         heading: String,

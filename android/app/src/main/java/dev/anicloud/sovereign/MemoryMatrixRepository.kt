@@ -17,6 +17,7 @@ private const val MatrixDatabaseName = "sovereign_memory_v1.db"
 private const val MatrixSchemaVersion = 3
 private const val LegacyHistoryName = "conversation_history_v1.json"
 private const val MaxStoredMessageCharacters = 32 * 1024
+private const val RecentConversationCharacterBudget = 4_096
 private const val MaxMemoryValueCharacters = 4 * 1024
 private const val MaxActionContentCharacters = 64 * 1024
 private const val ActiveAgentMissionKey = "active_agent_mission"
@@ -209,7 +210,7 @@ class MemoryMatrixRepository(private val context: Context) :
     }
 
     @Synchronized
-    fun loadMessages(limit: Int = 200): List<ChatMessage> {
+    fun loadMessages(limit: Int = 500): List<ChatMessage> {
         val db = writableDatabase
         collapseDuplicateRuntimeMessages(db)
         val sessionId = activeSessionId(db)
@@ -1548,10 +1549,11 @@ class MemoryMatrixRepository(private val context: Context) :
     private fun recentMessages(beforeMessageId: Long, limit: Int): List<String> {
         if (limit <= 0) return emptyList()
         val sessionId = activeSessionId(writableDatabase)
-        return readableDatabase.rawQuery(
+        val newestFirst = readableDatabase.rawQuery(
             """
             SELECT speaker,content FROM messages
-            WHERE session_id=? AND id<? ORDER BY id DESC LIMIT ?
+            WHERE session_id=? AND id<? AND source NOT LIKE '%-draft'
+            ORDER BY id DESC LIMIT ?
             """.trimIndent(),
             arrayOf(sessionId, beforeMessageId.toString(), limit.toString()),
         ).use { cursor ->
@@ -1559,8 +1561,18 @@ class MemoryMatrixRepository(private val context: Context) :
                 while (cursor.moveToNext()) {
                     add("${speakerLabel(cursor.getString(0))}: ${compact(cursor.getString(1), 900)}")
                 }
-            }.asReversed()
+            }
         }
+        var remaining = RecentConversationCharacterBudget
+        val boundedNewestFirst = buildList {
+            for (line in newestFirst) {
+                if (remaining <= 0) break
+                val clipped = line.take(remaining)
+                if (clipped.isNotBlank()) add(clipped)
+                remaining -= clipped.length + 1
+            }
+        }
+        return boundedNewestFirst.asReversed()
     }
 
     private fun searchArchivedMessages(query: String, beforeMessageId: Long, limit: Int): List<String> {
@@ -1572,7 +1584,7 @@ class MemoryMatrixRepository(private val context: Context) :
                 """
                 SELECT m.speaker,m.content,m.created_at FROM messages_fts
                 JOIN messages m ON m.id=messages_fts.rowid
-                WHERE messages_fts MATCH ? AND m.id<?
+                WHERE messages_fts MATCH ? AND m.id<? AND m.source NOT LIKE '%-draft'
                 ORDER BY bm25(messages_fts) ASC LIMIT ?
                 """.trimIndent(),
                 arrayOf(match, beforeMessageId.toString(), (limit + 10).toString()),

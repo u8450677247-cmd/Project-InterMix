@@ -2,7 +2,7 @@
 
 This module is the private Pixel 10 Pro reference cockpit for Project Intermix.
 The original disconnected shell has passed its first device test. The current
-`0.8.4-continuity-routing` candidate combines the stable E4B LiteRT-LM boundary with
+`0.8.5-ship-hardening` candidate combines the stable E4B LiteRT-LM boundary with
 the native Memory Matrix, controller-mediated project workspace, and the first
 checkpointed long-form work-session loop. Its cyan–magenta–violet spectral
 glass pass concentrates fluorescence on focus, mode, code, and mission progress
@@ -28,20 +28,22 @@ while preserving neutral long-form reading surfaces.
 - non-destructive `/sessions list|new|open <reference>` controls that reset native
   model context while preserving earlier sessions, durable memories, model files,
   and the SAF workspace grant;
-- bounded recent-session context rehydration before every model turn, including
+- roughly 1K-token recent-session context rehydration before every model turn, including
   ordinary chat that does not use explicit continuity wording;
 - a versioned Interaction Profile Matrix with explicit-evidence adaptation,
   undo, and deterministic General/Continuity/Project context selection;
 - a persisted Storage Access Framework project tree with automatic list/read
-  tools, approval-gated create/write/mkdir actions, and pre-write snapshots;
+  tools, approval-gated create/write/mkdir actions, pre-write snapshots, Up/back
+  navigation, whole-message copy, and explicitly confirmed recoverable trash;
 - a dedicated Long Forge workspace conversation that accepts one complete
   objective, up to 120 scoped controller actions, queued mid-run guidance,
   periodic Matrix context rebuilding, recursive-loop detection, and durable
   pause/resume checkpoints;
-- automatic correction of up to two narration-only mission responses before a
+- automatic correction of up to four narration-only mission responses before a
   pause, plus mission-relative controller paths that remain inside the exact grant;
-- frozen interrupted/failed Work Session drafts that remain visible but are
-  explicitly excluded from canonical model history and Memory Matrix learning;
+- append-only controller-cycle messages and safe interrupted Work Session drafts
+  that remain visible while draft sources are excluded from model recall and
+  Memory Matrix learning;
 - an opt-in Termux RUN_COMMAND bridge for typed inspect/run/test/build and
   dependency-install plans, with exact command previews, declared packages and
   network use, one-at-a-time dispatch, timeouts, bounded results, and STOP;
@@ -72,7 +74,10 @@ ordinary Chat, reads can be controller-executed while file creation,
 replacement, and directory creation must be approved in Agents. Starting a
 Long Forge work session visibly grants those three mutation types inside one
 named subdirectory for at most 120 actions and 1 MiB of attempted write content.
-Deletion remains disabled in this candidate.
+Model-generated deletion remains disabled. A human can review a specific file or
+folder, confirm a reversible move into `.anicloud-trash` within the same granted
+tree, and undo the latest move. Provider refusal fails closed without widening
+the SAF grant.
 
 ## Termux execution setup
 
@@ -193,8 +198,9 @@ bash tools/termux_dogfood_update.sh --open
 4. Record the displayed full SHA-256, selected backend, initialization time,
    available-memory headroom, and thermal category.
 5. Send the exact-number benchmark in Quality mode. Verify all anchors survive.
-6. Start a longer response, press STOP, and verify the partial answer is not
-   committed and the following clean response succeeds.
+6. Start a longer response, press STOP, and verify safe partial prose remains
+   marked as an unverified draft, is excluded from recall, and the following
+   clean response succeeds.
 7. Rotate, resize, and enter desktop mode before, during, and after generation.
 8. Repeat one response in Performance, Adaptive, and Quality. Until E2B exists,
    Performance and Adaptive must honestly show an E4B fallback route.
@@ -202,11 +208,10 @@ bash tools/termux_dogfood_update.sh --open
    Matrix and influences a relevant later turn.
 10. Connect a disposable project tree, ask chat to list and read a file, then
     request an edit and verify no bytes change before approval in Agents.
-11. Open Workspace → Work Session, give a disposable ASCII subdirectory and a
-    multi-file objective, then verify several actions complete without a manual
-    resume between files. Queue guidance while it runs, press STOP, and verify
-    explicit Resume continues from the Matrix checkpoint rather than recent
-    chat guesses.
+11. Run the exact
+    [`120-action Long Forge benchmark`](../docs/ANICLOUDAI_120_ACTION_FORGE_BENCHMARK.md)
+    and verify all action cards, transcript entries, scope checks, and restart
+    recovery before separately claiming that the generated product executes.
 
 Do not import a live Termux SQLite database. The execution bridge exchanges only
 reviewed commands and bounded result records; a future memory bridge must use a
