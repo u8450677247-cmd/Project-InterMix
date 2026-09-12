@@ -8,6 +8,9 @@ may still change.
 
 ### Added
 
+- One-click scoped Work Session autonomy: the launch grants create/write/mkdir authority only
+  inside one prepared mission directory and bounded action/write budgets, while ordinary Chat,
+  Termux execution, dependencies, and network access retain their separate review boundaries.
 - A 20-policy native Context Orchestrator that budgets system/prefill/output
   capacity, rebuilds lane-specific context in a fresh conversation per controller
   cycle, preserves current intent and newest durable state through compaction,
@@ -99,6 +102,12 @@ may still change.
 
 ### Fixed
 
+- Phone Chat now gives the transcript the available viewport, fits all three answer modes without
+  horizontal scrolling, collapses diagnostics while the keyboard is open, keeps the input/send
+  row visible through IME resize, and temporarily hides bottom navigation during text entry.
+- Android now prepares and verifies the Work Session directory before inference, prevents the
+  reserved Story Forge benchmark folder from silently becoming a generic mission scope, and
+  safely reconciles `write_file` to `create_file` only when the target is verified absent.
 - Workspace approval controls no longer appear actionable while an inference or another write is
   crossing its safe boundary. Start actions publish an immediate accepted/busy state, and every
   blocked approval attempt now explains why instead of silently discarding the tap.

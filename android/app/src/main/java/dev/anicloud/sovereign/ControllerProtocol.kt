@@ -201,9 +201,12 @@ object ControllerProtocol {
         [SCOPED WORKSPACE CONTROLLER PROTOCOL]
         Emit exactly one raw <INTERMIX_ACTION> JSON block per response and no speculative result.
         Kinds: list_files, read_file, create_file, write_file, create_directory. Paths stay inside
-        the authorized mission root. File proposals contain complete, non-empty final content; never
-        create an empty placeholder or split create-then-fill into separate actions. This active mission
-        is the bounded approval grant; Android executes, audits, checkpoints, and returns the result.
+        the authorized mission root, which Android prepares before inference; do not recreate that root.
+        Use create_file for a missing target and write_file only for a file verified to exist. File
+        proposals contain complete, non-empty final content; never create an empty placeholder or split
+        create-then-fill into separate actions. After a successful mutation, verify it with read_file
+        rather than repeating the mutation. This active mission is the bounded approval grant; Android
+        executes, audits, checkpoints, and returns the result without per-file approval clicks.
         Use <INTERMIX_CALC>{"expression":"decimal expression","reason":"why"}</INTERMIX_CALC> for
         derived arithmetic. Use <INTERMIX_EXEC> only when a separate Termux approval is genuinely
         required; include kind, command, relative workdir, network_required, dependencies, reason,

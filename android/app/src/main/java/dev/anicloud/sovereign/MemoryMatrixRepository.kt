@@ -447,6 +447,10 @@ class MemoryMatrixRepository(private val context: Context) :
         require(planKind in setOf(WorkspaceMissionKind, StoryForgeMissionKind)) {
             "Unknown controller mission plan."
         }
+        require(planKind != WorkspaceMissionKind || !isReservedStoryForgeBenchmarkRoot(normalizedRoot)) {
+            "$StoryForgeBenchmarkFolder is reserved for the reviewed Story Forge lane. " +
+                "Choose a different folder for a general Work Session."
+        }
         val existing = activeAgentMission()
         require(existing == null || !existing.active) {
             "Mission ${existing?.id} is still ${existing?.status?.name?.lowercase()}; resume or cancel it first."
@@ -481,6 +485,13 @@ class MemoryMatrixRepository(private val context: Context) :
         val current = activeAgentMission() ?: error("No long-form mission checkpoint is available.")
         require(current.status in setOf(AgentMissionStatus.Paused, AgentMissionStatus.Running)) {
             "Mission ${current.id} is ${current.status.name.lowercase()} and cannot be resumed."
+        }
+        require(
+            current.planKind != WorkspaceMissionKind ||
+                !isReservedStoryForgeBenchmarkRoot(current.rootPath),
+        ) {
+            "Legacy general mission ${current.id} uses the reserved $StoryForgeBenchmarkFolder root. " +
+                "Cancel it, then start a general Work Session in a new folder or load Story Forge."
         }
         val resumed = current.copy(status = AgentMissionStatus.Running, updatedAt = now())
         persistAgentMission(resumed)

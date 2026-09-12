@@ -150,6 +150,29 @@ class FoundationContractTest {
     }
 
     @Test
+    fun scopedMissionRepairsOnlyAWriteToAVerifiedMissingTarget() {
+        val write = WorkspaceActionProposal(
+            kind = WorkspaceActionKind.WriteFile,
+            path = "mission/proof.txt",
+            content = "verified content",
+        )
+        val repaired = reconcileScopedWorkspaceAction(write, targetExists = false)
+
+        assertEquals(WorkspaceActionKind.CreateFile, repaired.proposal.kind)
+        assertTrue(repaired.detail.contains("verified the target was absent"))
+        assertEquals(
+            WorkspaceActionKind.WriteFile,
+            reconcileScopedWorkspaceAction(write, targetExists = true).proposal.kind,
+        )
+
+        val create = write.copy(kind = WorkspaceActionKind.CreateFile)
+        assertEquals(
+            WorkspaceActionKind.CreateFile,
+            reconcileScopedWorkspaceAction(create, targetExists = true).proposal.kind,
+        )
+    }
+
+    @Test
     fun recursiveMissionActionPatternsAreDetectedWithoutRejectingProgress() {
         assertTrue(hasRecursiveActionTail(listOf("read:a", "read:a", "read:a")))
         assertTrue(

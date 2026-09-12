@@ -25,8 +25,8 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("compileSdk = 36", app_build)
         self.assertIn("targetSdk = 36", app_build)
         self.assertIn("minSdk = 31", app_build)
-        self.assertIn("versionCode = 21", app_build)
-        self.assertIn('versionName = "0.8.10-workspace-write-integrity"', app_build)
+        self.assertIn("versionCode = 22", app_build)
+        self.assertIn('versionName = "0.8.11-scoped-autonomy"', app_build)
         self.assertIn("jniLibs.useLegacyPackaging = true", app_build)
         self.assertIn("compose-bom:2026.03.01", app_build)
         self.assertIn('abiFilters += "arm64-v8a"', app_build)
@@ -72,8 +72,9 @@ class AndroidFoundationTests(unittest.TestCase):
         source = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
         contract = (SOURCE / "FoundationContract.kt").read_text(encoding="utf-8")
         self.assertIn("DesktopThresholdDp = 1200", contract)
+        self.assertIn('android:windowSoftInputMode="adjustResize"', (APP / "src/main/AndroidManifest.xml").read_text())
         self.assertIn("singleLine = false", source)
-        self.assertIn("maxLines = ComposerMaxVisibleLines", source)
+        self.assertIn("maxLines = if (compact) 4 else ComposerMaxVisibleLines", source)
         self.assertIn("ImeAction.Default", source)
         self.assertIn('Text("SEND"', source)
         self.assertIn('Text("STOP"', source)
@@ -238,6 +239,27 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("NETWORK · REQUIRED AND INCLUDED IN THIS APPROVAL", ui)
         self.assertIn("DEVELOPER PLUGIN · TERMUX", ui)
         self.assertIn("cockpit.termuxBridge.enabled &&", ui)
+
+    def test_work_session_is_one_scoped_grant_with_controller_owned_path_recovery(self):
+        protocol = (SOURCE / "ControllerProtocol.kt").read_text(encoding="utf-8")
+        workspace = (SOURCE / "WorkspaceRepository.kt").read_text(encoding="utf-8")
+        memory = (SOURCE / "MemoryMatrixRepository.kt").read_text(encoding="utf-8")
+        view_model = (SOURCE / "SovereignViewModel.kt").read_text(encoding="utf-8")
+        ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
+
+        self.assertIn("without per-file approval clicks", protocol)
+        self.assertIn("prepareWorkspaceMission", workspace)
+        self.assertIn("reconcileScopedWorkspaceAction", workspace)
+        self.assertIn("target was absent and reconciled write_file to create_file", workspace)
+        self.assertIn("prepare_workspace_mission", view_model)
+        self.assertIn("recover_workspace_mission", view_model)
+        self.assertIn("Android already prepared and verified the mission root", view_model)
+        self.assertNotIn("the next action must be create_directory", view_model)
+        self.assertIn("!isReservedStoryForgeBenchmarkRoot(normalizedRoot)", memory)
+        self.assertIn("Legacy general mission", memory)
+        self.assertIn("GRANT SCOPED AUTONOMY & START", ui)
+        self.assertIn("NO PER-FILE CLICKS", ui)
+        self.assertIn("PROJECT TREE ·", ui)
 
     def test_native_conversation_sessions_preserve_history_and_reset_model_context(self):
         repository = (SOURCE / "MemoryMatrixRepository.kt").read_text(
@@ -435,7 +457,12 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn('Text("↓"', ui)
         self.assertIn('contentDescription = "Jump to latest message"', ui)
         self.assertGreaterEqual(ui.count("Alignment.BottomCenter"), 2)
-        self.assertIn("bottom = 72.dp", ui)
+        self.assertIn("bottom = if (compact) 12.dp else 72.dp", ui)
+        self.assertIn("keyboardVisible = WindowInsets.ime.getBottom(density) > 0", ui)
+        self.assertIn("if (!keyboardVisible)", ui)
+        self.assertIn('AnswerMode.Performance -> "FAST · 1K"', ui)
+        self.assertIn('AnswerMode.Quality -> "DEEP · 2K"', ui)
+        self.assertIn("RETURN = NEW LINE · TAP SEND TO SUBMIT", ui)
 
     def test_context_orchestrator_is_bounded_private_and_measured(self):
         orchestrator = (SOURCE / "ContextOrchestrator.kt").read_text(encoding="utf-8")

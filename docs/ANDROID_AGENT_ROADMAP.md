@@ -9,14 +9,18 @@ continuity but never grants authority.
 
 ## 1. Long Forge workspace sessions — current build
 
-`0.8.10-workspace-write-integrity` separates ordinary Chat from long-running project work and
-adds non-destructive fresh/reopen conversation controls. A work session has a
+`0.8.11-scoped-autonomy` separates ordinary Chat from long-running project work,
+adds non-destructive fresh/reopen conversation controls, and turns one explicit start tap into
+a bounded filesystem grant. A work session has a
 complete objective, one ASCII workspace root, a selected model posture, a durable Matrix
 checkpoint, and a visible foreground STOP path.
 
 - A single launch may execute at most 120 verified `list_files`, `read_file`, `create_directory`,
   `create_file`, or `write_file` actions.
 - The grant covers at most 1 MiB of generated write content inside the exact mission root.
+- Android creates or verifies the mission root before inference. Within that root, create,
+  write, and directory actions run without per-file approval prompts; execution, dependency,
+  network, and out-of-scope requests remain separately gated.
 - Replacements retain a private pre-write snapshot. Model-generated delete, code execution,
   package installation, network access, and paths outside the mission root are unavailable.
   Human IDE removal is a separate confirmed move into recoverable project-local trash.
@@ -40,6 +44,9 @@ checkpoint, and a visible foreground STOP path.
   reads the exact bytes back; an unverifiable replacement attempts to restore its snapshot.
 - A repeated mission-root alias—including dash/underscore spelling drift—is collapsed once before
   scope validation so it cannot create `root/root_alias/file` recovery loops.
+- If the model proposes `write_file` for a target Android has verified does not exist, the
+  controller transparently reconciles that proposal to `create_file`. It never performs the
+  inverse conversion, so an accidental create cannot overwrite an existing file.
 - Work expected to exceed six actions maintains `PROJECT_STATE.md` in the project so architecture,
   decisions, validation, blockers, and the next action remain inspectable outside the database.
 

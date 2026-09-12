@@ -32,6 +32,9 @@ class StoryForgeTest {
     @Test
     fun benchmarkPresetPinsTheReviewedStoryWithoutGivingTheModelOrdinals() {
         assertEquals("story-forge-orbit", StoryForgeBenchmarkFolder)
+        assertTrue(isReservedStoryForgeBenchmarkRoot("story-forge-orbit"))
+        assertTrue(isReservedStoryForgeBenchmarkRoot("STORY-FORGE-ORBIT"))
+        assertFalse(isReservedStoryForgeBenchmarkRoot("workspace-write-probe"))
         assertTrue(StoryForgeBenchmarkPremise.contains("Nia Sol"))
         assertTrue(StoryForgeBenchmarkPremise.contains("the sky keeps receipts"))
         assertTrue(StoryForgeBenchmarkPremise.contains("limited, consent-based archive"))

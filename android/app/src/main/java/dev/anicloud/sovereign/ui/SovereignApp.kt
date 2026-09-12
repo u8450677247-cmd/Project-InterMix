@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -82,6 +83,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
@@ -129,6 +131,7 @@ import dev.anicloud.sovereign.prototype.WorkspaceEntry
 import dev.anicloud.sovereign.prototype.WorkspaceState
 import dev.anicloud.sovereign.prototype.WorkspaceViewModel
 import dev.anicloud.sovereign.prototype.allowsAmbientMotion
+import dev.anicloud.sovereign.prototype.isReservedStoryForgeBenchmarkRoot
 import dev.anicloud.sovereign.prototype.resolveFoundationLayout
 import dev.anicloud.sovereign.prototype.thermalStatusLabel
 import java.util.Locale
@@ -516,6 +519,8 @@ private fun PhoneShell(
     onLayoutPreference: (LayoutPreference) -> Unit,
     onLock: () -> Unit,
 ) {
+    val density = LocalDensity.current
+    val keyboardVisible = WindowInsets.ime.getBottom(density) > 0
     Column(Modifier.fillMaxSize()) {
         TopRail(destination = destination, cockpit = cockpit, onLock = onLock)
         Box(Modifier.weight(1f)) {
@@ -534,25 +539,27 @@ private fun PhoneShell(
                 label = "phone-destination",
             )
         }
-        NavigationBar(
-            containerColor = SmokedDeep.copy(alpha = 0.96f),
-            tonalElevation = 0.dp,
-        ) {
-            Destination.entries.forEach { item ->
-                val accent = destinationAccent(item)
-                NavigationBarItem(
-                    selected = destination == item,
-                    onClick = { onDestination(item) },
-                    icon = { DestinationIcon(item, selected = destination == item) },
-                    label = { Text(phoneDestinationLabel(item)) },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = accent,
-                        selectedTextColor = accent,
-                        indicatorColor = accent.copy(alpha = 0.16f),
-                        unselectedIconColor = MutedText,
-                        unselectedTextColor = MutedText,
-                    ),
-                )
+        if (!keyboardVisible) {
+            NavigationBar(
+                containerColor = SmokedDeep.copy(alpha = 0.96f),
+                tonalElevation = 0.dp,
+            ) {
+                Destination.entries.forEach { item ->
+                    val accent = destinationAccent(item)
+                    NavigationBarItem(
+                        selected = destination == item,
+                        onClick = { onDestination(item) },
+                        icon = { DestinationIcon(item, selected = destination == item) },
+                        label = { Text(phoneDestinationLabel(item)) },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = accent,
+                            selectedTextColor = accent,
+                            indicatorColor = accent.copy(alpha = 0.16f),
+                            unselectedIconColor = MutedText,
+                            unselectedTextColor = MutedText,
+                        ),
+                    )
+                }
             }
         }
     }
@@ -686,6 +693,7 @@ private fun DestinationContent(
             defaultMode = defaultMode,
             cockpit = cockpit,
             cockpitActions = cockpitActions,
+            compact = compact,
         )
         Destination.Memory -> MemoryMatrixSurface(
             cockpit = cockpit,
@@ -1355,6 +1363,7 @@ private fun ChatSurface(
     defaultMode: AnswerMode,
     cockpit: CockpitState,
     cockpitActions: CockpitActions,
+    compact: Boolean,
 ) {
     var draft by rememberSaveable { mutableStateOf("") }
     var selection by remember(defaultMode) {
@@ -1372,15 +1381,16 @@ private fun ChatSurface(
             phase = runtimePhase(cockpit.stage),
             detail = cockpit.detail,
             active = cockpit.isGenerating,
+            compact = compact,
         )
         Box(Modifier.weight(1f)) {
             LazyColumn(
                 state = threadState,
                 contentPadding = PaddingValues(
                     start = 16.dp,
-                    top = 12.dp,
+                    top = if (compact) 8.dp else 12.dp,
                     end = 16.dp,
-                    bottom = 72.dp,
+                    bottom = if (compact) 12.dp else 72.dp,
                 ),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.fillMaxSize(),
@@ -1428,6 +1438,7 @@ private fun ChatSurface(
                 }
             },
             onStop = cockpitActions.onStop,
+            compact = compact,
         )
     }
 }
@@ -1497,7 +1508,12 @@ private fun LatestTranscriptButton(
 }
 
 @Composable
-private fun TruthThread(phase: RuntimePhase, detail: String, active: Boolean) {
+private fun TruthThread(
+    phase: RuntimePhase,
+    detail: String,
+    active: Boolean,
+    compact: Boolean = false,
+) {
     val color = when (phase) {
         RuntimePhase.Ready -> ResonanceMint
         RuntimePhase.Recovering, RuntimePhase.Degraded -> InterventionCoral
@@ -1509,14 +1525,19 @@ private fun TruthThread(phase: RuntimePhase, detail: String, active: Boolean) {
         modifier = Modifier
             .fillMaxWidth()
             .sovereignGlass(color, radius = 12.dp, depth = 0.64f, elevation = 2.dp)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .padding(horizontal = if (compact) 12.dp else 16.dp, vertical = if (compact) 8.dp else 10.dp),
     ) {
-        Text("● ${phase.label.uppercase()}", color = color, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.width(12.dp))
+        Text(
+            "● ${phase.label.uppercase()}",
+            color = color,
+            fontSize = if (compact) 12.sp else 13.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        Spacer(Modifier.width(if (compact) 8.dp else 12.dp))
         Text(
             detail,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontSize = 13.sp,
+            fontSize = if (compact) 11.sp else 13.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
@@ -1595,52 +1616,94 @@ private fun Composer(
     onMode: (AnswerMode) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
+    compact: Boolean,
 ) {
     val modeAccent = answerModeAccent(selection.modeForNextResponse())
+    val density = LocalDensity.current
+    val keyboardVisible = compact && WindowInsets.ime.getBottom(density) > 0
     Surface(
         color = Color.Transparent,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 6.dp)
-            .sovereignGlass(modeAccent, radius = 18.dp, depth = 0.88f, elevation = 10.dp),
+            .padding(horizontal = if (compact) 6.dp else 8.dp, vertical = if (compact) 4.dp else 6.dp)
+            .sovereignGlass(
+                modeAccent,
+                radius = if (compact) 16.dp else 18.dp,
+                depth = 0.88f,
+                elevation = 10.dp,
+            ),
     ) {
         Column(
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 8.dp),
+            modifier = Modifier.padding(if (compact) 8.dp else 12.dp),
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.horizontalScroll(rememberScrollState()),
-            ) {
-                Text("NEXT", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-                AnswerMode.entries.forEach { mode ->
-                    FluorescentChip(
-                        selected = selection.modeForNextResponse() == mode,
-                        onClick = { onMode(mode) },
-                        label = when (mode) {
-                            AnswerMode.Performance -> "Performance · 1K"
-                            AnswerMode.Adaptive -> "Adaptive · 1.5K"
-                            AnswerMode.Quality -> "Quality · 2K"
-                        },
-                        accent = answerModeAccent(mode),
-                    )
+            if (!keyboardVisible) {
+                if (compact) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        AnswerMode.entries.forEach { mode ->
+                            FluorescentChip(
+                                selected = selection.modeForNextResponse() == mode,
+                                onClick = { onMode(mode) },
+                                label = when (mode) {
+                                    AnswerMode.Performance -> "FAST · 1K"
+                                    AnswerMode.Adaptive -> "AUTO · 1.5K"
+                                    AnswerMode.Quality -> "DEEP · 2K"
+                                },
+                                accent = answerModeAccent(mode),
+                                compact = true,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                } else {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    ) {
+                        Text("NEXT", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                        AnswerMode.entries.forEach { mode ->
+                            FluorescentChip(
+                                selected = selection.modeForNextResponse() == mode,
+                                onClick = { onMode(mode) },
+                                label = when (mode) {
+                                    AnswerMode.Performance -> "Performance · 1K"
+                                    AnswerMode.Adaptive -> "Adaptive · 1.5K"
+                                    AnswerMode.Quality -> "Quality · 2K"
+                                },
+                                accent = answerModeAccent(mode),
+                            )
+                        }
+                    }
                 }
             }
             Text(
-                "${selection.modeForNextResponse().description.uppercase()} · " +
-                    answerModeTokenBudget(selection.modeForNextResponse()),
+                if (compact) {
+                    "${selection.modeForNextResponse().label.uppercase()} · " +
+                        answerModeTokenBudget(selection.modeForNextResponse())
+                } else {
+                    "${selection.modeForNextResponse().description.uppercase()} · " +
+                        answerModeTokenBudget(selection.modeForNextResponse())
+                },
                 color = modeAccent,
                 fontFamily = FontFamily.Monospace,
-                fontSize = 10.sp,
+                fontSize = if (compact) 9.sp else 10.sp,
+                maxLines = if (compact) 1 else 2,
+                overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                "PER-CALL OUTPUT, NOT A DOCUMENT LIMIT · LONG WORK CONTINUES THROUGH FRESH " +
-                    "CONTROLLER CALLS AND MATRIX CHECKPOINTS",
-                color = MutedText,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 9.sp,
-            )
+            if (!compact) {
+                Text(
+                    "PER-CALL OUTPUT, NOT A DOCUMENT LIMIT · LONG WORK CONTINUES THROUGH FRESH " +
+                        "CONTROLLER CALLS AND MATRIX CHECKPOINTS",
+                    color = MutedText,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 9.sp,
+                )
+            }
             if (draft.startsWith("/") && !draft.contains('\n')) {
                 SlashCommandPalette(
                     query = draft.substringBefore(' '),
@@ -1656,7 +1719,7 @@ private fun Composer(
                     placeholder = { Text("Message Sovereign Core") },
                     singleLine = false,
                     minLines = 1,
-                    maxLines = ComposerMaxVisibleLines,
+                    maxLines = if (compact) 4 else ComposerMaxVisibleLines,
                     keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Default),
                     modifier = Modifier.weight(1f),
                 )
@@ -1684,13 +1747,16 @@ private fun Composer(
             }
             Text(
                 if (canSend || isGenerating) {
-                    "RETURN NEWLINE · VISIBLE SEND ONLY · 1–7 LINES"
+                    if (compact) "RETURN = NEW LINE · TAP SEND TO SUBMIT" else
+                        "RETURN NEWLINE · VISIBLE SEND ONLY · 1–7 LINES"
                 } else {
                     blockedMessage
                 },
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontFamily = FontFamily.Monospace,
-                fontSize = 11.sp,
+                fontSize = if (compact) 9.sp else 11.sp,
+                maxLines = if (compact) 1 else 2,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }
@@ -1702,19 +1768,27 @@ private fun FluorescentChip(
     onClick: () -> Unit,
     label: String,
     accent: Color,
+    compact: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     FilterChip(
         selected = selected,
         onClick = onClick,
-        label = { Text(label) },
+        label = {
+            Text(
+                label,
+                fontSize = if (compact) 9.sp else 14.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        },
         colors = FilterChipDefaults.filterChipColors(
             containerColor = Color.Transparent,
             labelColor = MutedText,
             selectedContainerColor = accent.copy(alpha = 0.18f),
             selectedLabelColor = accent,
         ),
-        modifier = modifier.heightIn(min = 48.dp),
+        modifier = modifier.heightIn(min = if (compact) 40.dp else 48.dp),
     )
 }
 
@@ -2139,13 +2213,13 @@ private fun WorkspaceSurface(
 
         if (state.rootUri != null) {
             Text(
-                "USER NEW FOLDER · AGENT CREATE/WRITE/MKDIR STAY APPROVAL-SCOPED · UI TRASH IS RECOVERABLE",
+                "CHAT WRITES REVIEW EACH · WORK SESSION USES ONE SCOPED GRANT · UI TRASH IS RECOVERABLE",
                 color = ResonanceMint,
                 fontSize = 11.sp,
                 fontFamily = FontFamily.Monospace,
             )
             Text(
-                "PATH · ${state.breadcrumb.ifBlank { state.rootLabel }}",
+                "PROJECT TREE · ${state.breadcrumb.ifBlank { state.rootLabel }}",
                 color = HorizonCyan,
                 fontSize = 10.sp,
                 fontFamily = FontFamily.Monospace,
@@ -2339,6 +2413,18 @@ private fun WorkSessionSurface(
     } else {
         missionMessages.size + if (streamVisible) 1 else 0
     }
+    val updateRootPath: (String) -> Unit = { next ->
+        val presetWasLoaded = isReservedStoryForgeBenchmarkRoot(rootPath) &&
+            objective.trim() == StoryForgeBenchmarkPremise
+        rootPath = next
+        if (presetWasLoaded && !isReservedStoryForgeBenchmarkRoot(next)) objective = ""
+    }
+    val updateObjective: (String) -> Unit = { next ->
+        val presetWasLoaded = isReservedStoryForgeBenchmarkRoot(rootPath) &&
+            objective.trim() == StoryForgeBenchmarkPremise
+        objective = next
+        if (presetWasLoaded && next.trim() != StoryForgeBenchmarkPremise) rootPath = ""
+    }
 
     AutoFollowTail(threadState, threadTail, cockpit.streamText.length / 128)
 
@@ -2356,8 +2442,8 @@ private fun WorkSessionSurface(
                     selectedMode = selectedMode,
                     cockpit = cockpit,
                     workspaceConnected = workspaceConnected,
-                    onRootPath = { rootPath = it },
-                    onObjective = { objective = it },
+                    onRootPath = updateRootPath,
+                    onObjective = updateObjective,
                     onGuidance = { guidance = it },
                     onMode = { modeName = it.name },
                     onLoadStoryBenchmark = {
@@ -2408,8 +2494,8 @@ private fun WorkSessionSurface(
                     selectedMode = selectedMode,
                     cockpit = cockpit,
                     workspaceConnected = workspaceConnected,
-                    onRootPath = { rootPath = it },
-                    onObjective = { objective = it },
+                    onRootPath = updateRootPath,
+                    onObjective = updateObjective,
                     onGuidance = { guidance = it },
                     onMode = { modeName = it.name },
                     onLoadStoryBenchmark = {
@@ -2487,6 +2573,7 @@ private fun WorkSessionControlPanel(
     }
     val benchmarkLoaded = rootPath.trim() == StoryForgeBenchmarkFolder &&
         objective.trim() == StoryForgeBenchmarkPremise
+    val reservedStoryRoot = isReservedStoryForgeBenchmarkRoot(rootPath)
 
     OutlinedCard(
         colors = CardDefaults.outlinedCardColors(containerColor = Color.Transparent),
@@ -2514,6 +2601,14 @@ private fun WorkSessionControlPanel(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (reservedStoryRoot && !benchmarkLoaded) {
+                    Text(
+                        "$StoryForgeBenchmarkFolder is reserved for the reviewed benchmark. " +
+                            "Choose another mission folder or reload the complete preset.",
+                        color = InterventionCoral,
+                        fontSize = 11.sp,
+                    )
+                }
                 OutlinedTextField(
                     value = objective,
                     onValueChange = onObjective,
@@ -2565,7 +2660,7 @@ private fun WorkSessionControlPanel(
                     Button(
                         onClick = onStart,
                         enabled = workspaceConnected && cockpit.canSend && rootPath.isNotBlank() &&
-                            objective.isNotBlank(),
+                            objective.isNotBlank() && !reservedStoryRoot,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = PulseMagenta,
                             contentColor = Obsidian,
@@ -2574,14 +2669,14 @@ private fun WorkSessionControlPanel(
                     ) {
                         Text(
                             if (cockpit.isGenerating) "REQUEST ACCEPTED…" else
-                                "START SCOPED BUILD / FILE RUN",
+                                "GRANT SCOPED AUTONOMY & START",
                             fontWeight = FontWeight.Bold,
                         )
                     }
                     OutlinedButton(
                         onClick = onStoryStart,
                         enabled = workspaceConnected && cockpit.canSend && rootPath.isNotBlank() &&
-                            objective.isNotBlank(),
+                            objective.isNotBlank() && !reservedStoryRoot,
                         border = BorderStroke(1.dp, HorizonCyan),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
@@ -2615,6 +2710,13 @@ private fun WorkSessionControlPanel(
                         )
                     }
                 }
+                Text(
+                    "ONE START TAP GRANTS CREATE / WRITE / MKDIR INSIDE THE MISSION FOLDER · " +
+                        "NO PER-FILE CLICKS · EXECUTION AND NETWORK STAY SEPARATE",
+                    color = ResonanceMint,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 9.sp,
+                )
                 Text(
                     "LONG FORM · CONTROLLER-CHUNKED · MATRIX-CHECKPOINTED · OUTPUT LIMIT APPLIES PER CALL",
                     color = SoftViolet,

@@ -36,7 +36,7 @@ resource-aware visual effects.
 | Inference | LiteRT-LM Android/Kotlin API behind a backend capability adapter |
 | Long work | Bound foreground service with visible lifecycle and cancellation |
 | Memory | Room/SQLite migration compatible with the existing schema or an audited export/import boundary |
-| Workspace | Storage Access Framework tree selected explicitly by the user |
+| Workspace | Storage Access Framework tree selected explicitly by the user; one bounded mission grant may autonomously create/write/mkdir inside one prepared subdirectory |
 | Idle work | WorkManager for bounded deferrable tasks; never an immortal hidden loop |
 | Credentials | Android Keystore-backed encrypted provider configuration |
 | Voice | Android audio APIs; Kokoro remains optional and capability-gated |

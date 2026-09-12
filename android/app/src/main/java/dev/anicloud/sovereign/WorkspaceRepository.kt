@@ -53,6 +53,30 @@ data class WorkspaceActionResult(
     val afterSha256: String? = null,
 )
 
+data class WorkspaceActionReconciliation(
+    val proposal: WorkspaceActionProposal,
+    val detail: String = "",
+)
+
+/**
+ * A scoped mission has already granted write authority. If the model asks to replace a target
+ * that Android has verified does not exist, creation is the lossless, non-destructive repair.
+ * Creation is never upgraded to replacement because that could overwrite existing user data.
+ */
+fun reconcileScopedWorkspaceAction(
+    proposal: WorkspaceActionProposal,
+    targetExists: Boolean,
+): WorkspaceActionReconciliation = if (
+    proposal.kind == WorkspaceActionKind.WriteFile && !targetExists
+) {
+    WorkspaceActionReconciliation(
+        proposal = proposal.copy(kind = WorkspaceActionKind.CreateFile),
+        detail = "Android verified the target was absent and reconciled write_file to create_file.",
+    )
+} else {
+    WorkspaceActionReconciliation(proposal)
+}
+
 /** A persisted Storage Access Framework tree is the complete authority boundary. */
 class WorkspaceRepository(private val context: Context) {
     private val preferences = context.getSharedPreferences(WorkspacePreferences, Context.MODE_PRIVATE)
@@ -99,6 +123,54 @@ class WorkspaceRepository(private val context: Context) {
 
     suspend fun writeText(entry: WorkspaceEntry, text: String): WorkspaceSnapshot =
         withContext(Dispatchers.IO) { writeTextNow(entry, text) }
+
+    /** Prepares the exact directory covered by one Work Session grant before inference begins. */
+    suspend fun prepareWorkspaceMission(rawRootPath: String): WorkspaceActionResult =
+        withContext(Dispatchers.IO) {
+            val root = storedRoot() ?: error("Connect a Workspace project before starting a Work Session.")
+            val rootPath = normalizeWorkspacePath(rawRootPath)
+            var currentPath = ""
+            var createdCount = 0
+            rootPath.split('/').forEach { segment ->
+                currentPath = listOf(currentPath, segment).filter(String::isNotBlank).joinToString("/")
+                val existing = resolveEntry(root, currentPath)
+                if (existing == null) {
+                    createDirectory(root, currentPath)
+                    val created = resolveEntry(root, currentPath)
+                        ?: error("The document provider did not expose the new mission folder $currentPath.")
+                    check(created.isDirectory) {
+                        "The document provider did not persist $currentPath as a directory."
+                    }
+                    createdCount++
+                } else {
+                    require(existing.isDirectory) {
+                        "Work Session root crosses a file at $currentPath. Choose a different mission folder."
+                    }
+                }
+            }
+            WorkspaceActionResult(
+                detail = if (createdCount == 0) {
+                    "Verified existing Work Session root $rootPath."
+                } else {
+                    "Created and verified Work Session root $rootPath ($createdCount directories)."
+                },
+            )
+        }
+
+    /** Resolves only the safe missing-write ambiguity inside an already active mission grant. */
+    suspend fun reconcileMissionAction(
+        proposal: WorkspaceActionProposal,
+    ): WorkspaceActionReconciliation = withContext(Dispatchers.IO) {
+        if (proposal.kind != WorkspaceActionKind.WriteFile) {
+            return@withContext WorkspaceActionReconciliation(proposal)
+        }
+        val root = storedRoot() ?: error("No workspace is connected.")
+        val path = normalizeWorkspacePath(proposal.path)
+        reconcileScopedWorkspaceAction(
+            proposal = proposal.copy(path = path),
+            targetExists = resolveEntry(root, path) != null,
+        )
+    }
 
     /** Explicit user creation inside the folder currently open in Workspace Lens. */
     suspend fun createUserDirectory(

@@ -242,6 +242,28 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                         generationJob = null
                         return@launch
                     }
+                    val prepared = runCatching {
+                        workspaceRepository.prepareWorkspaceMission(started.rootPath)
+                    }.getOrElse { failure ->
+                        withContext(Dispatchers.IO) {
+                            memoryMatrix.setAgentMissionStatus(
+                                AgentMissionStatus.Failed,
+                                "Work Session setup failed safely: ${safeFailure(failure)}",
+                            )
+                        }
+                        completeControllerResponse(
+                            "[BLOCKED] Work Session setup stopped safely: ${safeFailure(failure)}",
+                        )
+                        generationJob = null
+                        return@launch
+                    }
+                    withContext(Dispatchers.IO) {
+                        memoryMatrix.recordProjectEvent(
+                            "prepare_workspace_mission",
+                            started.rootPath,
+                            prepared,
+                        )
+                    }
                     mission = started
                     effectivePrompt = started.objective
                     effectiveMode = started.mode
@@ -325,6 +347,29 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                             memoryMatrix.recordProjectEvent(
                                 "recover_story_forge",
                                 "${resumed.rootPath}/story.md",
+                                preparation,
+                            )
+                        }
+                    } else {
+                        val preparation = runCatching {
+                            workspaceRepository.prepareWorkspaceMission(resumed.rootPath)
+                        }.getOrElse { failure ->
+                            withContext(Dispatchers.IO) {
+                                memoryMatrix.setAgentMissionStatus(
+                                    AgentMissionStatus.Paused,
+                                    "Work Session recovery stopped safely: ${safeFailure(failure)}",
+                                )
+                            }
+                            completeControllerResponse(
+                                "[BLOCKED] Work Session recovery stopped safely: ${safeFailure(failure)}",
+                            )
+                            generationJob = null
+                            return@launch
+                        }
+                        withContext(Dispatchers.IO) {
+                            memoryMatrix.recordProjectEvent(
+                                "recover_workspace_mission",
+                                resumed.rootPath,
                                 preparation,
                             )
                         }
@@ -768,8 +813,8 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                                 appendLine("Paths without the mission-root prefix are interpreted relative to that root.")
                                 if (continuingMission.completedActions == 0) {
                                     appendLine(
-                                        "If this is a new mission folder, the next action must be " +
-                                            "create_directory for ${continuingMission.rootPath}.",
+                                        "Android already prepared and verified the mission root. " +
+                                            "Target the first artifact inside it; do not recreate the root.",
                                     )
                                 }
                                 appendLine("If work is actually complete, return [MISSION_COMPLETE]. If human input is essential, return [BLOCKED].")
@@ -809,11 +854,17 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
 
                     consecutiveMissionNoAction = 0
                     val normalizedProposal = normalizeProposal(proposed)
-                    val normalized = mission?.let {
+                    val scoped = mission?.let {
                         normalizedProposal.copy(
                             path = scopeWorkspaceMissionPath(normalizedProposal.path, it.rootPath),
                         )
                     } ?: normalizedProposal
+                    val reconciliation = if (mission != null) {
+                        workspaceRepository.reconcileMissionAction(scoped)
+                    } else {
+                        WorkspaceActionReconciliation(scoped)
+                    }
+                    val normalized = reconciliation.proposal
                     val signature = "${normalized.kind.wireName}:${normalized.path}:${normalized.content.hashCode()}"
                     if (signature == previousActionSignature) {
                         throw QuarantinedGeneration(
@@ -848,6 +899,10 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                         } else {
                             workspaceRepository.executeReadOnly(normalized)
                         }
+                    }.map { result ->
+                        if (reconciliation.detail.isBlank()) result else result.copy(
+                            detail = "${reconciliation.detail} ${result.detail}",
+                        )
                     }
                     toolResult.onSuccess { result ->
                         withContext(Dispatchers.IO) {
@@ -1546,6 +1601,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             appendLine("[CONTROLLER-OWNED ACTIVE WORK SESSION]")
             appendLine("Mission ${mission.id} · status ${mission.status.name.lowercase()} · route ${cockpit.routeLabel}")
             appendLine("Authorized root: ${mission.rootPath}")
+            appendLine("Authorized root state: Android prepared and verified this directory before inference.")
             appendLine("Progress: ${mission.completedActions}/${mission.maxActions} actions · " +
                 "${mission.writtenBytes}/${mission.maxWriteBytes} write bytes")
             appendLine("Durable objective:")

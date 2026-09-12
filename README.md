@@ -23,7 +23,7 @@ This repository is a developer preview with a functional native Android dogfood 
 <p align="center">
   <img alt="Sovereign Core: local and verified" src="https://img.shields.io/badge/Sovereign%20Core-local%20%2B%20verified-25F4FF">
   <img alt="AniCloudAI: native Kotlin and Compose" src="https://img.shields.io/badge/AniCloudAI-Kotlin%20%2B%20Compose-A855FF">
-  <img alt="Native candidate: 0.8.10 workspace write integrity" src="https://img.shields.io/badge/luxury%20candidate-0.8.10%20workspace%20write%20integrity-A855FF">
+  <img alt="Native candidate: 0.8.11 scoped autonomy" src="https://img.shields.io/badge/luxury%20candidate-0.8.11%20scoped%20autonomy-A855FF">
   <img alt="Tensor frontier: fingerprint locked NPU" src="https://img.shields.io/badge/Tensor%20frontier-fingerprint--locked%20NPU-FF2BD6">
 </p>
 
@@ -66,14 +66,14 @@ magenta marks **technology actively extending the boundary**.
 
 | Boundary | Current evidence |
 |---|---|
-| **Candidate** | `0.8.10-workspace-write-integrity` (`versionCode 21`, source candidate pending CI/device proof) |
+| **Candidate** | `0.8.11-scoped-autonomy` (`versionCode 22`, source candidate pending CI/device proof) |
 | **Build path** | Android API 36, JDK 17, Gradle 9.4.1, Kotlin/Compose, arm64-v8a |
 | **Inference** | Native LiteRT-LM 0.17.0 candidate; proven E4B GPU path with measured CPU fallback; E2B/NPU remains device-gated |
 | **Fast route** | Exact-fingerprint E2B Tensor G5 package; NPU-only and never silently redirected to GPU |
-| **Evidence** | 131 deterministic public checks plus Android unit tests, assembly, signing, and artifact retention in CI |
+| **Evidence** | 132 deterministic public checks plus Android unit tests, assembly, signing, and artifact retention in CI |
 | **Signing** | Persistent dogfood identity, allowing an in-place update that preserves private app data |
 | **Reference hardware** | Pixel 10 Pro, Tensor G5, Android 17; other devices remain unverified candidates |
-| **Acceptance state** | Signed 0.8.9 passed CI and is installed on the reference device. Four explicitly labelled continuity facts were captured and recalled in visible prose. The first workspace flight then exposed a silently inert approval race, a zero-byte “success,” and mission-root alias drift; 0.8.10 makes those states explicit and byte-verifiable. CI and exact-device workspace acceptance remain required |
+| **Acceptance state** | Signed 0.8.10 passed CI and is installed on the reference device. Its first scoped write flight rejected a missing target instead of claiming success, preserved the complete audit trail, and stopped a recursive loop. That flight also exposed stale Story Forge preset reuse and `write_file`-before-create drift; 0.8.11 moves those environment decisions into Android. CI and exact-device write success remain required |
 
 ### One Core, six connected native surfaces
 
@@ -128,7 +128,7 @@ magenta marks **technology actively extending the boundary**.
 
 #### Twenty policies, one bounded context controller
 
-The `0.8.10-workspace-write-integrity` candidate builds on the 0.8.9 continuity recovery, replacing growing native conversation
+The `0.8.11-scoped-autonomy` candidate builds on the 0.8.10 write-integrity boundary, replacing growing native conversation
 state with a fresh, lane-specific context pack for every controller cycle. It
 reserves system, output, and safety capacity; protects the newest request;
 selects recent turns and Matrix memories; reconstructs mission checkpoints;
@@ -154,13 +154,17 @@ two-day sequence, and design-partner release gates are documented in
 Long Forge turns Workspace Lens into more than a file viewer. The user provides
 one complete objective and one exact subdirectory. That starts a durable work
 session with up to **120 controller actions** and **1 MiB of generated write
-content**. The model may propose one action at a time; Android validates and
-executes only what the active grant permits.
+content**. The single start tap is the file-operation approval for that exact
+scope; Android prepares the directory, then validates and executes one model
+proposal at a time without another click per file.
 
 - `list_files` and `read_file` may run automatically inside the connected tree.
 - `create_directory`, `create_file`, and `write_file` are allowed autonomously
   only inside the explicitly started Long Forge scope; ordinary Chat still sends
   them to Agents for approval.
+- If the model proposes `write_file` for a target Android has verified is absent,
+  the scoped controller safely reconciles it to `create_file`. The inverse is
+  never automatic, so a create request cannot become an overwrite.
 - Replacing a file creates a private pre-write snapshot. Generated deletion stays
   disabled; a human can separately review and confirm a recoverable move into
   project-local `.anicloud-trash`, then undo it.
@@ -262,7 +266,7 @@ Long Forge's file-write grant never implies command authority.
 
 ### What remains before a native public preview
 
-- Complete the 0.8.10 device acceptance pass: immediate latest-message reveal,
+- Complete the 0.8.11 device acceptance pass: immediate latest-message reveal,
   multi-turn recall, transcript persistence across window changes and process
   restart, one-click Long Forge continuation, mission-relative writes, and
   snapshot recovery.
@@ -363,15 +367,17 @@ the deterministic controller routes ordinary conversation through it and uses a
 bounded E2B intent/memory handoff before difficult E4B turns. The engine closes
 one profile before loading the other; this is not a simultaneous two-model RAM load.
 
-The native Android `0.8.10-workspace-write-integrity` source candidate keeps a bounded recent
+The native Android `0.8.11-scoped-autonomy` source candidate keeps a bounded recent
 transcript in every ordinary turn, reloads the full committed session after each
 message, opens restored Chat and Work Session transcripts at their true tail,
 provides a centered `↓` latest-message escape hatch, embeds the reviewed 120-chapter Story
 Forge prompt as a non-starting preset, continues narration-only Work Sessions
 without another click, and treats their unprefixed controller paths as relative
 to the granted mission root. It also
-hardens Termux component discovery and the fingerprint-locked E2B route. It must
-still pass CI and exact-device dogfood before replacing signed 0.8.9 as the build baseline.
+hardens Termux component discovery and the fingerprint-locked E2B route. It also prepares
+mission roots deterministically and grants create/write/mkdir autonomy inside that exact folder
+after one explicit start tap. It must still pass CI and exact-device dogfood before replacing
+signed 0.8.10 as the build baseline.
 It has separate import slots:
 
 - **E2B conversation + Memory Matrix:** only the reviewed
@@ -574,7 +580,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request.
 
 ## Project status
 
-`1.4.1-alpha.1` is the first sanitized public-source candidate derived from the private Trust + Speed v1.4.1 reference build. The established Termux cockpit remains the public alpha baseline. The Kotlin/Compose path has advanced from feasibility into the signed AniCloudAI dogfood described above; it is not yet a stable native release. The next milestone is evidence, not spectacle: complete 0.8.10 CI and device acceptance, publish reproducible E2B/E4B and optional Termux-plugin results, broaden the device matrix, and convert the private signed-artifact flow into a reviewable native preview. Follow [the roadmap](docs/ROADMAP.md), [native Android module](android/README.md), and [native feasibility history](docs/NATIVE_ANDROID.md) for the boundary between shipped, experimental, and planned work.
+`1.4.1-alpha.1` is the first sanitized public-source candidate derived from the private Trust + Speed v1.4.1 reference build. The established Termux cockpit remains the public alpha baseline. The Kotlin/Compose path has advanced from feasibility into the signed AniCloudAI dogfood described above; it is not yet a stable native release. The next milestone is evidence, not spectacle: complete 0.8.11 CI and exact-device scoped-write acceptance, publish reproducible E2B/E4B and optional Termux-plugin results, broaden the device matrix, and convert the private signed-artifact flow into a reviewable native preview. Follow [the roadmap](docs/ROADMAP.md), [native Android module](android/README.md), and [native feasibility history](docs/NATIVE_ANDROID.md) for the boundary between shipped, experimental, and planned work.
 
 ## License
 

@@ -36,6 +36,11 @@ val StoryForgeBenchmarkPremise = """
     language, or claims about how much remains.
 """.trimIndent()
 
+/** The reviewed endurance fixture owns one exact top-level folder. */
+fun isReservedStoryForgeBenchmarkRoot(rawPath: String): Boolean = runCatching {
+    normalizeWorkspacePath(rawPath).equals(StoryForgeBenchmarkFolder, ignoreCase = true)
+}.getOrDefault(false)
+
 private const val MaximumStoryTitleCharacters = 120
 private const val MinimumStoryBodyCharacters = 240
 private const val MaximumStoryBodyCharacters = 8_000
