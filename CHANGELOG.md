@@ -8,6 +8,11 @@ may still change.
 
 ### Added
 
+- A non-starting Work Session preset for the reviewed 120-chapter Story Forge
+  endurance benchmark. One tap fills its disposable folder, complete continuity
+  premise, and Quality posture; a separate explicit press still launches the run.
+- A visible `↓ LATEST` transcript control in Chat and Work Session, with protected
+  bottom padding so it does not cover the latest response.
 - A truthful first-use flight card and full device acceptance journey that
   explain each Android prompt, distinguish required from optional grants, test
   denial/retry behavior, and lead from E4B chat through continuity, file
@@ -75,6 +80,9 @@ may still change.
 
 ### Fixed
 
+- Restored long transcripts now reveal their true bottom after SQLite content is
+  laid out instead of letting the initial first-item measurement disable tail
+  following. Live output follows only while the reader remains at the end.
 - Work Session now freezes an interrupted generation on screen as a clearly
   non-canonical draft and records mission-scoped STOP, integrity, and controller
   failure notices in the focused transcript instead of letting the stream appear

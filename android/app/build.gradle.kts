@@ -11,8 +11,8 @@ android {
         applicationId = "dev.anicloud.sovereign.prototype"
         minSdk = 31
         targetSdk = 36
-        versionCode = 17
-        versionName = "0.8.6-surgical-fluency"
+        versionCode = 18
+        versionName = "0.8.7-latest-thread-benchmark"
 
         buildConfigField("String", "TENSOR_DISPATCH_VERSION", "\"2.2.0\"")
         buildConfigField(

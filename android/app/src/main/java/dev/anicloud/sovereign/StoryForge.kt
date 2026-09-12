@@ -3,6 +3,38 @@ package dev.anicloud.sovereign.prototype
 const val StoryForgeMissionKind = "story_forge"
 const val WorkspaceMissionKind = "workspace"
 const val StoryForgeTargetChapters = 120
+const val StoryForgeBenchmarkFolder = "story-forge-orbit"
+
+val StoryForgeBenchmarkPremise = """
+    Write a cohesive atmospheric science-fantasy novel about Nia Sol, a maintenance apprentice in
+    the floating city of Vesper, and Lumen, an alien archive intelligence that wakes inside a
+    broken weather instrument. Begin when metallic rain makes forgotten memories audible across
+    the city. The city survives by trading carefully edited memories for energy, but the exchange
+    is slowly erasing its own founding disaster. Nia wants to recover the truth about her missing
+    mother; Lumen wants to understand whether preserving every memory can itself become a form of
+    harm.
+
+    Keep these world rules stable: Vesper hangs beneath three silent orbital rings; memory rain can
+    reveal an existing memory but cannot invent one; Lumen can communicate through light, sound,
+    and machines but cannot directly control a human body; using the archive at high intensity
+    permanently changes one sensory detail in the local environment; death is irreversible. Let
+    consequences accumulate.
+
+    Develop a patient relationship from suspicion to earned trust. Maintain a recurring brass moth,
+    a cracked blue compass, and the phrase “the sky keeps receipts,” allowing each to change meaning
+    through the story. Give supporting characters independent motives, especially engineer Mara
+    Venn, union courier Ivo, and civic archivist Saint Orra. Seed mysteries before resolving them,
+    preserve injuries and promises, vary quiet and kinetic scenes, and avoid recap-heavy openings.
+    Each installment should be a substantial scene with concrete action, sensory detail, conflict,
+    and a changed situation.
+
+    Build toward Nia discovering that her mother voluntarily became part of the weather archive to
+    prevent the city from repeating its founding catastrophe. The ending must force Nia and Lumen
+    to choose between perfect public recall and a limited, consent-based archive. Resolve the
+    central choice and emotional arc while leaving one honest sign that Vesper's wider world
+    continues. Do not use meta commentary, chapter numbers, benchmark language, controller
+    language, or claims about how much remains.
+""".trimIndent()
 
 private const val MaximumStoryTitleCharacters = 120
 private const val MinimumStoryBodyCharacters = 240

@@ -36,8 +36,9 @@ failure.
    committed chapters is intentionally rejected for a fresh benchmark.
 4. Keep the device on power with enough free storage. Do not enable the optional Termux plugin;
    Story Forge does not use a shell, dependency, network, or external API.
-5. Open **Workspace → WORK SESSION**, select **Quality**, and use the Story Forge button or paste the
-   command below.
+5. Open **Workspace → WORK SESSION**. In `0.8.7` or later, press
+   **LOAD 120-CHAPTER BENCHMARK**, review the populated folder, premise, and Quality mode, then press
+   **START 120-CHAPTER STORY FORGE**. On an older build, select **Quality** and paste the command below.
 
 ## Copy-ready benchmark command
 

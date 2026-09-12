@@ -9,7 +9,7 @@ continuity but never grants authority.
 
 ## 1. Long Forge workspace sessions — current build
 
-`0.8.6-surgical-fluency` separates ordinary Chat from long-running project work and
+`0.8.7-latest-thread-benchmark` separates ordinary Chat from long-running project work and
 adds non-destructive fresh/reopen conversation controls. A work session has a
 complete objective, one ASCII workspace root, a selected model posture, a durable Matrix
 checkpoint, and a visible foreground STOP path.
@@ -40,7 +40,10 @@ checkpoint, and a visible foreground STOP path.
 Primary endurance acceptance uses the
 [`120-chapter Story Forge benchmark`](ANICLOUDAI_120_CHAPTER_STORY_FORGE.md). Android owns every
 ordinal, single-file append, idempotency marker, checkpoint, and exact stop while the model writes
-only the next unnumbered scene. The separate
+only the next unnumbered scene. The reviewed folder, full premise, and Quality posture can be
+filled from the Work Session preset without launching; the user still starts the run explicitly.
+Restored Chat and Work Session transcripts initially reveal their true tail, expose a visible
+`↓ LATEST` return control, and stop auto-following after deliberate upward reader motion. The separate
 [`120-action Long Forge benchmark`](ANICLOUDAI_120_ACTION_FORGE_BENCHMARK.md) remains the adversarial
 multi-file engineering gate. Closing the process must convert an in-flight mission to Paused;
 explicit Resume must continue from verified state.

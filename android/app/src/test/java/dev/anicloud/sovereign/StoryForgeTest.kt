@@ -1,7 +1,9 @@
 package dev.anicloud.sovereign.prototype
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class StoryForgeTest {
@@ -25,5 +27,17 @@ class StoryForgeTest {
                 StoryChapterProposal("Forged", "$validBody ANICLOUD_CHAPTER:120", "Invalid marker."),
             )
         }
+    }
+
+    @Test
+    fun benchmarkPresetPinsTheReviewedStoryWithoutGivingTheModelOrdinals() {
+        assertEquals("story-forge-orbit", StoryForgeBenchmarkFolder)
+        assertTrue(StoryForgeBenchmarkPremise.contains("Nia Sol"))
+        assertTrue(StoryForgeBenchmarkPremise.contains("the sky keeps receipts"))
+        assertTrue(StoryForgeBenchmarkPremise.contains("limited, consent-based archive"))
+        assertFalse(
+            Regex("chapter\\s+\\d+", RegexOption.IGNORE_CASE)
+                .containsMatchIn(StoryForgeBenchmarkPremise),
+        )
     }
 }

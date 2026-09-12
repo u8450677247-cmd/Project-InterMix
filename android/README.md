@@ -2,7 +2,7 @@
 
 This module is the private Pixel 10 Pro reference cockpit for Project Intermix.
 The original disconnected shell has passed its first device test. The current
-`0.8.6-surgical-fluency` source candidate combines the stable E4B boundary with
+`0.8.7-latest-thread-benchmark` source candidate combines the stable E4B boundary with
 the native Memory Matrix, controller-mediated project workspace, and the first
 checkpointed long-form work-session loop. Its cyan–magenta–violet spectral
 glass pass concentrates fluorescence on focus, mode, code, and mission progress
@@ -30,6 +30,9 @@ while preserving neutral long-form reading surfaces.
   and the SAF workspace grant;
 - roughly 1K-token recent-session context rehydration before every model turn, including
   ordinary chat that does not use explicit continuity wording;
+- deterministic first reveal at the true end of restored Chat and Work Session
+  transcripts, plus a visible `↓ LATEST` return control that does not steal position
+  after the reader deliberately scrolls upward;
 - a versioned Interaction Profile Matrix with explicit-evidence adaptation,
   undo, and deterministic General/Continuity/Project context selection;
 - a persisted Storage Access Framework project tree with automatic list/read
@@ -46,6 +49,8 @@ while preserving neutral long-form reading surfaces.
   Memory Matrix learning;
 - a Story Forge lane that appends one unnumbered model installment at a time
   into a crash-idempotent, controller-numbered 120-chapter `story.md`;
+- a non-starting `LOAD 120-CHAPTER BENCHMARK` preset that fills the reviewed
+  folder, full continuity premise, and Quality mode before a separately explicit launch;
 - a decimal128 Numeric Matrix that computes arithmetic outside the language model
   and stores expression/result/engine provenance;
 - an optional developer-plugin Termux RUN_COMMAND bridge for typed inspect/run/test/build and

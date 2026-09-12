@@ -25,8 +25,8 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("compileSdk = 36", app_build)
         self.assertIn("targetSdk = 36", app_build)
         self.assertIn("minSdk = 31", app_build)
-        self.assertIn("versionCode = 17", app_build)
-        self.assertIn('versionName = "0.8.6-surgical-fluency"', app_build)
+        self.assertIn("versionCode = 18", app_build)
+        self.assertIn('versionName = "0.8.7-latest-thread-benchmark"', app_build)
         self.assertIn("jniLibs.useLegacyPackaging = true", app_build)
         self.assertIn("compose-bom:2026.03.01", app_build)
         self.assertIn('abiFilters += "arm64-v8a"', app_build)
@@ -418,6 +418,18 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn('it.source.startsWith("mission")', ui)
         self.assertNotIn('it.speaker != ChatSpeaker.User', ui)
         self.assertIn("AutoFollowTail", ui)
+
+    def test_restored_transcripts_reveal_the_true_tail_and_keep_an_escape_hatch(self):
+        ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
+        self.assertIn("initialRevealPending", ui)
+        self.assertIn("first { it > tailIndex }", ui)
+        self.assertIn("listState.isScrollInProgress to !listState.canScrollForward", ui)
+        self.assertIn("listState.scrollToItem(tailIndex)", ui)
+        self.assertIn('item(key = "chat-transcript-tail")', ui)
+        self.assertIn('item(key = "work-session-transcript-tail")', ui)
+        self.assertGreaterEqual(ui.count("LatestTranscriptButton("), 3)
+        self.assertIn('Text("↓ LATEST"', ui)
+        self.assertIn("bottom = 72.dp", ui)
 
     def test_workspace_has_up_copy_and_recoverable_user_trash(self):
         repository = (SOURCE / "WorkspaceRepository.kt").read_text(encoding="utf-8")

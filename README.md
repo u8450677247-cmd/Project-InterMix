@@ -23,7 +23,7 @@ This repository is a developer preview with a functional native Android dogfood 
 <p align="center">
   <img alt="Sovereign Core: local and verified" src="https://img.shields.io/badge/Sovereign%20Core-local%20%2B%20verified-25F4FF">
   <img alt="AniCloudAI: native Kotlin and Compose" src="https://img.shields.io/badge/AniCloudAI-Kotlin%20%2B%20Compose-A855FF">
-  <img alt="Native dogfood: 0.8.5 ship hardening" src="https://img.shields.io/badge/luxury%20dogfood-0.8.5%20ship%20hardening-A855FF">
+  <img alt="Native candidate: 0.8.7 latest thread benchmark" src="https://img.shields.io/badge/luxury%20candidate-0.8.7%20latest%20thread-A855FF">
   <img alt="Tensor frontier: fingerprint locked NPU" src="https://img.shields.io/badge/Tensor%20frontier-fingerprint--locked%20NPU-FF2BD6">
 </p>
 
@@ -66,14 +66,14 @@ magenta marks **technology actively extending the boundary**.
 
 | Boundary | Current evidence |
 |---|---|
-| **Candidate** | `0.8.6-surgical-fluency` (`versionCode 17`, source candidate pending CI/device proof) |
+| **Candidate** | `0.8.7-latest-thread-benchmark` (`versionCode 18`, source candidate pending CI/device proof) |
 | **Build path** | Android API 36, JDK 17, Gradle 9.4.1, Kotlin/Compose, arm64-v8a |
 | **Inference** | Native LiteRT-LM 0.17.0 candidate; proven E4B GPU path with measured CPU fallback; E2B/NPU remains device-gated |
 | **Fast route** | Exact-fingerprint E2B Tensor G5 package; NPU-only and never silently redirected to GPU |
-| **Evidence** | 125 deterministic public checks plus Android unit tests, assembly, signing, and artifact retention in CI |
+| **Evidence** | 127 deterministic public checks plus Android unit tests, assembly, signing, and artifact retention in CI |
 | **Signing** | Persistent dogfood identity, allowing an in-place update that preserves private app data |
 | **Reference hardware** | Pixel 10 Pro, Tensor G5, Android 17; other devices remain unverified candidates |
-| **Acceptance state** | Signed 0.8.5 is the proven build baseline. The 0.8.6 Story Forge, Numeric Matrix, recent-context reservation, folder creation, optional-Termux framing, and 0.17.0/2.2.0 runtime lane await CI and full device acceptance |
+| **Acceptance state** | Signed 0.8.6 is installed on the reference device and proves the new surfaces can launch, including E2B eligibility reporting. The 0.8.7 transcript-tail correction and embedded Story Forge preset still require CI and exact-device acceptance |
 
 ### One Core, six connected native surfaces
 
@@ -220,8 +220,8 @@ Long Forge's file-write grant never implies command authority.
 |---|---|---|
 | Native E4B chat, streaming, STOP, GPU/CPU reporting | **Device-proven** | Pixel 10 Pro reference path only |
 | Responsive phone, free-form, split-screen, and desktop cockpit | **Device-proven** | Polish and accessibility work continue |
-| SQLite sessions, Matrix, profile, append-only transcript, and bounded recent-turn continuity | **Compiled in 0.8.5** | Corrective device acceptance is the next gate |
-| SAF workspace, editor, Up/back navigation, copy, recoverable trash, approval queue, and snapshots | **Compiled in 0.8.5** | Device acceptance remains active work |
+| SQLite sessions, Matrix, profile, append-only transcript, bounded recent-turn continuity, and latest-first reopening | **Compiled in 0.8.7** | Verify immediate tail reveal with a 190+ message session and process restart |
+| SAF workspace, editor, Up/back navigation, copy, recoverable trash, approval queue, and snapshots | **Device-observed in 0.8.6** | Destructive recovery and compact-layout acceptance remain active work |
 | Long Forge 120-action work sessions | **Implemented** | Must complete the adversarial multi-file benchmark without repetitive manual resume |
 | E2B Tensor G5 NPU routing | **Fingerprint-locked / implemented** | Requires clean device proof of dispatcher discovery, NPU initialization, route switching, and recovery |
 | Termux scripts, tests, builds, and dependencies | **Implemented** | Requires end-to-end permission, execution, STOP, and result-return dogfood proof |
@@ -233,9 +233,10 @@ Long Forge's file-write grant never implies command authority.
 
 ### What remains before a native public preview
 
-- Complete the 0.8.6 device acceptance pass: multi-turn recall, transcript
-  persistence across window changes and process restart, one-click Long Forge
-  continuation, mission-relative writes, and snapshot recovery.
+- Complete the 0.8.7 device acceptance pass: immediate latest-message reveal,
+  multi-turn recall, transcript persistence across window changes and process
+  restart, one-click Long Forge continuation, mission-relative writes, and
+  snapshot recovery.
 - Prove E2B on the Pixel 10 Pro NPU with the exact reviewed fingerprint; record
   initialization time, first-token latency, sustained generation rate, route-swap
   time, memory before/after both engines, thermal behavior, and E4B recovery.
@@ -297,7 +298,7 @@ The detailed contracts live in [the native Android module](android/README.md),
 | Cold/idle available memory | Approximately 7.0–7.6 GiB in the owner's test environment |
 | Resident-hot available memory | Approximately 2.6–3.7 GiB in the owner's test environment |
 | Cooling used during long tests | Optional Black Shark Magnetic/FunCooler 6 Pro (BR62); approximately 25 °C owner-observed device temperature |
-| Test suite | 125 deterministic public-alpha checks across memory, routing, grounding, cancellation, stream integrity, inference, workspace, release safety, benchmark integrity, and interface behavior |
+| Test suite | 127 deterministic public-alpha checks across memory, routing, grounding, cancellation, stream integrity, inference, workspace, release safety, benchmark integrity, and interface behavior |
 
 These are observations, not guarantees. Android memory pressure, other applications, firmware, drivers, ambient temperature, model build, and compiled caches can materially change the result.
 
@@ -333,12 +334,15 @@ the deterministic controller routes ordinary conversation through it and uses a
 bounded E2B intent/memory handoff before difficult E4B turns. The engine closes
 one profile before loading the other; this is not a simultaneous two-model RAM load.
 
-The native Android `0.8.6-surgical-fluency` source candidate keeps a bounded recent
+The native Android `0.8.7-latest-thread-benchmark` source candidate keeps a bounded recent
 transcript in every ordinary turn, reloads the full committed session after each
-message, continues narration-only Work Sessions without another click, and treats
-their unprefixed controller paths as relative to the granted mission root. It also
+message, opens restored Chat and Work Session transcripts at their true tail,
+provides a visible `↓ LATEST` escape hatch, embeds the reviewed 120-chapter Story
+Forge prompt as a non-starting preset, continues narration-only Work Sessions
+without another click, and treats their unprefixed controller paths as relative
+to the granted mission root. It also
 hardens Termux component discovery and the fingerprint-locked E2B route. It must
-still pass CI and exact-device dogfood before replacing signed 0.8.5 as the build baseline.
+still pass CI and exact-device dogfood before replacing signed 0.8.6 as the build baseline.
 It has separate import slots:
 
 - **E2B conversation + Memory Matrix:** only the reviewed
@@ -541,7 +545,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request.
 
 ## Project status
 
-`1.4.1-alpha.1` is the first sanitized public-source candidate derived from the private Trust + Speed v1.4.1 reference build. The established Termux cockpit remains the public alpha baseline. The Kotlin/Compose path has advanced from feasibility into the signed AniCloudAI dogfood described above; it is not yet a stable native release. The next milestone is evidence, not spectacle: complete 0.8.6 CI and device acceptance, publish reproducible E2B/E4B and optional Termux-plugin results, broaden the device matrix, and convert the private signed-artifact flow into a reviewable native preview. Follow [the roadmap](docs/ROADMAP.md), [native Android module](android/README.md), and [native feasibility history](docs/NATIVE_ANDROID.md) for the boundary between shipped, experimental, and planned work.
+`1.4.1-alpha.1` is the first sanitized public-source candidate derived from the private Trust + Speed v1.4.1 reference build. The established Termux cockpit remains the public alpha baseline. The Kotlin/Compose path has advanced from feasibility into the signed AniCloudAI dogfood described above; it is not yet a stable native release. The next milestone is evidence, not spectacle: complete 0.8.7 CI and device acceptance, publish reproducible E2B/E4B and optional Termux-plugin results, broaden the device matrix, and convert the private signed-artifact flow into a reviewable native preview. Follow [the roadmap](docs/ROADMAP.md), [native Android module](android/README.md), and [native feasibility history](docs/NATIVE_ANDROID.md) for the boundary between shipped, experimental, and planned work.
 
 ## License
 

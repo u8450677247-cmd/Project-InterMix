@@ -66,6 +66,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
@@ -116,6 +117,8 @@ import dev.anicloud.sovereign.prototype.PendingWorkspaceAction
 import dev.anicloud.sovereign.prototype.PendingExecutionAction
 import dev.anicloud.sovereign.prototype.RuntimePhase
 import dev.anicloud.sovereign.prototype.SovereignViewModel
+import dev.anicloud.sovereign.prototype.StoryForgeBenchmarkFolder
+import dev.anicloud.sovereign.prototype.StoryForgeBenchmarkPremise
 import dev.anicloud.sovereign.prototype.StoryForgeMissionKind
 import dev.anicloud.sovereign.prototype.TermuxRunCommandPermission
 import dev.anicloud.sovereign.prototype.WorkspaceEntry
@@ -126,6 +129,8 @@ import dev.anicloud.sovereign.prototype.resolveFoundationLayout
 import dev.anicloud.sovereign.prototype.thermalStatusLabel
 import java.util.Locale
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 private data class CockpitActions(
     val onImportConversationModel: () -> Unit,
@@ -1354,7 +1359,7 @@ private fun ChatSurface(
     val threadState = rememberLazyListState()
     val leadingItems = if (cockpit.model == null || cockpit.stage == ModelStage.Error) 1 else 0
     val tailIndex = leadingItems + cockpit.messages.size +
-        (if (cockpit.streamText.isNotBlank()) 1 else 0) - 1
+        (if (cockpit.streamText.isNotBlank()) 1 else 0)
 
     AutoFollowTail(threadState, tailIndex, cockpit.streamText.length / 128)
 
@@ -1364,19 +1369,32 @@ private fun ChatSurface(
             detail = cockpit.detail,
             active = cockpit.isGenerating,
         )
-        LazyColumn(
-            state = threadState,
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.weight(1f),
-        ) {
-            if (cockpit.model == null || cockpit.stage == ModelStage.Error) {
-                item { ModelControlCard(cockpit = cockpit, actions = cockpitActions) }
+        Box(Modifier.weight(1f)) {
+            LazyColumn(
+                state = threadState,
+                contentPadding = PaddingValues(
+                    start = 16.dp,
+                    top = 12.dp,
+                    end = 16.dp,
+                    bottom = 72.dp,
+                ),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                if (cockpit.model == null || cockpit.stage == ModelStage.Error) {
+                    item { ModelControlCard(cockpit = cockpit, actions = cockpitActions) }
+                }
+                items(cockpit.messages, key = { it.id }) { message -> MessageBlock(message) }
+                if (cockpit.streamText.isNotBlank()) {
+                    item { StreamingBlock(cockpit.streamText, active = cockpit.isGenerating) }
+                }
+                item(key = "chat-transcript-tail") { Spacer(Modifier.height(1.dp)) }
             }
-            items(cockpit.messages, key = { it.id }) { message -> MessageBlock(message) }
-            if (cockpit.streamText.isNotBlank()) {
-                item { StreamingBlock(cockpit.streamText, active = cockpit.isGenerating) }
-            }
+            LatestTranscriptButton(
+                listState = threadState,
+                tailIndex = tailIndex,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(18.dp),
+            )
         }
         Composer(
             draft = draft,
@@ -1417,16 +1435,52 @@ private fun AutoFollowTail(
     tailIndex: Int,
     streamRevision: Int,
 ) {
+    var initialRevealPending by remember(listState) { mutableStateOf(true) }
     var followTail by remember(listState) { mutableStateOf(true) }
-    LaunchedEffect(listState) {
-        snapshotFlow {
-            val layout = listState.layoutInfo
-            val lastVisible = layout.visibleItemsInfo.lastOrNull()?.index ?: -1
-            layout.totalItemsCount == 0 || lastVisible >= layout.totalItemsCount - 2
-        }.collect { nearTail -> followTail = nearTail }
+
+    LaunchedEffect(listState, tailIndex) {
+        if (initialRevealPending && tailIndex >= 0) {
+            snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > tailIndex }
+            listState.scrollToItem(tailIndex)
+            initialRevealPending = false
+            followTail = true
+        }
     }
-    LaunchedEffect(tailIndex, streamRevision) {
-        if (followTail && tailIndex >= 0) listState.scrollToItem(tailIndex)
+    LaunchedEffect(listState, initialRevealPending) {
+        if (initialRevealPending) return@LaunchedEffect
+        snapshotFlow {
+            listState.isScrollInProgress to !listState.canScrollForward
+        }.collect { (scrolling, atEnd) ->
+            if (scrolling) followTail = atEnd
+            else if (atEnd) followTail = true
+        }
+    }
+    LaunchedEffect(tailIndex, streamRevision, initialRevealPending) {
+        if (!initialRevealPending && followTail && tailIndex >= 0) {
+            listState.scrollToItem(tailIndex)
+        }
+    }
+}
+
+@Composable
+private fun LatestTranscriptButton(
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    tailIndex: Int,
+    modifier: Modifier = Modifier,
+) {
+    val scope = rememberCoroutineScope()
+    if (tailIndex >= 0 && listState.canScrollForward) {
+        OutlinedButton(
+            onClick = {
+                scope.launch {
+                    listState.scrollToItem(tailIndex)
+                }
+            },
+            border = BorderStroke(1.dp, HorizonCyan),
+            modifier = modifier,
+        ) {
+            Text("↓ LATEST", color = HorizonCyan, fontWeight = FontWeight.Bold)
+        }
     }
 }
 
@@ -2167,9 +2221,13 @@ private fun WorkSessionSurface(
     }
     val threadState = rememberLazyListState()
     val streamVisible = mission?.active == true && cockpit.streamText.isNotBlank()
-    val threadTail = missionMessages.size + if (streamVisible) 1 else 0
+    val threadTail = if (missionMessages.isEmpty() && !streamVisible) {
+        -1
+    } else {
+        missionMessages.size + if (streamVisible) 1 else 0
+    }
 
-    AutoFollowTail(threadState, threadTail - 1, cockpit.streamText.length / 128)
+    AutoFollowTail(threadState, threadTail, cockpit.streamText.length / 128)
 
     BoxWithConstraints(modifier.fillMaxSize()) {
         val wide = maxWidth >= 900.dp
@@ -2189,6 +2247,11 @@ private fun WorkSessionSurface(
                     onObjective = { objective = it },
                     onGuidance = { guidance = it },
                     onMode = { modeName = it.name },
+                    onLoadStoryBenchmark = {
+                        rootPath = StoryForgeBenchmarkFolder
+                        objective = StoryForgeBenchmarkPremise
+                        modeName = AnswerMode.Quality.name
+                    },
                     onStart = {
                         actions.onSend(
                             "/mission run ${rootPath.trim()} :: ${objective.trim()}",
@@ -2236,6 +2299,11 @@ private fun WorkSessionSurface(
                     onObjective = { objective = it },
                     onGuidance = { guidance = it },
                     onMode = { modeName = it.name },
+                    onLoadStoryBenchmark = {
+                        rootPath = StoryForgeBenchmarkFolder
+                        objective = StoryForgeBenchmarkPremise
+                        modeName = AnswerMode.Quality.name
+                    },
                     onStart = {
                         actions.onSend(
                             "/mission run ${rootPath.trim()} :: ${objective.trim()}",
@@ -2287,6 +2355,7 @@ private fun WorkSessionControlPanel(
     onObjective: (String) -> Unit,
     onGuidance: (String) -> Unit,
     onMode: (AnswerMode) -> Unit,
+    onLoadStoryBenchmark: () -> Unit,
     onStart: () -> Unit,
     onStoryStart: () -> Unit,
     onGuide: () -> Unit,
@@ -2358,6 +2427,23 @@ private fun WorkSessionControlPanel(
                         MaterialTheme.colorScheme.onSurfaceVariant
                     },
                     fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                )
+                OutlinedButton(
+                    onClick = onLoadStoryBenchmark,
+                    border = BorderStroke(1.dp, PulseMagenta),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        "LOAD 120-CHAPTER BENCHMARK",
+                        color = PulseMagenta,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+                Text(
+                    "Fills the reviewed folder, full premise, and Quality mode. Nothing runs until " +
+                        "START 120-CHAPTER STORY FORGE is pressed.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 10.sp,
                 )
                 Button(
@@ -2558,16 +2644,30 @@ private fun WorkSessionThread(
                     )
                 }
             } else {
-                LazyColumn(
-                    state = listState,
-                    contentPadding = PaddingValues(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.fillMaxSize(),
-                ) {
-                    items(missionMessages, key = { it.id }) { message -> MessageBlock(message) }
-                    if (streamText.isNotBlank()) {
-                        item { StreamingBlock(streamText, active = streamActive) }
+                val tailIndex = missionMessages.size + (if (streamText.isNotBlank()) 1 else 0)
+                Box(Modifier.fillMaxSize()) {
+                    LazyColumn(
+                        state = listState,
+                        contentPadding = PaddingValues(
+                            start = 12.dp,
+                            top = 12.dp,
+                            end = 12.dp,
+                            bottom = 64.dp,
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.fillMaxSize(),
+                    ) {
+                        items(missionMessages, key = { it.id }) { message -> MessageBlock(message) }
+                        if (streamText.isNotBlank()) {
+                            item { StreamingBlock(streamText, active = streamActive) }
+                        }
+                        item(key = "work-session-transcript-tail") { Spacer(Modifier.height(1.dp)) }
                     }
+                    LatestTranscriptButton(
+                        listState = listState,
+                        tailIndex = tailIndex,
+                        modifier = Modifier.align(Alignment.BottomEnd).padding(14.dp),
+                    )
                 }
             }
         }

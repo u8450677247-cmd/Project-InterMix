@@ -30,6 +30,24 @@ class StoryForgeBenchmarkTests(unittest.TestCase):
             with self.subTest(required=required):
                 self.assertIn(required, document)
 
+    def test_native_preset_loads_the_reviewed_prompt_without_starting_it(self):
+        story = (
+            ROOT
+            / "android/app/src/main/java/dev/anicloud/sovereign/StoryForge.kt"
+        ).read_text(encoding="utf-8")
+        ui = (
+            ROOT
+            / "android/app/src/main/java/dev/anicloud/sovereign/ui/SovereignApp.kt"
+        ).read_text(encoding="utf-8")
+        self.assertIn('StoryForgeBenchmarkFolder = "story-forge-orbit"', story)
+        self.assertIn("val StoryForgeBenchmarkPremise", story)
+        self.assertIn("the sky keeps receipts", story)
+        self.assertIn("LOAD 120-CHAPTER BENCHMARK", ui)
+        self.assertIn("rootPath = StoryForgeBenchmarkFolder", ui)
+        self.assertIn("objective = StoryForgeBenchmarkPremise", ui)
+        self.assertIn("modeName = AnswerMode.Quality.name", ui)
+        self.assertIn("Nothing runs until", ui)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
