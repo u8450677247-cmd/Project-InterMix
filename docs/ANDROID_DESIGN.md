@@ -30,9 +30,9 @@ check. The prototype package identity remains provisional until release review.
 | Obsidian | `#05070E` | Primary canvas |
 | Smoked | `#0B1322` | Raised panels and opaque blur fallback |
 | Smoked deep | `#080D19` | Navigation and system surfaces |
-| Horizon cyan | `#25F4FF` | Grounded facts, focus, active controls |
-| Cognition violet | `#A855FF` | Memory, model depth, quality posture |
-| Pulse magenta | `#FF2BD6` | User intent, active agent work, current phase |
+| Horizon cyan | `#25F4FF` | Sovereign Core, grounded facts, focus, active controls |
+| Cognition violet | `#A855FF` | AniCloudAI luxury, glass depth, memory, model presence |
+| Pulse magenta | `#FF2BD6` | Futuristic technology, Tensor/NPU work, active agents, current phase |
 | Soft violet | `#D0A3FF` | Secondary cognition accents |
 | Resonance mint | `#67E8C2` | Ready, verified, completed |
 | Waiting amber | `#FFCA6B` | Waiting, degraded, attention |
@@ -47,7 +47,10 @@ including any wallpaper or content visible behind a translucent layer.
 ### Fluorescent attention contract
 
 The cyan–violet–magenta triad is intentionally at full chroma, but not at full
-area. Fluorescence is a scarce attention signal rather than the reading color:
+area. Its first meaning is architectural: **cyan is the Sovereign Core, radiant
+purple/violet is AniCloudAI's application luxury, and magenta is the advancing
+technology frontier.** Fluorescence is a scarce attention signal rather than
+the reading color:
 
 - **cyan** identifies focus, code structure, grounded evidence, and navigable
   workspace state;
