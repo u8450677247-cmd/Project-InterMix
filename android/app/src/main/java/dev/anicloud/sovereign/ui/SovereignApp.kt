@@ -665,6 +665,8 @@ private fun DestinationContent(
             cockpit = cockpit,
             cockpitActions = cockpitActions,
             onOpenChat = { onDestination(Destination.Chat) },
+            onOpenWorkspace = { onDestination(Destination.Workspace) },
+            onOpenSystem = { onDestination(Destination.System) },
             onDefaultMode = onDefaultMode,
             onAppearance = onAppearance,
             onLayoutPreference = onLayoutPreference,
@@ -795,6 +797,8 @@ private fun HomeDashboard(
     cockpit: CockpitState,
     cockpitActions: CockpitActions,
     onOpenChat: () -> Unit,
+    onOpenWorkspace: () -> Unit,
+    onOpenSystem: () -> Unit,
     onDefaultMode: (AnswerMode) -> Unit,
     onAppearance: (Appearance) -> Unit,
     onLayoutPreference: (LayoutPreference) -> Unit,
@@ -825,7 +829,14 @@ private fun HomeDashboard(
         }
         if (showChecklist) {
             item {
-                SetupChecklist(cockpit = cockpit, onDismiss = { showChecklist = false })
+                SetupChecklist(
+                    cockpit = cockpit,
+                    actions = cockpitActions,
+                    onOpenChat = onOpenChat,
+                    onOpenWorkspace = onOpenWorkspace,
+                    onOpenSystem = onOpenSystem,
+                    onDismiss = { showChecklist = false },
+                )
             }
         }
         item { ModelControlCard(cockpit = cockpit, actions = cockpitActions) }
@@ -1038,23 +1049,98 @@ private fun ResumeCard(onOpenChat: () -> Unit) {
 }
 
 @Composable
-private fun SetupChecklist(cockpit: CockpitState, onDismiss: () -> Unit) {
+private fun SetupChecklist(
+    cockpit: CockpitState,
+    actions: CockpitActions,
+    onOpenChat: () -> Unit,
+    onOpenWorkspace: () -> Unit,
+    onOpenSystem: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val reasoningReady = cockpit.reasoningModel != null
     OutlinedCard(border = BorderStroke(1.dp, CognitionViolet.copy(alpha = 0.55f))) {
-        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("PRIVATE DOGFOOD CHECKLIST", color = SoftViolet, fontSize = 13.sp)
+                Text("FIRST-USE FLIGHT CHECKLIST", color = SoftViolet, fontSize = 13.sp)
                 Spacer(Modifier.weight(1f))
                 TextButton(onClick = onDismiss) { Text("DISMISS") }
             }
             Text(
-                if (cockpit.model == null) "○ Import model and record SHA-256" else
-                    "● Model fingerprint recorded: ${cockpit.model.sha256.take(12)}…",
-                color = if (cockpit.model == null) MaterialTheme.colorScheme.onSurface else ResonanceMint,
+                "WHAT ANICLOUDAI ASKS · WHY IT ASKS · WHAT STILL WORKS IF YOU DECLINE",
+                color = HorizonCyan,
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
             )
-            Text("○ Import a reviewed Termux archive")
-            Text("○ Run the synthetic integrity benchmark")
-            Text("○ Enable voice only when requested")
+            FirstUseStep(
+                marker = "01 · READY",
+                title = "Android credential accepted",
+                detail = "Fingerprint, PIN, or password unlocks the local cockpit; AniCloudAI stores no separate password.",
+                accent = ResonanceMint,
+            )
+            FirstUseStep(
+                marker = "02 · REVIEW",
+                title = "Notification permission",
+                detail = "Allows visible background generation progress and STOP. Declining must not block local chat.",
+                accent = WaitingAmber,
+            )
+            FirstUseStep(
+                marker = if (reasoningReady) "03 · READY" else "03 · REQUIRED",
+                title = if (reasoningReady) {
+                    "E4B reasoning model fingerprinted"
+                } else {
+                    "Choose the reviewed E4B .litertlm file"
+                },
+                detail = if (reasoningReady) {
+                    "${cockpit.reasoningModel?.sha256?.take(16)}… · copied into app-private no-backup storage."
+                } else {
+                    "The Android picker grants only that file; keep the app foregrounded through its first import."
+                },
+                accent = if (reasoningReady) ResonanceMint else PulseMagenta,
+            )
+            FirstUseStep(
+                marker = "04 · USER GRANT",
+                title = "Connect one disposable project folder",
+                detail = "The Android tree picker grants only that tree, not device-wide storage. Cancel is safe and retryable.",
+                accent = HorizonCyan,
+            )
+            FirstUseStep(
+                marker = "05 · PROVE",
+                title = "Run the ordinary-use gates before autonomy",
+                detail = "Check three-turn recall, sentence selection, COPY ALL, /calc, STOP, restart, and folder Up/Root.",
+                accent = SoftViolet,
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+            ) {
+                Button(onClick = actions.onImportReasoningModel) {
+                    Text(if (reasoningReady) "REVIEW / REPLACE E4B" else "IMPORT E4B")
+                }
+                OutlinedButton(onClick = onOpenChat, enabled = reasoningReady) { Text("OPEN CHAT") }
+                OutlinedButton(onClick = onOpenWorkspace) { Text("CONNECT PROJECT") }
+                OutlinedButton(onClick = onOpenSystem) { Text("BOUNDARIES") }
+            }
+            Text(
+                "OPTIONAL LATER · E2B/NPU and the Termux developer plugin are separate acceptance lanes. " +
+                    "This build has no INTERNET permission and must not ask for an API token.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp,
+            )
         }
+    }
+}
+
+@Composable
+private fun FirstUseStep(
+    marker: String,
+    title: String,
+    detail: String,
+    accent: Color,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(marker, color = accent, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+        Text(title, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
+        Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
     }
 }
 

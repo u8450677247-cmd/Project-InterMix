@@ -326,9 +326,15 @@ fun validateExecutionProposal(proposal: ExecutionProposal): ExecutionProposal {
 }
 
 fun normalizeTermuxRoot(raw: String): String {
-    val normalized = raw.replace("\u0000", "").trim().removeSuffix("/")
+    val entered = raw.replace("\u0000", "").trim().removeSuffix("/")
+    val normalized = when {
+        entered == "~" || entered == "\$HOME" -> TermuxHome
+        entered.startsWith("~/") -> "$TermuxHome/${entered.removePrefix("~/")}"
+        entered.startsWith("\$HOME/") -> "$TermuxHome/${entered.removePrefix("\$HOME/")}"
+        else -> entered
+    }
     require(normalized == TermuxHome || normalized.startsWith("$TermuxHome/")) {
-        "The bridge root must be an absolute project path inside the Termux home directory."
+        "The bridge root must use \$HOME, ~, or an absolute project path inside Termux home."
     }
     require(normalized.split('/').none { it == ".." }) { "The bridge root cannot traverse parents." }
     return normalized

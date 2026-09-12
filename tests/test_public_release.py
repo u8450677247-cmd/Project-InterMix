@@ -105,6 +105,20 @@ class PublicReleaseAuditTests(unittest.TestCase):
         self.assertIn("private/generated file type", joined)
         self.assertIn("possible GitHub token", joined)
 
+    def test_audit_allows_public_support_handle_only_in_reviewed_surfaces(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._minimal_tree(root)
+            support_handle = "Yas" + "seh"
+            (root / "README.md").write_text(
+                f"https://buymeacoffee.com/{support_handle}\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(audit_repository(root), [])
+            (root / "CHANGELOG.md").write_text(support_handle, encoding="utf-8")
+            errors = audit_repository(root)
+        self.assertIn("private reference alias in CHANGELOG.md", errors)
+
     def test_release_archive_is_deterministic_and_manifested(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)

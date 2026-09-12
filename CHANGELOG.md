@@ -8,6 +8,10 @@ may still change.
 
 ### Added
 
+- A truthful first-use flight card and full device acceptance journey that
+  explain each Android prompt, distinguish required from optional grants, test
+  denial/retry behavior, and lead from E4B chat through continuity, file
+  recovery, bounded autonomy, E2B/NPU, and the optional Termux plugin.
 - An opt-in native Termux RUN_COMMAND bridge with typed inspect/run/test/build
   and dependency-install proposals, exact Agents approval, project-root
   working directories, declared network/package changes, 5–1,800 second timeouts,

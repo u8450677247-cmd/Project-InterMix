@@ -70,7 +70,7 @@ magenta marks **technology actively extending the boundary**.
 | **Build path** | Android API 36, JDK 17, Gradle 9.4.1, Kotlin/Compose, arm64-v8a |
 | **Inference** | Native LiteRT-LM 0.17.0 candidate; proven E4B GPU path with measured CPU fallback; E2B/NPU remains device-gated |
 | **Fast route** | Exact-fingerprint E2B Tensor G5 package; NPU-only and never silently redirected to GPU |
-| **Evidence** | 123 deterministic public checks plus Android unit tests, assembly, signing, and artifact retention in CI |
+| **Evidence** | 125 deterministic public checks plus Android unit tests, assembly, signing, and artifact retention in CI |
 | **Signing** | Persistent dogfood identity, allowing an in-place update that preserves private app data |
 | **Reference hardware** | Pixel 10 Pro, Tensor G5, Android 17; other devices remain unverified candidates |
 | **Acceptance state** | Signed 0.8.5 is the proven build baseline. The 0.8.6 Story Forge, Numeric Matrix, recent-context reservation, folder creation, optional-Termux framing, and 0.17.0/2.2.0 runtime lane await CI and full device acceptance |
@@ -233,7 +233,7 @@ Long Forge's file-write grant never implies command authority.
 
 ### What remains before a native public preview
 
-- Complete the 0.8.5 device acceptance pass: multi-turn recall, transcript
+- Complete the 0.8.6 device acceptance pass: multi-turn recall, transcript
   persistence across window changes and process restart, one-click Long Forge
   continuation, mission-relative writes, and snapshot recovery.
 - Prove E2B on the Pixel 10 Pro NPU with the exact reviewed fingerprint; record
@@ -259,6 +259,11 @@ The primary one-click endurance gate is the
 The adversarial
 [120-action Long Forge benchmark](docs/ANICLOUDAI_120_ACTION_FORGE_BENCHMARK.md)
 remains the separate multi-file engineering gate.
+Start with the
+[first-use acceptance flight](docs/ANICLOUDAI_FIRST_USE_ACCEPTANCE.md), which
+explains every Android prompt and picker, tests safe denial and retry, and walks
+from authentication through ordinary chat, file control, recovery, and only
+then bounded autonomy.
 The detailed contracts live in [the native Android module](android/README.md),
 [product contract](docs/ANDROID_PRODUCT_CONTRACT.md),
 [Sovereign Glass design language](docs/ANDROID_DESIGN.md),
@@ -292,7 +297,7 @@ The detailed contracts live in [the native Android module](android/README.md),
 | Cold/idle available memory | Approximately 7.0–7.6 GiB in the owner's test environment |
 | Resident-hot available memory | Approximately 2.6–3.7 GiB in the owner's test environment |
 | Cooling used during long tests | Optional Black Shark Magnetic/FunCooler 6 Pro (BR62); approximately 25 °C owner-observed device temperature |
-| Test suite | 123 deterministic public-alpha checks across memory, routing, grounding, cancellation, stream integrity, inference, workspace, release safety, benchmark integrity, and interface behavior |
+| Test suite | 125 deterministic public-alpha checks across memory, routing, grounding, cancellation, stream integrity, inference, workspace, release safety, benchmark integrity, and interface behavior |
 
 These are observations, not guarantees. Android memory pressure, other applications, firmware, drivers, ambient temperature, model build, and compiled caches can materially change the result.
 

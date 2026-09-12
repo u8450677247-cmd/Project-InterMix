@@ -2145,7 +2145,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             appendLine("1. Enable the developer plugin here or with `/exec on`.")
             appendLine("2. In Termux, set `allow-external-apps=true` in `~/.termux/termux.properties`.")
             appendLine("3. Grant **Run commands in Termux environment** only after enabling the plugin.")
-            appendLine("4. Use `/exec workdir /data/data/com.termux/files/home/your-project`.")
+            appendLine("4. Use `/exec workdir \$HOME/your-project` or `/exec workdir ~/your-project`.")
             appendLine()
             append("Every run and dependency change still requires an exact Agents preview and approval.")
         }.trim()

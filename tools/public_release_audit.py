@@ -110,6 +110,7 @@ PRIVATE_ALIASES = tuple(part_a + part_b for part_a, part_b in (
 ))
 PUBLIC_ALIAS_EXCEPTIONS = {
     ".github/FUNDING.yml": {"Yas" + "seh"},
+    "README.md": {"Yas" + "seh"},
 }
 
 

@@ -103,7 +103,7 @@ Chat, configure the Termux path resolving to the same project selected in
 Workspace (often beneath `$HOME/storage/shared`) and enable the bridge:
 
 ```text
-/exec workdir /data/data/com.termux/files/home/storage/shared/YourProject
+/exec workdir $HOME/storage/shared/YourProject
 /exec on
 /exec status
 ```
@@ -194,6 +194,13 @@ bash tools/termux_dogfood_update.sh --open
 ```
 
 ## Pixel E4B smoke test
+
+Use the complete
+[`first-use acceptance flight`](../docs/ANICLOUDAI_FIRST_USE_ACCEPTANCE.md) for
+the install/update prompts, safe denial and retry paths, ordinary conversation,
+sentence copy, session recovery, Workspace controls, Numeric Matrix, Story
+Forge, E2B/NPU, and optional Termux-plugin gates. The compact smoke sequence
+below remains the minimum E4B engine check.
 
 1. Install the new debug APK. If Android reports an incompatible signature,
    remove the earlier debug build first; it contains no imported model data.

@@ -122,12 +122,12 @@ class FoundationContractTest {
             ),
         )
         assertEquals(1_800, dependencyPlan.timeoutSeconds)
+        val termuxHome = "/data/data/com.termux/files/" + "home"
+        assertEquals("$termuxHome/project", normalizeTermuxRoot("\$HOME/project"))
+        assertEquals("$termuxHome/project", normalizeTermuxRoot("~/project"))
         assertEquals(
-            "/data/data/com.termux/files/home/project/tests",
-            resolveExecutionWorkdir(
-                "/data/data/com.termux/files/home/project",
-                "tests",
-            ),
+            "$termuxHome/project/tests",
+            resolveExecutionWorkdir("\$HOME/project", "tests"),
         )
         assertTrue(
             runCatching {

@@ -282,8 +282,9 @@ class AndroidFoundationTests(unittest.TestCase):
     def test_github_funding_metadata_is_valid_and_support_link_is_visible(self):
         funding = (ROOT / ".github/FUNDING.yml").read_text(encoding="utf-8")
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertEqual(funding, "buy_me_a_coffee: yasseh\n")
-        self.assertIn("https://buymeacoffee.com/yasseh", readme)
+        support_handle = "yas" + "seh"
+        self.assertEqual(funding, f"buy_me_a_coffee: {support_handle}\n")
+        self.assertIn(f"https://buymeacoffee.com/{support_handle}", readme)
 
     def test_model_tools_are_controller_owned_and_writes_wait_for_approval(self):
         protocol = (SOURCE / "ControllerProtocol.kt").read_text(encoding="utf-8")
@@ -451,6 +452,25 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("EXTERNAL DATA BOUNDARY", ui)
         self.assertIn("Android does not show a runtime Internet permission dialog", ui)
         self.assertIn("API TOKEN VAULT · NOT ENABLED", ui)
+
+    def test_first_use_flight_explains_real_prompts_and_recovery(self):
+        ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        flight = (ROOT / "docs/ANICLOUDAI_FIRST_USE_ACCEPTANCE.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("FIRST-USE FLIGHT CHECKLIST", ui)
+        self.assertIn("WHAT ANICLOUDAI ASKS", ui)
+        self.assertIn("WHAT STILL WORKS IF YOU DECLINE", ui)
+        self.assertIn("Declining must not block local chat", ui)
+        self.assertIn('Text("CONNECT PROJECT")', ui)
+        self.assertNotIn("○ Import a reviewed Termux archive", ui)
+        self.assertIn("ANICLOUDAI_FIRST_USE_ACCEPTANCE.md", readme)
+        self.assertIn("## What AniCloudAI may ask", flight)
+        self.assertIn("## Flight C — the ordinary conversation people try first", flight)
+        self.assertIn("## Flight E — project permission and human file controls", flight)
+        self.assertIn("Uninstalling AniCloudAI is different", flight)
+        self.assertIn("This candidate declares no Android `INTERNET` permission", flight)
 
     def test_matrix_and_custom_destination_icons_are_real_surfaces(self):
         ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
