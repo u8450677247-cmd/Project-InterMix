@@ -217,4 +217,3 @@ This gate is intentionally separate from the 120 controller actions.
 
 The product gate passes only with observed browser evidence. Until then, the correct verdict
 is: **controller endurance proven; runtime functionality pending**.
-
