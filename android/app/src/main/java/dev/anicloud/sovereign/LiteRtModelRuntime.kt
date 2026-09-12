@@ -21,11 +21,6 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
 import java.io.File
 
-private const val PhysicalContextTokens = 8_000
-private const val PerformanceOutputTokens = 1_024
-private const val AdaptiveOutputTokens = 1_536
-private const val QualityOutputTokens = 2_048
-
 data class RuntimeLoadResult(
     val backend: ActiveBackend,
     val fallbackDetail: String? = null,
@@ -81,11 +76,7 @@ class LiteRtModelRuntime(private val context: Context) {
     fun stream(prompt: String, mode: AnswerMode): Flow<String> {
         val activeConversation = conversation
             ?: error("No initialized model conversation is available.")
-        val outputLimit = when (mode) {
-            AnswerMode.Performance -> PerformanceOutputTokens
-            AnswerMode.Adaptive -> AdaptiveOutputTokens
-            AnswerMode.Quality -> QualityOutputTokens
-        }
+        val outputLimit = ContextOrchestrator.outputReserve(mode)
         // Keep the callback overload even after aligning LiteRT-LM 0.17.0 with
         // coroutines 1.11.0. AniCloudAI owns close/error/cancellation boundaries
         // and does not depend on a precompiled Flow adapter for stream recovery.
@@ -158,7 +149,7 @@ class LiteRtModelRuntime(private val context: Context) {
             EngineConfig(
                 modelPath = model.absolutePath,
                 backend = nativeBackend,
-                maxNumTokens = PhysicalContextTokens,
+                maxNumTokens = ContextPhysicalTokens,
                 cacheDir = cacheDirectory.absolutePath,
             ),
         )
@@ -221,7 +212,7 @@ class LiteRtModelRuntime(private val context: Context) {
         ),
         automaticToolCalling = false,
         channels = emptyList(),
-        maxOutputToken = QualityOutputTokens,
+        maxOutputToken = ContextOrchestrator.outputReserve(AnswerMode.Quality),
     )
 
     private fun sanitize(raw: String): String = raw

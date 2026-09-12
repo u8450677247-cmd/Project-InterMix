@@ -9,7 +9,7 @@ continuity but never grants authority.
 
 ## 1. Long Forge workspace sessions — current build
 
-`0.8.7-latest-thread-benchmark` separates ordinary Chat from long-running project work and
+`0.8.8-context-orchestrator` separates ordinary Chat from long-running project work and
 adds non-destructive fresh/reopen conversation controls. A work session has a
 complete objective, one ASCII workspace root, a selected model posture, a durable Matrix
 checkpoint, and a visible foreground STOP path.
@@ -20,9 +20,10 @@ checkpoint, and a visible foreground STOP path.
 - Replacements retain a private pre-write snapshot. Model-generated delete, code execution,
   package installation, network access, and paths outside the mission root are unavailable.
   Human IDE removal is a separate confirmed move into recoverable project-local trash.
-- The controller refreshes model context from the Memory Matrix every four actions. It injects the
-  objective, user guidance, last verified result, and a recent project-event ledger instead of
-  trusting the latest chat turns.
+- The controller recreates native conversation state and rebuilds a bounded,
+  lane-specific Matrix pack before every action. It injects the objective, newest
+  guidance, last verified result, and recent action signatures instead of
+  accumulating 120 actions in hidden model state.
 - Repeated action sequences, immediate duplicate actions, malformed paths, self-repeating path
   segments, excessive path depth, native stream corruption, severe thermal pressure, and process
   death pause the mission safely.
@@ -43,7 +44,7 @@ ordinal, single-file append, idempotency marker, checkpoint, and exact stop whil
 only the next unnumbered scene. The reviewed folder, full premise, and Quality posture can be
 filled from the Work Session preset without launching; the user still starts the run explicitly.
 Restored Chat and Work Session transcripts initially reveal their true tail, expose a visible
-`↓ LATEST` return control, and stop auto-following after deliberate upward reader motion. The separate
+centered `↓` return control, and stop auto-following after deliberate upward reader motion. The separate
 [`120-action Long Forge benchmark`](ANICLOUDAI_120_ACTION_FORGE_BENCHMARK.md) remains the adversarial
 multi-file engineering gate. Closing the process must convert an in-flight mission to Paused;
 explicit Resume must continue from verified state.
@@ -93,6 +94,20 @@ of state earns space in an 8K physical prompt.
 - Recall is relevance-gated and budgeted. Recent chat cannot displace an active mission checkpoint.
 - Retention, database size, archive/export, repair, and pruning must be measurable before background
   summarization is enabled by default.
+
+Current parity checkpoint:
+
+- Android now hard-reserves the newest roughly 1K tokens, retrieves FTS5 memories
+  and archived turns, injects an active session checkpoint in ordinary chat, and
+  deterministically captures verbatim explicit goals, preferences, project facts,
+  decisions, and unresolved loops.
+- Recent controller-verified project events can return to a relevant project
+  question without relying on an assistant's narration.
+- Recalled session, archive, and workspace material is explicitly untrusted data;
+  only typed Android controllers can grant tools or assert execution.
+- Native parity is still blocked on the incremental project manifest, typed event
+  domains/retention UI, grounded freshness and citations, stronger verified-work
+  completion rules, and an on-device E2B librarian flight.
 
 ## 4. Native research and shared browser
 

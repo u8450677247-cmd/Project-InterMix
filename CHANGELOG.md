@@ -8,11 +8,30 @@ may still change.
 
 ### Added
 
+- A 20-policy native Context Orchestrator that budgets system/prefill/output
+  capacity, rebuilds lane-specific context in a fresh conversation per controller
+  cycle, preserves current intent and newest durable state through compaction,
+  and performs one smaller retry for capacity-shaped native failures.
+- A deterministic Termux-parity continuity capture that stores bounded verbatim
+  user goals, preferences, project facts, decisions, and unresolved loops; populates
+  the previously inert active-session capsule; consolidates exact duplicate
+  memories; and reintroduces recent verified project events for relevant questions.
+- An explicit Termux-to-native continuity audit that keeps the established engine
+  as the minimum intelligence baseline and names every remaining native gap.
+- A measurement-only Context Ledger in Memory Matrix and System Lens with lane,
+  prefill estimate, output reserve, headroom, compaction, recovery, and policy
+  count—never a second copy of prompt or workspace content.
+- A private Story Forge payload lane that withholds prose and protocol from the
+  visible stream until Android parsing, validation, durable append, and
+  checkpointing succeed.
+- A comprehensive research and implementation decision record covering 200
+  context, memory, retrieval, environment, routing, long-form, adaptation,
+  privacy, evaluation, and release mechanisms.
 - A non-starting Work Session preset for the reviewed 120-chapter Story Forge
   endurance benchmark. One tap fills its disposable folder, complete continuity
   premise, and Quality posture; a separate explicit press still launches the run.
-- A visible `↓ LATEST` transcript control in Chat and Work Session, with protected
-  bottom padding so it does not cover the latest response.
+- A visible centered `↓` transcript control in Chat and Work Session, with
+  protected bottom padding so it does not cover the latest response.
 - A truthful first-use flight card and full device acceptance journey that
   explain each Android prompt, distinguish required from optional grants, test
   denial/retry behavior, and lead from E4B chat through continuity, file
@@ -80,6 +99,10 @@ may still change.
 
 ### Fixed
 
+- Per-mode limits are labelled tokens per call rather than implying that Quality
+  caps an entire conversation or long-form artifact at 2K tokens.
+- The Story benchmark preset disables the visually adjacent generic workspace
+  start path, and the latest-message action is now a compact centered down arrow.
 - Restored long transcripts now reveal their true bottom after SQLite content is
   laid out instead of letting the initial first-item measurement disable tail
   following. Live output follows only while the reader remains at the end.

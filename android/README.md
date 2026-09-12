@@ -2,7 +2,7 @@
 
 This module is the private Pixel 10 Pro reference cockpit for Project Intermix.
 The original disconnected shell has passed its first device test. The current
-`0.8.7-latest-thread-benchmark` source candidate combines the stable E4B boundary with
+`0.8.8-context-orchestrator` source candidate combines the stable E4B boundary with
 the native Memory Matrix, controller-mediated project workspace, and the first
 checkpointed long-form work-session loop. Its cyan–magenta–violet spectral
 glass pass concentrates fluorescence on focus, mode, code, and mission progress
@@ -18,7 +18,8 @@ while preserving neutral long-form reading surfaces.
 - streaming SHA-256 verification while the model is copied into app-private,
   no-backup storage;
 - one resident E4B engine with GPU initialization first and CPU fallback;
-- an 8,000-token physical context and bounded per-mode output limits;
+- an 8,000-token physical context, a 20-policy context pack, and truthful
+  per-call output limits;
 - real native token streaming with an always-visible STOP control;
 - STOP recovery that cancels JNI inference, keeps the safe visible draft clearly
   marked as non-canonical, and rebuilds conversation state before the next turn;
@@ -28,19 +29,22 @@ while preserving neutral long-form reading surfaces.
 - non-destructive `/sessions list|new|open <reference>` controls that reset native
   model context while preserving earlier sessions, durable memories, model files,
   and the SAF workspace grant;
-- roughly 1K-token recent-session context rehydration before every model turn, including
-  ordinary chat that does not use explicit continuity wording;
+- roughly 1K-token recent-session continuity plus lane-specific Matrix,
+  workspace, mission, and Story reconstruction before every fresh controller call;
+- deterministic verbatim capture of explicit goals, preferences, project facts,
+  decisions, and unresolved loops into a bounded active-session capsule, with
+  relevant verified project events available to later project questions;
 - deterministic first reveal at the true end of restored Chat and Work Session
-  transcripts, plus a visible `↓ LATEST` return control that does not steal position
+  transcripts, plus a centered `↓` return control that does not steal position
   after the reader deliberately scrolls upward;
 - a versioned Interaction Profile Matrix with explicit-evidence adaptation,
   undo, and deterministic General/Continuity/Project context selection;
 - a persisted Storage Access Framework project tree with automatic list/read
   tools, approval-gated create/write/mkdir actions, pre-write snapshots, Up/back
   navigation, whole-message copy, and explicitly confirmed recoverable trash;
-- a dedicated Long Forge workspace conversation that accepts one complete
+- a dedicated Long Forge workspace session that accepts one complete
   objective, up to 120 scoped controller actions, queued mid-run guidance,
-  periodic Matrix context rebuilding, recursive-loop detection, and durable
+  fresh per-action Matrix context rebuilding, recursive-loop detection, and durable
   pause/resume checkpoints;
 - automatic correction of up to four narration-only mission responses before a
   pause, plus mission-relative controller paths that remain inside the exact grant;
@@ -49,6 +53,11 @@ while preserving neutral long-form reading surfaces.
   Memory Matrix learning;
 - a Story Forge lane that appends one unnumbered model installment at a time
   into a crash-idempotent, controller-numbered 120-chapter `story.md`;
+- a private Story payload shield that withholds raw/model-invalid output from
+  Chat and Work Session until Android validates and durably appends it;
+- a measurement-only Context Ledger showing lane, prefill estimate, output
+  reserve, headroom, compaction, recovery, and all 20 active policies without
+  copying prompt content into a second store;
 - a non-starting `LOAD 120-CHAPTER BENCHMARK` preset that fills the reviewed
   folder, full continuity premise, and Quality mode before a separately explicit launch;
 - a decimal128 Numeric Matrix that computes arithmetic outside the language model
@@ -69,6 +78,13 @@ fingerprint-locked Tensor G5 import and NPU route, but remains device-evidence
 gated rather than a general fallback. The dispatcher is extracted into Android's
 native-library directory, and E4B is released before the final NPU memory gate.
 Those surfaces remain visibly unavailable instead of simulating success.
+
+The Python/Termux engine remains the minimum continuity baseline. Native message
+persistence alone is not parity: the candidate must reconstruct useful session,
+semantic, archived, task, and verified environment state on every fresh call.
+The source now closes the previously inert session-summary/open-loop/decision
+fields, while grounded freshness, typed timeline controls, richer project
+indexing, and the E2B librarian route remain explicit acceptance gaps.
 
 ## Model import and storage
 

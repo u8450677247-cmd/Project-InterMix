@@ -154,6 +154,55 @@ object ControllerProtocol {
         terminal color escapes, or raw color values; Sovereign Glass maps semantics to its palette.
     """.trimIndent()
 
+    /** Compact ordinary-chat contract. The immutable runtime instruction already owns identity. */
+    fun chatPromptContract(): String = """
+        [COMPACT ANDROID CONTROLLER PROTOCOL]
+        Never invent tool results or claim access outside the connected workspace.
+        For one read, emit <INTERMIX_ACTION>{"kind":"list_files|read_file","path":"relative/path"}</INTERMIX_ACTION>.
+        For one requested write, emit kind create_file, write_file, or create_directory with a
+        relative path, complete content when applicable, and a short reason. Android requires
+        visible approval before ordinary-chat mutations.
+        For one approval-gated Termux task, emit <INTERMIX_EXEC> JSON with kind, command, workdir,
+        network_required, dependencies, reason, and timeout_seconds. Never emit deletion,
+        privilege escalation, parent traversal, or an absolute path.
+        For derived arithmetic, emit <INTERMIX_CALC>{"expression":"decimal expression","reason":"why"}</INTERMIX_CALC>
+        before stating a result. Android evaluates it with decimal128.
+        Only an explicit durable statement in the current request may produce a final
+        <MEMORY_UPDATE> proposal with an exact verbatim quote. Only an explicit communication
+        adjustment may produce a final <PROFILE_UPDATE> proposal. Never store secrets or infer
+        sensitive traits. Emit raw tags, never fenced protocol. Visible prose may use semantic
+        Markdown. Never emit HTML, terminal escapes, or raw palette values.
+    """.trimIndent()
+
+    /** One-action contract for the bounded, controller-owned workspace lane. */
+    fun workspaceMissionPromptContract(): String = """
+        [SCOPED WORKSPACE CONTROLLER PROTOCOL]
+        Emit exactly one raw <INTERMIX_ACTION> JSON block per response and no speculative result.
+        Kinds: list_files, read_file, create_file, write_file, create_directory. Paths stay inside
+        the authorized mission root. Write proposals contain complete content. This active mission
+        is the bounded approval grant; Android executes, audits, checkpoints, and returns the result.
+        Use <INTERMIX_CALC>{"expression":"decimal expression","reason":"why"}</INTERMIX_CALC> for
+        derived arithmetic. Use <INTERMIX_EXEC> only when a separate Termux approval is genuinely
+        required; include kind, command, relative workdir, network_required, dependencies, reason,
+        and timeout_seconds. Never delete, traverse upward, escalate privileges, forge results, or
+        emit more than one controller action. Return [MISSION_COMPLETE] only after verified work and
+        checks are finished; return [BLOCKED] only when human input is essential.
+    """.trimIndent()
+
+    /** Private prose-only contract for one checkpointed Story Forge segment. */
+    fun storyPromptContract(): String = """
+        [PRIVATE STORY FORGE PROTOCOL]
+        Return exactly one payload and nothing else:
+        <INTERMIX_STORY>
+        <TITLE>Short unnumbered title</TITLE>
+        <BODY>One substantial complete scene with concrete action and a changed situation.</BODY>
+        <CONTINUITY>Compact established facts, open threads, tone, and intended next movement.</CONTINUITY>
+        </INTERMIX_STORY>
+        Never emit an ordinal, completion claim, workspace action, calculation, execution, nested
+        INTERMIX tag, or ANICLOUD_CHAPTER marker. Android privately validates, numbers, appends,
+        snapshots, checkpoints, and decides the final boundary.
+    """.trimIndent()
+
     fun visibleStreamingText(raw: String): String {
         val completeMarker = buildList {
             addAll(openMarkers.map(raw::indexOf).filter { it >= 0 })

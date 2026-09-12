@@ -82,6 +82,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -95,6 +97,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.anicloud.sovereign.prototype.AnswerMode
 import dev.anicloud.sovereign.prototype.AnswerModeSelection
 import dev.anicloud.sovereign.prototype.AdaptiveRuntimePolicy
+import dev.anicloud.sovereign.prototype.ActiveSessionCheckpoint
 import dev.anicloud.sovereign.prototype.AgentMissionStatus
 import dev.anicloud.sovereign.prototype.Appearance
 import dev.anicloud.sovereign.prototype.BuildConfig
@@ -102,6 +105,7 @@ import dev.anicloud.sovereign.prototype.ChatMessage
 import dev.anicloud.sovereign.prototype.ChatSpeaker
 import dev.anicloud.sovereign.prototype.CockpitState
 import dev.anicloud.sovereign.prototype.ComposerMaxVisibleLines
+import dev.anicloud.sovereign.prototype.ContextPhysicalTokens
 import dev.anicloud.sovereign.prototype.Destination
 import dev.anicloud.sovereign.prototype.FoundationLayout
 import dev.anicloud.sovereign.prototype.FoundationPreferenceStore
@@ -1393,7 +1397,7 @@ private fun ChatSurface(
             LatestTranscriptButton(
                 listState = threadState,
                 tailIndex = tailIndex,
-                modifier = Modifier.align(Alignment.BottomEnd).padding(18.dp),
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp),
             )
         }
         Composer(
@@ -1470,16 +1474,24 @@ private fun LatestTranscriptButton(
 ) {
     val scope = rememberCoroutineScope()
     if (tailIndex >= 0 && listState.canScrollForward) {
-        OutlinedButton(
+        Surface(
             onClick = {
                 scope.launch {
                     listState.scrollToItem(tailIndex)
                 }
             },
+            color = SmokedDeep.copy(alpha = 0.94f),
+            contentColor = HorizonCyan,
+            shape = RoundedCornerShape(50),
             border = BorderStroke(1.dp, HorizonCyan),
-            modifier = modifier,
+            shadowElevation = 8.dp,
+            modifier = modifier
+                .size(46.dp)
+                .semantics { contentDescription = "Jump to latest message" },
         ) {
-            Text("↓ LATEST", color = HorizonCyan, fontWeight = FontWeight.Bold)
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                Text("↓", color = HorizonCyan, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            }
         }
     }
 }
@@ -1621,6 +1633,13 @@ private fun Composer(
                 color = modeAccent,
                 fontFamily = FontFamily.Monospace,
                 fontSize = 10.sp,
+            )
+            Text(
+                "PER-CALL OUTPUT, NOT A DOCUMENT LIMIT · LONG WORK CONTINUES THROUGH FRESH " +
+                    "CONTROLLER CALLS AND MATRIX CHECKPOINTS",
+                color = MutedText,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 9.sp,
             )
             if (draft.startsWith("/") && !draft.contains('\n')) {
                 SlashCommandPalette(
@@ -1791,6 +1810,7 @@ private fun MemoryMatrixSurface(cockpit: CockpitState, actions: CockpitActions) 
                 ),
             )
         }
+        item { ActiveSessionCheckpointCard(cockpit.memoryMatrix.activeSessionCheckpoint) }
         item {
             InteractionProfileCard(
                 profile = cockpit.memoryMatrix.interactionProfile,
@@ -1809,6 +1829,99 @@ private fun MemoryMatrixSurface(cockpit: CockpitState, actions: CockpitActions) 
         } else {
             items(cockpit.memoryMatrix.recentMemories, key = { it.id }) { memory ->
                 MemoryCard(memory = memory, actions = actions)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActiveSessionCheckpointCard(checkpoint: ActiveSessionCheckpoint) {
+    OutlinedCard(
+        border = BorderStroke(1.dp, PulseMagenta.copy(alpha = 0.58f)),
+        colors = CardDefaults.outlinedCardColors(containerColor = Color.Transparent),
+        modifier = Modifier
+            .fillMaxWidth()
+            .sovereignGlass(PulseMagenta, radius = 16.dp, depth = 0.72f, elevation = 3.dp),
+    ) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("ACTIVE SESSION CAPSULE", color = PulseMagenta, fontWeight = FontWeight.Bold)
+                    Text(
+                        "Extractive · user-sourced · bounded · never tool authority",
+                        color = MutedText,
+                        fontSize = 11.sp,
+                    )
+                }
+                Text(
+                    if (checkpoint.populated) "ACTIVE" else "EMPTY",
+                    color = if (checkpoint.populated) ResonanceMint else WaitingAmber,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                )
+            }
+            if (!checkpoint.populated) {
+                Text(
+                    "Explicit goals, preferences, project facts, decisions, and unresolved loops will appear here after they are captured verbatim.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp,
+                )
+            } else {
+                checkpoint.currentTask.takeIf(String::isNotBlank)?.let { task ->
+                    Text("CURRENT TASK", color = HorizonCyan, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+                    SelectionContainer { Text(task, color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp) }
+                }
+                if (checkpoint.openLoops.isNotEmpty()) {
+                    Text(
+                        "OPEN LOOPS · ${checkpoint.openLoops.size}",
+                        color = WaitingAmber,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                    )
+                    SelectionContainer {
+                        Text(
+                            checkpoint.openLoops.takeLast(3).joinToString("\n") { "• $it" },
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontSize = 12.sp,
+                            maxLines = 7,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                if (checkpoint.decisions.isNotEmpty()) {
+                    Text(
+                        "DECISIONS · ${checkpoint.decisions.size}",
+                        color = SoftViolet,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                    )
+                    SelectionContainer {
+                        Text(
+                            checkpoint.decisions.takeLast(3).joinToString("\n") { "• $it" },
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontSize = 12.sp,
+                            maxLines = 7,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                if (checkpoint.summary.isNotBlank()) {
+                    Text("LATEST CAPTURED SIGNALS", color = HorizonCyan, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+                    SelectionContainer {
+                        Text(
+                            checkpoint.summary.lines().takeLast(6).joinToString("\n"),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 12.sp,
+                            maxLines = 10,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                Text(
+                    "Forget a captured Matrix memory to remove its exact session-capsule copy too.",
+                    color = ResonanceMint,
+                    fontSize = 10.sp,
+                )
             }
         }
     }
@@ -2372,6 +2485,8 @@ private fun WorkSessionControlPanel(
         AgentMissionStatus.Failed, AgentMissionStatus.Cancelled -> InterventionCoral
         null -> PulseMagenta
     }
+    val benchmarkLoaded = rootPath.trim() == StoryForgeBenchmarkFolder &&
+        objective.trim() == StoryForgeBenchmarkPremise
 
     OutlinedCard(
         colors = CardDefaults.outlinedCardColors(containerColor = Color.Transparent),
@@ -2442,31 +2557,57 @@ private fun WorkSessionControlPanel(
                 }
                 Text(
                     "Fills the reviewed folder, full premise, and Quality mode. Nothing runs until " +
-                        "START 120-CHAPTER STORY FORGE is pressed.",
+                        "START STORY FORGE is pressed.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 10.sp,
                 )
-                Button(
-                    onClick = onStart,
-                    enabled = workspaceConnected && cockpit.canSend && rootPath.isNotBlank() &&
-                        objective.isNotBlank(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = PulseMagenta,
-                        contentColor = Obsidian,
-                    ),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("START SCOPED RUN", fontWeight = FontWeight.Bold)
+                if (!benchmarkLoaded) {
+                    Button(
+                        onClick = onStart,
+                        enabled = workspaceConnected && cockpit.canSend && rootPath.isNotBlank() &&
+                            objective.isNotBlank(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = PulseMagenta,
+                            contentColor = Obsidian,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("START SCOPED WORKSPACE RUN", fontWeight = FontWeight.Bold)
+                    }
+                    OutlinedButton(
+                        onClick = onStoryStart,
+                        enabled = workspaceConnected && cockpit.canSend && rootPath.isNotBlank() &&
+                            objective.isNotBlank(),
+                        border = BorderStroke(1.dp, HorizonCyan),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("START STORY FORGE", color = HorizonCyan, fontWeight = FontWeight.Bold)
+                    }
+                } else {
+                    Text(
+                        "BENCHMARK LANE LOCKED · GENERIC WORKSPACE ROUTING DISABLED",
+                        color = ResonanceMint,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                    )
+                    Button(
+                        onClick = onStoryStart,
+                        enabled = workspaceConnected && cockpit.canSend,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = HorizonCyan,
+                            contentColor = Obsidian,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("START 120-CHAPTER STORY FORGE", fontWeight = FontWeight.Bold)
+                    }
                 }
-                OutlinedButton(
-                    onClick = onStoryStart,
-                    enabled = workspaceConnected && cockpit.canSend && rootPath.isNotBlank() &&
-                        objective.isNotBlank(),
-                    border = BorderStroke(1.dp, HorizonCyan),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("START 120-CHAPTER STORY FORGE", color = HorizonCyan, fontWeight = FontWeight.Bold)
-                }
+                Text(
+                    "LONG FORM · CONTROLLER-CHUNKED · MATRIX-CHECKPOINTED · OUTPUT LIMIT APPLIES PER CALL",
+                    color = SoftViolet,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 9.sp,
+                )
                 if (!workspaceConnected) {
                     Text("Connect a project before starting a work session.", color = WaitingAmber, fontSize = 11.sp)
                 }
@@ -2666,7 +2807,7 @@ private fun WorkSessionThread(
                     LatestTranscriptButton(
                         listState = listState,
                         tailIndex = tailIndex,
-                        modifier = Modifier.align(Alignment.BottomEnd).padding(14.dp),
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
                     )
                 }
             }
@@ -2769,9 +2910,9 @@ private fun answerModeAccent(mode: AnswerMode): Color = when (mode) {
 }
 
 private fun answerModeTokenBudget(mode: AnswerMode): String = when (mode) {
-    AnswerMode.Performance -> "1,024 TOKENS/STEP"
-    AnswerMode.Adaptive -> "1,536 TOKENS/STEP"
-    AnswerMode.Quality -> "2,048 TOKENS/STEP"
+    AnswerMode.Performance -> "1,024 TOKENS/CALL"
+    AnswerMode.Adaptive -> "1,536 TOKENS/CALL"
+    AnswerMode.Quality -> "2,048 TOKENS/CALL"
 }
 
 private fun answerModeRouteHint(mode: AnswerMode, cockpit: CockpitState): String = when (mode) {
@@ -3160,6 +3301,26 @@ private fun AgentMemoryContext(matrix: MemoryMatrixSnapshot) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontSize = 12.sp,
         )
+        if (matrix.activeSessionCheckpoint.populated) {
+            Text(
+                "SESSION CAPSULE · ${matrix.activeSessionCheckpoint.openLoops.size} OPEN · " +
+                    "${matrix.activeSessionCheckpoint.decisions.size} DECISIONS",
+                color = PulseMagenta,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+            )
+        }
+        matrix.latestContextWindow?.let { context ->
+            Text(
+                "CONTEXT LEDGER · ${context.lane.wireName.uppercase()} · " +
+                    "${context.estimatedPrefillTokens}+${context.outputReserveTokens}/$ContextPhysicalTokens · " +
+                    "${context.strategyCount} POLICIES · " +
+                    if (context.recovery) "RECOVERY" else if (context.compacted) "COMPACTED" else "FIT",
+                color = if (context.recovery) InterventionCoral else HorizonCyan,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+            )
+        }
         if (planningContext.isEmpty()) {
             Text(
                 "No pinned goals, project facts, decisions, or communication preferences yet.",
@@ -3380,6 +3541,30 @@ private fun SystemLens(cockpit: CockpitState, modifier: Modifier = Modifier) {
             } ?: "NOT MEASURED",
             cockpit.lastContextDecision?.let { HorizonCyan } ?: MutedText,
         )
+        val latestContext = cockpit.memoryMatrix.latestContextWindow
+        LensValue(
+            "CONTEXT ORCHESTRATOR",
+            latestContext?.let {
+                "${it.lane.wireName.uppercase()} · ${it.estimatedPrefillTokens}+" +
+                    "${it.outputReserveTokens}/$ContextPhysicalTokens · " +
+                    "${it.estimatedHeadroomTokens} HEADROOM"
+            } ?: "NOT MEASURED · 20-POLICY PACK READY",
+            latestContext?.let {
+                if (it.recovery) InterventionCoral else if (it.compacted) WaitingAmber else ResonanceMint
+            } ?: MutedText,
+        )
+        if (latestContext != null) {
+            LensValue(
+                "CONTEXT LEDGER",
+                "${cockpit.memoryMatrix.contextWindowCount} CALLS · ${latestContext.strategyCount} POLICIES · " +
+                    when {
+                        latestContext.recovery -> "RECOVERY PACK"
+                        latestContext.compacted -> "BOUNDED COMPACTION"
+                        else -> "NATIVE FIT"
+                    },
+                if (latestContext.recovery) InterventionCoral else SoftViolet,
+            )
+        }
         LensValue(
             "THERMAL",
             thermalStatusLabel(cockpit.thermalStatus).uppercase(),
