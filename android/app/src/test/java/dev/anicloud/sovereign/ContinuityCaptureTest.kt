@@ -35,4 +35,33 @@ class ContinuityCaptureTest {
         assertFalse(signals.any { it.text.contains("summary", ignoreCase = true) })
         assertEquals("Project issue 1 is still missing.", signals.first().text)
     }
+
+    @Test
+    fun explicitContinuityLabelsAreFirstClassSignals() {
+        val source = """
+            Project goal: AniCloudAI must preserve useful continuity across restarts.
+            Preference: Keep the interface cyan and purple.
+            Decision: Use an extractive session capsule rather than invented summaries.
+            Open loop: Prove that these facts survive a force-close.
+        """.trimIndent()
+
+        val signals = ContinuityCapturePolicy.extract(source)
+
+        assertEquals(
+            listOf(
+                ContinuitySignalKind.Goal,
+                ContinuitySignalKind.Preference,
+                ContinuitySignalKind.Decision,
+                ContinuitySignalKind.OpenLoop,
+            ),
+            signals.map(ContinuitySignal::kind),
+        )
+        assertTrue(signals.first().currentTask)
+        assertTrue(signals[2].decision)
+        assertTrue(signals.last().openLoop)
+        assertEquals(
+            "Preference: Keep the interface cyan and purple.",
+            signals[1].text,
+        )
+    }
 }

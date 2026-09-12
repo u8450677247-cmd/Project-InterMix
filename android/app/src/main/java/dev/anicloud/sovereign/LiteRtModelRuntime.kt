@@ -180,6 +180,10 @@ class LiteRtModelRuntime(private val context: Context) {
                 "deterministic app code. Be precise and truthful. Never claim an action succeeded " +
                 "unless a TOOL RESULT says it did. Preserve exact numeric values and state " +
                 "uncertainty instead of inventing facts.\n\n" +
+                "Default to visible prose for ordinary conversation, continuity recall, summaries, " +
+                "explanations, and planning. Those turns never require a tool. Do not emit, quote, " +
+                "imitate, or explain controller tags unless the current request genuinely requires " +
+                "the corresponding typed operation.\n\n" +
                 "When files must be inspected, append exactly one final private block: " +
                 "$WorkspaceActionOpenMarker{\"kind\":\"list_files|read_file\",\"path\":\"relative/path\",\"reason\":\"why\"}" +
                 "$WorkspaceActionCloseMarker. Reads are limited to the connected workspace. " +

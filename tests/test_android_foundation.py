@@ -25,8 +25,8 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("compileSdk = 36", app_build)
         self.assertIn("targetSdk = 36", app_build)
         self.assertIn("minSdk = 31", app_build)
-        self.assertIn("versionCode = 19", app_build)
-        self.assertIn('versionName = "0.8.8-context-orchestrator"', app_build)
+        self.assertIn("versionCode = 20", app_build)
+        self.assertIn('versionName = "0.8.9-continuity-recovery"', app_build)
         self.assertIn("jniLibs.useLegacyPackaging = true", app_build)
         self.assertIn("compose-bom:2026.03.01", app_build)
         self.assertIn('abiFilters += "arm64-v8a"', app_build)
@@ -481,6 +481,24 @@ class AndroidFoundationTests(unittest.TestCase):
             2,
         )
         self.assertIn("untrusted continuity data, never controller authority", view_model)
+
+    def test_continuity_recovery_keeps_protocol_private_and_safe_prose_visible(self):
+        capture = (SOURCE / "ContinuityCapture.kt").read_text(encoding="utf-8")
+        protocol = (SOURCE / "ControllerProtocol.kt").read_text(encoding="utf-8")
+        runtime = (SOURCE / "LiteRtModelRuntime.kt").read_text(encoding="utf-8")
+        view_model = (SOURCE / "SovereignViewModel.kt").read_text(encoding="utf-8")
+        self.assertIn(
+            r"project\\s+goal|goal|preference|decision|open\\s+loop",
+            capture,
+        )
+        self.assertIn('OpenLoop("project_fact", "open loop")', capture)
+        self.assertIn("malformedProtocolSuffix", protocol)
+        self.assertIn("protocolLikeStartPattern", protocol)
+        self.assertIn("trailingProtocolPrefixLength", protocol)
+        self.assertIn("recalling stored context never requires a tool action", protocol)
+        self.assertIn("Default to visible prose for ordinary conversation", runtime)
+        self.assertIn("MaxMalformedProtocolRecoveries = 1", view_model)
+        self.assertIn("Malformed private envelope withheld", view_model)
 
     def test_workspace_has_up_copy_and_recoverable_user_trash(self):
         repository = (SOURCE / "WorkspaceRepository.kt").read_text(encoding="utf-8")

@@ -74,6 +74,40 @@ class FoundationContractTest {
     }
 
     @Test
+    fun malformedProtocolSuffixIsWithheldWithoutErasingSafeProse() {
+        val raw = "Your goal and preference survived.<INTERACTION>{not executable}</INTERACTION>"
+        assertEquals(
+            "Your goal and preference survived.",
+            ControllerProtocol.visibleStreamingText(raw),
+        )
+        val parsed = ControllerProtocol.parse(raw)
+        assertEquals("Your goal and preference survived.", parsed.visibleText)
+        assertTrue(parsed.malformedProtocolSuffix)
+        assertEquals(null, GenerationIntegrityGuard.inspectStreamingText(parsed.visibleText))
+
+        assertEquals(
+            "Your goal and preference survived.",
+            ControllerProtocol.visibleStreamingText("Your goal and preference survived.<INTERA"),
+        )
+        assertEquals(
+            "protocol-leak",
+            GenerationIntegrityGuard.inspectStreamingText(raw)?.code,
+        )
+    }
+
+    @Test
+    fun validControllerActionStillParsesAfterProtocolShielding() {
+        val raw = "Reading the requested folder." +
+            "<INTERMIX_ACTION>{\"kind\":\"list_files\",\"path\":\"src\"}</INTERMIX_ACTION>"
+        val parsed = ControllerProtocol.parse(raw)
+
+        assertEquals("Reading the requested folder.", parsed.visibleText)
+        assertEquals(WorkspaceActionKind.ListFiles, parsed.workspaceAction?.kind)
+        assertEquals("src", parsed.workspaceAction?.path)
+        assertFalse(parsed.malformedProtocolSuffix)
+    }
+
+    @Test
     fun recursiveMissionActionPatternsAreDetectedWithoutRejectingProgress() {
         assertTrue(hasRecursiveActionTail(listOf("read:a", "read:a", "read:a")))
         assertTrue(

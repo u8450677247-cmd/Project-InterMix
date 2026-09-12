@@ -99,6 +99,10 @@ may still change.
 
 ### Fixed
 
+- Explicit `Project goal:`, `Preference:`, `Decision:`, and `Open loop:` statements
+  now enter the extractive session capsule deterministically. Ordinary recall defaults
+  to visible prose, malformed controller-like suffixes remain non-executable and hidden,
+  safe prose before them survives, and an envelope-only response receives one bounded retry.
 - Per-mode limits are labelled tokens per call rather than implying that Quality
   caps an entire conversation or long-form artifact at 2K tokens.
 - The Story benchmark preset disables the visually adjacent generic workspace

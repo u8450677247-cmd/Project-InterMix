@@ -8,6 +8,7 @@ enum class ContinuitySignalKind(
     Preference("user_preference", "preference"),
     Goal("user_goal", "goal"),
     Decision("decision", "decision"),
+    OpenLoop("project_fact", "open loop"),
 }
 
 data class ContinuitySignal(
@@ -25,6 +26,10 @@ data class ContinuitySignal(
  * summary, psychological trait, tool result, or unstated project fact.
  */
 object ContinuityCapturePolicy {
+    private val explicitLabel = Regex(
+        "^\\s*(project\\s+goal|goal|preference|decision|open\\s+loop)\\s*:\\s*",
+        RegexOption.IGNORE_CASE,
+    )
     private val project = Regex(
         "\\b(?:project\\s+intermix|anicloudai|termux|memory\\s+matrix|context\\s+window|" +
             "workspace|repository|roadmap|release|build|benchmark|feature|bug|issue|blocker|" +
@@ -65,18 +70,34 @@ object ContinuityCapturePolicy {
             .take(24)
 
         return candidates.mapNotNull { sentence ->
-            val matchesDecision = decision.containsMatchIn(sentence)
-            val matchesGoal = goal.containsMatchIn(sentence)
-            val matchesPreference = preference.containsMatchIn(sentence)
+            val labelledKind = explicitLabel.find(sentence)?.groupValues?.getOrNull(1)
+                ?.lowercase()
+                ?.replace(Regex("\\s+"), " ")
+                ?.let { label ->
+                    when (label) {
+                        "project goal", "goal" -> ContinuitySignalKind.Goal
+                        "preference" -> ContinuitySignalKind.Preference
+                        "decision" -> ContinuitySignalKind.Decision
+                        "open loop" -> ContinuitySignalKind.OpenLoop
+                        else -> null
+                    }
+                }
+            val matchesDecision = labelledKind == ContinuitySignalKind.Decision ||
+                decision.containsMatchIn(sentence)
+            val matchesGoal = labelledKind == ContinuitySignalKind.Goal ||
+                goal.containsMatchIn(sentence)
+            val matchesPreference = labelledKind == ContinuitySignalKind.Preference ||
+                preference.containsMatchIn(sentence)
             val matchesProject = project.containsMatchIn(sentence)
-            val kind = when {
+            val kind = labelledKind ?: when {
                 matchesDecision -> ContinuitySignalKind.Decision
                 matchesPreference -> ContinuitySignalKind.Preference
                 matchesGoal -> ContinuitySignalKind.Goal
                 matchesProject -> ContinuitySignalKind.Project
                 else -> null
             } ?: return@mapNotNull null
-            val isOpenLoop = sentence.endsWith('?') || unresolved.containsMatchIn(sentence)
+            val isOpenLoop = kind == ContinuitySignalKind.OpenLoop || sentence.endsWith('?') ||
+                unresolved.containsMatchIn(sentence)
             ContinuitySignal(
                 kind = kind,
                 text = sentence,
@@ -85,8 +106,10 @@ object ContinuityCapturePolicy {
                     ContinuitySignalKind.Goal -> 0.82
                     ContinuitySignalKind.Preference -> 0.78
                     ContinuitySignalKind.Project -> 0.74
+                    ContinuitySignalKind.OpenLoop -> 0.80
                 },
-                currentTask = matchesGoal || (matchesProject && isOpenLoop),
+                currentTask = matchesGoal || kind == ContinuitySignalKind.OpenLoop ||
+                    (matchesProject && isOpenLoop),
                 openLoop = isOpenLoop,
                 decision = matchesDecision,
             )

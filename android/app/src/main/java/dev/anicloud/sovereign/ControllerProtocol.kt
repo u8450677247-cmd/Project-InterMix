@@ -54,6 +54,8 @@ data class ControllerProtocolResult(
     val storyChapter: StoryChapterProposal? = null,
     val memoryPayload: JSONObject? = null,
     val profilePayload: JSONObject? = null,
+    /** True when protocol-looking output was withheld but did not parse as an executable payload. */
+    val malformedProtocolSuffix: Boolean = false,
 )
 
 /**
@@ -77,6 +79,21 @@ object ControllerProtocol {
         StoryOpenMarker,
         MemoryUpdateOpenMarker,
         ProfileUpdateOpenMarker,
+    )
+    private val protocolLikeStartPattern = Regex(
+        "<\\s*/?\\s*(?:INTERMIX(?:[_\\s-]*(?:ACTION|EXEC|CALC|STORY))?|" +
+            "INTERACTION|MEMORY[_\\s-]*UPDATE|PROFILE[_\\s-]*UPDATE)" +
+            "(?=\\s|>|\\{|\\[|$)",
+        RegexOption.IGNORE_CASE,
+    )
+    private val protocolCanonicalNames = listOf(
+        "INTERMIXACTION",
+        "INTERACTION",
+        "INTERMIXEXEC",
+        "INTERMIXCALC",
+        "INTERMIXSTORY",
+        "MEMORYUPDATE",
+        "PROFILEUPDATE",
     )
 
     /** Exact wire contract injected into every native turn. */
@@ -157,6 +174,10 @@ object ControllerProtocol {
     /** Compact ordinary-chat contract. The immutable runtime instruction already owns identity. */
     fun chatPromptContract(): String = """
         [COMPACT ANDROID CONTROLLER PROTOCOL]
+        Default to visible Markdown prose. For ordinary conversation, memory recall, summaries,
+        explanations, or planning, do not emit, quote, imitate, or discuss any controller tag.
+        Emit a private controller payload only when the current request genuinely requires that
+        exact typed operation; recalling stored context never requires a tool action.
         Never invent tool results or claim access outside the connected workspace.
         For one read, emit <INTERMIX_ACTION>{"kind":"list_files|read_file","path":"relative/path"}</INTERMIX_ACTION>.
         For one requested write, emit kind create_file, write_file, or create_directory with a
@@ -204,35 +225,66 @@ object ControllerProtocol {
     """.trimIndent()
 
     fun visibleStreamingText(raw: String): String {
-        val completeMarker = buildList {
-            addAll(openMarkers.map(raw::indexOf).filter { it >= 0 })
-            workspaceOpenPattern.find(raw)?.range?.first?.let(::add)
-        }.minOrNull()
+        val completeMarker = firstProtocolMarkerIndex(raw)
         if (completeMarker != null) return raw.substring(0, completeMarker)
 
-        val withheld = (openMarkers + listOf("<INTERMIXACTION>", "<INTERMIX-ACTION>"))
-            .maxOf { marker -> longestMarkerPrefixAtEnd(raw, marker) }
+        val withheld = maxOf(
+            (openMarkers + listOf("<INTERMIXACTION>", "<INTERMIX-ACTION>"))
+                .maxOf { marker -> longestMarkerPrefixAtEnd(raw, marker) },
+            trailingProtocolPrefixLength(raw),
+        )
         return if (withheld == 0) raw else raw.dropLast(withheld)
     }
 
     fun parse(raw: String): ControllerProtocolResult {
-        val firstMarker = buildList {
-            addAll(openMarkers.map(raw::indexOf).filter { it >= 0 })
-            workspaceOpenPattern.find(raw)?.range?.first?.let(::add)
-        }.minOrNull()
+        val firstMarker = firstProtocolMarkerIndex(raw)
         val visible = (firstMarker?.let(raw::substring) ?: raw).trim()
+        val workspaceAction = extractWorkspaceJson(raw)?.let(::parseWorkspaceAction)
+        val executionAction = extractJson(raw, ExecutionActionOpenMarker, ExecutionActionCloseMarker)
+            ?.let(::parseExecutionAction)
+        val calculationAction = extractJson(raw, CalculationOpenMarker, CalculationCloseMarker)
+            ?.let(::parseCalculationAction)
+        val storyChapter = extractStoryChapter(raw)
+        val memoryPayload = extractJson(raw, MemoryUpdateOpenMarker, MemoryUpdateCloseMarker)
+        val profilePayload = extractJson(raw, ProfileUpdateOpenMarker, ProfileUpdateCloseMarker)
+        val parsedPayload = workspaceAction != null || executionAction != null ||
+            calculationAction != null || storyChapter != null || memoryPayload != null ||
+            profilePayload != null
         return ControllerProtocolResult(
             visibleText = visible,
-            workspaceAction = extractWorkspaceJson(raw)
-                ?.let(::parseWorkspaceAction),
-            executionAction = extractJson(raw, ExecutionActionOpenMarker, ExecutionActionCloseMarker)
-                ?.let(::parseExecutionAction),
-            calculationAction = extractJson(raw, CalculationOpenMarker, CalculationCloseMarker)
-                ?.let(::parseCalculationAction),
-            storyChapter = extractStoryChapter(raw),
-            memoryPayload = extractJson(raw, MemoryUpdateOpenMarker, MemoryUpdateCloseMarker),
-            profilePayload = extractJson(raw, ProfileUpdateOpenMarker, ProfileUpdateCloseMarker),
+            workspaceAction = workspaceAction,
+            executionAction = executionAction,
+            calculationAction = calculationAction,
+            storyChapter = storyChapter,
+            memoryPayload = memoryPayload,
+            profilePayload = profilePayload,
+            malformedProtocolSuffix = firstMarker != null && !parsedPayload,
         )
+    }
+
+    private fun firstProtocolMarkerIndex(raw: String): Int? = buildList {
+        addAll(openMarkers.map(raw::indexOf).filter { it >= 0 })
+        workspaceOpenPattern.find(raw)?.range?.first?.let(::add)
+        protocolLikeStartPattern.find(raw)?.range?.first?.let(::add)
+    }.minOrNull()
+
+    /** Withhold split or misspelled marker prefixes before they can flash in visible streaming. */
+    private fun trailingProtocolPrefixLength(raw: String): Int {
+        val start = raw.lastIndexOf('<')
+        if (start < 0) return 0
+        val tail = raw.substring(start)
+        if ('>' in tail) return 0
+        var candidate = tail.drop(1).trimStart()
+        if (candidate.startsWith('/')) candidate = candidate.drop(1).trimStart()
+        val canonical = candidate
+            .takeWhile { it.isLetter() || it == '_' || it == '-' || it.isWhitespace() }
+            .filterNot { it == '_' || it == '-' || it.isWhitespace() }
+            .uppercase()
+        return if (canonical.isEmpty() || protocolCanonicalNames.any { it.startsWith(canonical) }) {
+            tail.length
+        } else {
+            0
+        }
     }
 
     private fun extractWorkspaceJson(raw: String): JSONObject? {
@@ -337,7 +389,7 @@ object ControllerProtocol {
     private fun longestMarkerPrefixAtEnd(raw: String, marker: String): Int {
         val maximum = minOf(raw.length, marker.length - 1)
         for (length in maximum downTo 1) {
-            if (raw.regionMatches(raw.length - length, marker, 0, length)) return length
+            if (raw.regionMatches(raw.length - length, marker, 0, length, ignoreCase = true)) return length
         }
         return 0
     }

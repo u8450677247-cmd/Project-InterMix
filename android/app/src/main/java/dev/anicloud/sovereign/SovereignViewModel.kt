@@ -32,6 +32,7 @@ private const val StreamUiPublishMillis = 90L
 private const val MaxControllerCycles = 3
 private const val MaxMissionControllerCycles = 121
 private const val MaxMissionNoActionRetries = 4
+private const val MaxMalformedProtocolRecoveries = 1
 private const val RecentRecallPromptCharacters = 3_200
 private const val NpuMemoryReleasePollMillis = 250L
 private const val NpuMemoryReleasePollAttempts = 5
@@ -447,6 +448,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                 var previousActionSignature: String? = null
                 var consecutiveToolFailures = 0
                 var consecutiveMissionNoAction = 0
+                var malformedProtocolRecoveries = 0
 
                 val controllerLimit = if (mission == null) MaxControllerCycles else MaxMissionControllerCycles
                 while (controllerCycle < controllerLimit) {
@@ -471,6 +473,29 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                     inferenceCycle++
                     val parsed = ControllerProtocol.parse(raw)
+                    if (
+                        mission == null && parsed.malformedProtocolSuffix &&
+                        parsed.visibleText.isBlank() &&
+                        malformedProtocolRecoveries < MaxMalformedProtocolRecoveries
+                    ) {
+                        malformedProtocolRecoveries++
+                        val rebuilt = buildTurnPrompt(effectivePrompt, userMessage.id, effectiveMode)
+                        request = buildString {
+                            appendLine(rebuilt)
+                            appendLine()
+                            appendLine("[CONTROLLER CORRECTION]")
+                            appendLine("The prior generation returned only an invalid private envelope.")
+                            appendLine("Answer the current request once in visible Markdown prose only.")
+                            appendLine("Do not emit, quote, imitate, or explain any controller tag.")
+                        }
+                        _state.update {
+                            it.copy(
+                                detail = "Malformed private envelope withheld · retrying visible answer once",
+                                streamText = "",
+                            )
+                        }
+                        continue
+                    }
                     val storyMission = mission?.takeIf {
                         it.planKind == StoryForgeMissionKind && it.status == AgentMissionStatus.Running
                     }
