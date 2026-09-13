@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://project-intermix.invalid/schemas/threshold-context-v1.schema.json",
+  "title": "Threshold Context Snapshot v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema",
+    "generatedAt",
+    "civil",
+    "sacred",
+    "moon",
+    "seasons",
+    "consent"
+  ],
+  "properties": {
+    "schema": {
+      "const": "threshold.context.v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "civil": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instant", "zoneId", "localDate"],
+      "properties": {
+        "instant": { "type": "string", "format": "date-time" },
+        "zoneId": { "type": "string", "minLength": 1 },
+        "localDate": { "type": "string", "format": "date" }
+      }
+    },
+    "sacred": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["year", "kind", "provenance"],
+      "properties": {
+        "year": { "type": "integer" },
+        "kind": {
+          "enum": ["COUNTED_DAY", "THRESHOLD_DAY", "DRIFT_DAY"]
+        },
+        "chamber": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "maximum": 13
+        },
+        "day": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "maximum": 28
+        },
+        "weekday": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "maximum": 7
+        },
+        "outsideTimeIndex": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        },
+        "provenance": { "const": "CALENDAR_CALCULATION" }
+      }
+    },
+    "moon": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phase", "illumination", "trend", "provenance"],
+      "properties": {
+        "phase": {
+          "enum": [
+            "NEW",
+            "WAXING_CRESCENT",
+            "FIRST_QUARTER",
+            "WAXING_GIBBOUS",
+            "FULL",
+            "WANING_GIBBOUS",
+            "THIRD_QUARTER",
+            "WANING_CRESCENT"
+          ]
+        },
+        "illumination": { "type": "number", "minimum": 0, "maximum": 1 },
+        "trend": { "enum": ["WAXING", "WANING", "TURNING"] },
+        "phaseAngleDegrees": {
+          "type": "number",
+          "minimum": 0,
+          "exclusiveMaximum": 360
+        },
+        "provenance": { "const": "ASTRONOMICAL_CALCULATION" }
+      }
+    },
+    "seasons": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin", "present"],
+      "properties": {
+        "origin": { "$ref": "#/$defs/seasonFrame" },
+        "present": {
+          "oneOf": [
+            { "$ref": "#/$defs/seasonFrame" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "observations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/observation" }
+    },
+    "interpretations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/interpretation" }
+    },
+    "consent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "expiresAt"],
+      "properties": {
+        "scope": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "CIVIL_TIME",
+              "SACRED_TIME",
+              "MOON",
+              "ORIGIN_SEASON",
+              "PRESENT_SEASON",
+              "OBSERVATIONS",
+              "INTERPRETATIONS"
+            ]
+          }
+        },
+        "expiresAt": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "seasonFrame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["zoneId", "latitude", "longitude", "solarLongitudeDegrees", "provenance"],
+      "properties": {
+        "zoneId": { "type": "string", "minLength": 1 },
+        "latitude": { "type": "number", "minimum": -90, "maximum": 90 },
+        "longitude": { "type": "number", "minimum": -180, "maximum": 180 },
+        "solarLongitudeDegrees": {
+          "type": "number",
+          "minimum": 0,
+          "exclusiveMaximum": 360
+        },
+        "daylightSeconds": { "type": ["integer", "null"], "minimum": 0 },
+        "provenance": { "const": "ASTRONOMICAL_CALCULATION" }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "recordedAt", "provenance"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 },
+        "recordedAt": { "type": "string", "format": "date-time" },
+        "value": {},
+        "provenance": {
+          "enum": ["USER_DECLARED", "DEVICE_OBSERVED"]
+        }
+      }
+    },
+    "interpretation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "evidenceIds", "confidence", "provenance"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 },
+        "evidenceIds": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "provenance": { "const": "MODEL_INFERENCE" }
+      }
+    }
+  }
+}
