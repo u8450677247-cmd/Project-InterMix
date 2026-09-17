@@ -18,6 +18,30 @@ The first community APK must already be signed by the long-lived production Andr
 Android will not update an APK signed by a different identity. Keep that APK private key and the
 separate Ed25519 manifest key in protected CI secret storage with recovery copies offline.
 
+### CI signing isolation
+
+The Android workflow deliberately separates compilation from signing:
+
+1. Push and pull-request jobs check out source, run repository code, test, assemble, and upload a
+   candidate bundle without receiving any signing secret.
+2. Dogfood signing runs only after an explicit `workflow_dispatch` with `sign_dogfood=true`.
+3. That job enters the `dogfood-signing` GitHub environment, which must have at least one required
+   reviewer. For the one-person lane, self-approval may remain enabled so this is a deliberate
+   release checkpoint rather than a second-person dependency.
+4. The signing runner never checks out repository code. It downloads the exact candidate artifact
+   ID produced by its required build job, accepts only the four expected bounded files, and verifies
+   run ID, commit, and SHA-256 before the key becomes available.
+5. Every external GitHub Action is pinned to a full commit SHA. Signing material is scoped only to
+   the signing step, removed before the signed artifact uploader runs, and never enters the DS215j.
+
+Before initializing the dogfood identity, create **Settings → Environments → dogfood-signing** and
+add the repository owner as a required reviewer. Then run
+`tools/termux_dogfood_update.sh --initialize-key`. The helper refuses an unprotected environment,
+stores the two signing values as environment secrets, deletes same-named repository-level secrets,
+and dispatches the protected job. Do not leave fallback signing-key copies in repository or
+organization secrets: another workflow could otherwise request them without crossing the
+environment approval gate.
+
 ## Pinned build values
 
 The protected build supplies three public values. An all-empty configuration disables checks;

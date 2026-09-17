@@ -2,9 +2,10 @@
 set -euo pipefail
 
 # Bootstrap one private dogfood identity with native OpenSSL, store its encoded
-# signing inputs as GitHub Actions secrets, and fetch APKs signed by CI. This
-# avoids Android 17's incompatible Termux Java signing tools. Key material is
-# never committed, printed, or placed in Android shared storage.
+# signing inputs only in a reviewer-protected GitHub environment, and fetch APKs
+# signed by the isolated CI job. This avoids Android 17's incompatible Termux
+# Java signing tools. Key material is never committed, printed, or placed in
+# Android shared storage.
 
 repo="${ANICLOUD_GITHUB_REPOSITORY:-u8450677247-cmd/Project-InterMix}"
 script_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,6 +17,7 @@ fi
 branch="${ANICLOUD_DOGFOOD_BRANCH:-${detected_branch:-feature/anicloud-cockpit-convergence-20260907}}"
 workflow="${ANICLOUD_ANDROID_WORKFLOW:-android-foundation.yml}"
 artifact="${ANICLOUD_ANDROID_ARTIFACT:-AniCloudAI-e4b-cockpit-dogfood}"
+signing_environment="${ANICLOUD_DOGFOOD_ENVIRONMENT:-dogfood-signing}"
 key_root="${ANICLOUD_DOGFOOD_KEY_DIR:-$HOME/.local/share/anicloud-dogfood-signing}"
 private_key="$key_root/anicloud-dogfood.pk8"
 certificate="$key_root/anicloud-dogfood-cert.pem"
@@ -31,7 +33,8 @@ usage() {
         "  $0 [--open] [--branch NAME] [--run-id ID]" \
         "" \
         "Initialization generates the identity in Termux-private storage," \
-        "uploads encoded copies as GitHub Actions secrets, and starts CI." \
+        "uploads encoded copies only to the protected $signing_environment" \
+        "GitHub environment, removes repository-level copies, and starts CI." \
         "Back up both identity files securely; losing them prevents updates."
 }
 
@@ -82,6 +85,18 @@ if [[ "$initialize_key" == true ]]; then
             exit 1
         fi
     done
+
+    reviewer_count="$(
+        gh api "repos/$repo/environments/$signing_environment" \
+            --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length'
+    )"
+    if [[ ! "$reviewer_count" =~ ^[1-9][0-9]*$ ]]; then
+        printf '%s\n' \
+            "Refusing to upload signing material to an unprotected environment." \
+            "Create the GitHub environment '$signing_environment', add at least one required reviewer," \
+            "and allow that reviewer to approve their own deployment for this one-person release lane." >&2
+        exit 1
+    fi
 
     if [[ -f "$private_key" && -f "$certificate" ]]; then
         printf '%s\n' "Reusing the complete private dogfood identity in $key_root."
@@ -137,15 +152,35 @@ if [[ "$initialize_key" == true ]]; then
     test -n "$certificate_sha"
 
     base64 "$private_key" | tr -d '\n' |
-        gh secret set ANICLOUD_DOGFOOD_PRIVATE_KEY_B64 --repo "$repo"
+        gh secret set ANICLOUD_DOGFOOD_PRIVATE_KEY_B64 \
+            --repo "$repo" \
+            --env "$signing_environment"
     base64 "$certificate" | tr -d '\n' |
-        gh secret set ANICLOUD_DOGFOOD_CERTIFICATE_B64 --repo "$repo"
+        gh secret set ANICLOUD_DOGFOOD_CERTIFICATE_B64 \
+            --repo "$repo" \
+            --env "$signing_environment"
+
+    repository_secret_names="$(
+        gh secret list --repo "$repo" --json name --jq '.[].name'
+    )"
+    for secret_name in \
+        ANICLOUD_DOGFOOD_PRIVATE_KEY_B64 \
+        ANICLOUD_DOGFOOD_CERTIFICATE_B64
+    do
+        if grep -Fxq -- "$secret_name" <<< "$repository_secret_names"; then
+            gh secret delete "$secret_name" --repo "$repo"
+        fi
+    done
 
     printf '%s\n' \
-        "Persistent signing inputs uploaded as GitHub Actions secrets." \
+        "Persistent signing inputs moved to the protected $signing_environment environment." \
+        "Repository-level copies are absent." \
         "Signing certificate SHA-256: $certificate_sha" \
         "Starting $workflow on $branch."
-    gh workflow run "$workflow" --repo "$repo" --ref "$branch"
+    gh workflow run "$workflow" \
+        --repo "$repo" \
+        --ref "$branch" \
+        -f sign_dogfood=true
     printf '%s\n' \
         "CI was requested. Wait for it to finish, then run:" \
         "  $0 --open"
@@ -167,14 +202,27 @@ trap cleanup EXIT HUP INT TERM
 
 head_sha=""
 if [[ -z "$run_id" ]]; then
-    run_record="$(gh run list \
+    candidate_records="$(gh run list \
         --repo "$repo" \
         --workflow "$workflow" \
         --branch "$branch" \
         --status success \
-        --limit 1 \
+        --limit 30 \
         --json databaseId,headSha \
-        --jq 'if length == 0 then empty else .[0] | "\(.databaseId) \(.headSha)" end')"
+        --jq '.[] | [.databaseId, .headSha] | @tsv')"
+    run_record=""
+    while IFS=$'\t' read -r candidate_id candidate_sha; do
+        [[ "$candidate_id" =~ ^[0-9]+$ && "$candidate_sha" =~ ^[0-9a-f]{40}$ ]] || continue
+        artifact_names="$(gh api \
+            "repos/$repo/actions/runs/$candidate_id/artifacts" \
+            --paginate \
+            --jq '.artifacts[].name')"
+        if grep -Fxq -- "$artifact" <<< "$artifact_names"
+        then
+            run_record="$candidate_id $candidate_sha"
+            break
+        fi
+    done <<< "$candidate_records"
     [[ -n "$run_record" ]] || {
         latest_record="$(gh run list \
             --repo "$repo" \
@@ -185,8 +233,10 @@ if [[ -z "$run_id" ]]; then
             --jq 'if length == 0 then empty else .[0] | [.databaseId, .status, (.conclusion // "pending"), .url] | @tsv end')"
         if [[ -n "$latest_record" ]]; then
             read -r latest_id latest_status latest_conclusion latest_url <<< "$latest_record"
-            printf 'No successful %s run found on %s. Latest run %s is %s/%s: %s\n' \
+            printf 'No successful signed artifact found for %s on %s. Latest run %s is %s/%s: %s\n' \
                 "$workflow" "$branch" "$latest_id" "$latest_status" "$latest_conclusion" "$latest_url" >&2
+            printf '%s\n' \
+                "Dispatch the workflow with sign_dogfood=true and approve the protected environment." >&2
         else
             printf 'No %s run found on %s. Push an Android change or dispatch the workflow first.\n' \
                 "$workflow" "$branch" >&2

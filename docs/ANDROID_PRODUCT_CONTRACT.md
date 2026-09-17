@@ -260,15 +260,20 @@ to fully opaque surfaces without losing controls or truth.
 ### Private dogfood update channel
 
 During native development, Termux may act as the deliberate update console. It
-downloads only a successful GitHub Actions artifact from the configured branch,
-records its commit and SHA-256, signs it with one persistent Termux-private
-dogfood key, verifies the resulting APK, and opens Android's visible package
-installer only when requested. It cannot silently install or downgrade the app.
+creates and retains one persistent Termux-private dogfood identity, but APK
+signing occurs only in the reviewer-protected `dogfood-signing` GitHub
+environment. Ordinary build and pull-request jobs receive no key. Termux
+downloads only a successful run that actually contains the protected signed
+artifact, verifies its commit, APK SHA-256, and signing identity, and opens
+Android's visible package installer only when requested. It cannot silently
+install or downgrade the app.
 
-The dogfood key never enters the repository, APK artifact, diagnostic export, or
-chat transcript. Losing that key ends seamless updates for that private install;
-the user must therefore make an intentional secure backup. Public releases use
-a separately governed release key and signed checksum manifest.
+The dogfood key never enters repository-level secrets, repository code, the APK
+artifact, diagnostic export, NAS, or chat transcript. The protected signing job
+never checks out repository code, and every external action is immutable-SHA
+pinned. Losing that key ends seamless updates for that private install; the user
+must therefore make an intentional secure backup. Public releases use a
+separately governed release key and signed checksum manifest.
 
 ### Deferred: Palette Lab guided generative theming
 

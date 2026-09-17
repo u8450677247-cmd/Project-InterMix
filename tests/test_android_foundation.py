@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -764,21 +765,45 @@ class AndroidFoundationTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, contract)
 
-    def test_android_workflow_retains_debug_and_persistent_dogfood_apks(self):
+    def test_android_workflow_isolates_and_protects_dogfood_signing(self):
         workflow = (ROOT / ".github/workflows/android-foundation.yml").read_text(
             encoding="utf-8"
         )
         self.assertIn('"feature/anicloud-*"', workflow)
         self.assertIn('sdkmanager "platforms;android-36"', workflow)
         self.assertNotIn("--channel=3", workflow)
-        self.assertIn("actions/checkout@v7", workflow)
-        self.assertIn("actions/setup-java@v6", workflow)
-        self.assertIn("gradle/actions/setup-gradle@v6", workflow)
-        self.assertIn("actions/upload-artifact@v7", workflow)
+        self.assertIn(
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            workflow,
+        )
+        self.assertIn(
+            "actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6",
+            workflow,
+        )
+        self.assertIn(
+            "gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb",
+            workflow,
+        )
+        self.assertIn(
+            "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+            workflow,
+        )
         self.assertIn("AniCloudAI-e4b-cockpit-debug", workflow)
-        self.assertIn("app-debug.apk", workflow)
-        self.assertIn("ANICLOUD_DOGFOOD_PRIVATE_KEY_B64", workflow)
-        self.assertIn("ANICLOUD_DOGFOOD_CERTIFICATE_B64", workflow)
+        self.assertIn("AniCloudAI-Sovereign-candidate.apk", workflow)
+        build_job, signing_job = workflow.split("\n  dogfood-signing:", maxsplit=1)
+        self.assertNotIn("ANICLOUD_DOGFOOD_PRIVATE_KEY_B64", build_job)
+        self.assertNotIn("ANICLOUD_DOGFOOD_CERTIFICATE_B64", build_job)
+        self.assertIn("github.event_name == 'workflow_dispatch'", signing_job)
+        self.assertIn("inputs.sign_dogfood", signing_job)
+        self.assertIn("name: dogfood-signing", signing_job)
+        self.assertIn("required_reviewers", signing_job)
+        self.assertNotIn("actions/checkout@", signing_job)
+        self.assertIn("ANICLOUD_DOGFOOD_PRIVATE_KEY_B64", signing_job)
+        self.assertIn("ANICLOUD_DOGFOOD_CERTIFICATE_B64", signing_job)
+        self.assertIn("candidate_artifact_id", signing_job)
+        self.assertIn("actions/artifacts/$CANDIDATE_ARTIFACT_ID/zip", signing_job)
+        self.assertIn("unexpected candidate artifact members", signing_job)
+        self.assertIn("$GITHUB_RUN_ID", signing_job)
         self.assertIn('"$signer" sign', workflow)
         self.assertIn('"$signer" verify --verbose --print-certs', workflow)
         self.assertIn("AniCloudAI-e4b-cockpit-dogfood", workflow)
@@ -806,6 +831,10 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("openssl pkcs8", updater)
         self.assertIn("gh secret set ANICLOUD_DOGFOOD_PRIVATE_KEY_B64", updater)
         self.assertIn("gh secret set ANICLOUD_DOGFOOD_CERTIFICATE_B64", updater)
+        self.assertIn('--env "$signing_environment"', updater)
+        self.assertIn("required_reviewers", updater)
+        self.assertIn('gh secret delete "$secret_name" --repo "$repo"', updater)
+        self.assertIn("sign_dogfood=true", updater)
         self.assertIn("AniCloudAI-e4b-cockpit-dogfood", updater)
         self.assertIn("symbolic-ref --quiet --short HEAD", updater)
         self.assertIn("ANICLOUD_DOGFOOD_BRANCH", updater)
@@ -821,6 +850,17 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertNotIn("keytool", updater)
         self.assertNotIn("apksigner", updater)
         self.assertNotIn("storepass pass:", updater)
+
+    def test_all_workflow_actions_are_pinned_to_full_commit_shas(self):
+        uses = re.compile(r"^\s*uses:\s*[^@\s]+@([0-9a-f]{40})(?:\s+#.*)?$")
+        for workflow_path in sorted((ROOT / ".github/workflows").glob("*.yml")):
+            for line_number, line in enumerate(
+                workflow_path.read_text(encoding="utf-8").splitlines(), start=1
+            ):
+                if "uses:" not in line:
+                    continue
+                with self.subTest(workflow=workflow_path.name, line=line_number):
+                    self.assertRegex(line, uses)
 
 
 if __name__ == "__main__":

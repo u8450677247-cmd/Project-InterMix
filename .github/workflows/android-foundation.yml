@@ -20,6 +20,12 @@ on:
       - "docs/ANDROID_INTERACTION_PROFILE.md"
       - ".github/workflows/android-foundation.yml"
   workflow_dispatch:
+    inputs:
+      sign_dogfood:
+        description: Sign the tested candidate in the protected dogfood environment
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -33,19 +39,21 @@ jobs:
     name: Native E4B cockpit · JDK 17
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      candidate_artifact_id: ${{ steps.upload-candidate.outputs.artifact-id }}
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Set up pinned Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
           gradle-version: "9.4.1"
 
@@ -73,28 +81,141 @@ jobs:
           --no-daemon
           --stacktrace
 
-      - name: Detect persistent dogfood signing identity
-        id: dogfood-signing
+      - name: Stage the exact unprivileged candidate and provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_apk="$GITHUB_WORKSPACE/android/app/build/outputs/apk/debug/app-debug.apk"
+          candidate_root="$RUNNER_TEMP/anicloud-candidate"
+          candidate_name="AniCloudAI-Sovereign-candidate.apk"
+          mkdir -p "$candidate_root"
+          install -m 600 "$source_apk" "$candidate_root/$candidate_name"
+          (
+            cd "$candidate_root"
+            sha256sum "$candidate_name" > "$candidate_name.sha256"
+          )
+          printf '%s\n' "$GITHUB_SHA" > "$candidate_root/commit.txt"
+          printf '%s\n' "$GITHUB_RUN_ID" > "$candidate_root/run-id.txt"
+
+      - name: Retain the adaptive cockpit candidate
+        id: upload-candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: AniCloudAI-e4b-cockpit-debug
+          path: ${{ runner.temp }}/anicloud-candidate/
+          if-no-files-found: error
+          retention-days: 7
+
+  dogfood-signing:
+    name: Protected persistent dogfood signing
+    needs: native-shell
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_dogfood }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: dogfood-signing
+    permissions:
+      actions: read
+      contents: read
+
+    steps:
+      - name: Confirm the signing environment has a required reviewer
         shell: bash
         env:
-          DOGFOOD_PRIVATE_KEY_B64: ${{ secrets.ANICLOUD_DOGFOOD_PRIVATE_KEY_B64 }}
-          DOGFOOD_CERTIFICATE_B64: ${{ secrets.ANICLOUD_DOGFOOD_CERTIFICATE_B64 }}
+          GH_TOKEN: ${{ github.token }}
+          SIGNING_ENVIRONMENT: dogfood-signing
         run: |
-          if [[ -n "$DOGFOOD_PRIVATE_KEY_B64" && -n "$DOGFOOD_CERTIFICATE_B64" ]]; then
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Persistent dogfood signing secrets are not configured; retaining only the CI debug artifact."
+          set -euo pipefail
+          reviewer_count="$(
+            gh api "repos/$GITHUB_REPOSITORY/environments/$SIGNING_ENVIRONMENT" \
+              --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length'
+          )"
+          if [[ ! "$reviewer_count" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::The dogfood-signing environment must have at least one required reviewer."
+            exit 1
           fi
 
-      - name: Sign the persistent dogfood APK
-        if: steps.dogfood-signing.outputs.configured == 'true'
+      - name: Download and verify the exact candidate artifact
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_ARTIFACT_ID: ${{ needs.native-shell.outputs.candidate_artifact_id }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_ARTIFACT_ID" =~ ^[0-9]+$ ]]
+          candidate_root="$RUNNER_TEMP/anicloud-candidate"
+          candidate_zip="$RUNNER_TEMP/anicloud-candidate.zip"
+          mkdir -p "$candidate_root"
+          gh api \
+            "repos/$GITHUB_REPOSITORY/actions/artifacts/$CANDIDATE_ARTIFACT_ID/zip" \
+            > "$candidate_zip"
+          python3 - "$candidate_zip" "$candidate_root" <<'PY'
+          from pathlib import Path, PurePosixPath
+          import shutil
+          import stat
+          import sys
+          import zipfile
+
+          archive = Path(sys.argv[1])
+          destination = Path(sys.argv[2])
+          expected = {
+              "AniCloudAI-Sovereign-candidate.apk": 512 * 1024 * 1024,
+              "AniCloudAI-Sovereign-candidate.apk.sha256": 512,
+              "commit.txt": 128,
+              "run-id.txt": 64,
+          }
+          with zipfile.ZipFile(archive) as source:
+              members = [member for member in source.infolist() if not member.is_dir()]
+              names = {member.filename for member in members}
+              if names != set(expected) or len(members) != len(expected):
+                  raise SystemExit(f"unexpected candidate artifact members: {sorted(names)!r}")
+              for member in members:
+                  path = PurePosixPath(member.filename)
+                  mode = (member.external_attr >> 16) & 0o170000
+                  if path.name != member.filename or stat.S_ISLNK(mode):
+                      raise SystemExit(f"unsafe candidate artifact member: {member.filename!r}")
+                  if member.file_size <= 0 or member.file_size > expected[member.filename]:
+                      raise SystemExit(f"invalid candidate member size: {member.filename!r}")
+                  target = destination / member.filename
+                  with source.open(member) as read_from, target.open("xb") as write_to:
+                      shutil.copyfileobj(read_from, write_to, length=1024 * 1024)
+                  if target.stat().st_size != member.file_size:
+                      raise SystemExit(f"truncated candidate member: {member.filename!r}")
+          PY
+          [[ "$(tr -d '[:space:]' < "$candidate_root/commit.txt")" == "$GITHUB_SHA" ]]
+          [[ "$(tr -d '[:space:]' < "$candidate_root/run-id.txt")" == "$GITHUB_RUN_ID" ]]
+          (
+            cd "$candidate_root"
+            sha256sum -c AniCloudAI-Sovereign-candidate.apk.sha256
+          )
+
+      - name: Resolve Android signing tools without repository code
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          sdkmanager_dir="$sdk_root/cmdline-tools/latest/bin"
+          test -x "$sdkmanager_dir/sdkmanager"
+          set +o pipefail
+          yes 2>/dev/null | "$sdkmanager_dir/sdkmanager" --licenses >/dev/null
+          license_status="${PIPESTATUS[1]}"
+          set -o pipefail
+          [[ "$license_status" -eq 0 ]]
+          "$sdkmanager_dir/sdkmanager" "build-tools;36.0.0"
+          test -x "$sdk_root/build-tools/36.0.0/apksigner"
+
+      - name: Sign and verify the persistent dogfood APK
         shell: bash
         env:
           DOGFOOD_PRIVATE_KEY_B64: ${{ secrets.ANICLOUD_DOGFOOD_PRIVATE_KEY_B64 }}
           DOGFOOD_CERTIFICATE_B64: ${{ secrets.ANICLOUD_DOGFOOD_CERTIFICATE_B64 }}
         run: |
           set -euo pipefail
+          if [[ -z "${DOGFOOD_PRIVATE_KEY_B64:-}" || -z "${DOGFOOD_CERTIFICATE_B64:-}" ]]; then
+            echo "::error::Protected dogfood signing secrets are not configured."
+            exit 1
+          fi
+
           signing_root="$(mktemp -d "$RUNNER_TEMP/anicloud-signing.XXXXXX")"
           private_key="$signing_root/anicloud-dogfood.pk8"
           certificate="$signing_root/anicloud-dogfood-cert.pem"
@@ -108,12 +229,21 @@ jobs:
           printf '%s' "$DOGFOOD_CERTIFICATE_B64" | base64 --decode > "$certificate"
           chmod 600 "$private_key" "$certificate"
 
+          private_public_sha="$(
+            openssl pkey -inform DER -in "$private_key" -pubout -outform DER |
+              sha256sum | awk '{print $1}'
+          )"
+          certificate_public_sha="$(
+            openssl x509 -in "$certificate" -pubkey -noout |
+              openssl pkey -pubin -outform DER |
+              sha256sum | awk '{print $1}'
+          )"
+          [[ "$private_public_sha" == "$certificate_public_sha" ]]
+
           sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
           signer="$sdk_root/build-tools/36.0.0/apksigner"
-          test -x "$signer"
-
-          source_apk="$GITHUB_WORKSPACE/android/app/build/outputs/apk/debug/app-debug.apk"
-          output_root="$GITHUB_WORKSPACE/android/app/build/outputs/apk/dogfood"
+          source_apk="$RUNNER_TEMP/anicloud-candidate/AniCloudAI-Sovereign-candidate.apk"
+          output_root="$RUNNER_TEMP/anicloud-dogfood"
           output_name="AniCloudAI-Sovereign-dogfood.apk"
           output_apk="$output_root/$output_name"
           mkdir -p "$output_root"
@@ -125,35 +255,27 @@ jobs:
             "$source_apk"
           "$signer" verify --verbose --print-certs "$output_apk"
 
-          certificate_sha="$(
+          mapfile -t certificate_shas < <(
             "$signer" verify --print-certs "$output_apk" |
-              awk -F': ' '/Signer #1 certificate SHA-256 digest:/ {print $2; exit}'
-          )"
-          test -n "$certificate_sha"
+              awk -F': ' '/Signer #[0-9]+ certificate SHA-256 digest:/ {print tolower($2)}'
+          )
+          [[ "${#certificate_shas[@]}" -eq 1 ]]
+          [[ "${certificate_shas[0]}" =~ ^[0-9a-f]{64}$ ]]
           (
             cd "$output_root"
             sha256sum "$output_name" > "$output_name.sha256"
           )
-          printf '%s\n' "$certificate_sha" > "$output_root/certificate-sha256.txt"
+          printf '%s\n' "${certificate_shas[0]}" > "$output_root/certificate-sha256.txt"
           printf '%s\n' "$GITHUB_SHA" > "$output_root/commit.txt"
 
-      - name: Retain the adaptive cockpit debug APK
-        uses: actions/upload-artifact@v7
-        with:
-          name: AniCloudAI-e4b-cockpit-debug
-          path: android/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-          retention-days: 7
-
       - name: Retain the persistently signed dogfood APK
-        if: steps.dogfood-signing.outputs.configured == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: AniCloudAI-e4b-cockpit-dogfood
           path: |
-            android/app/build/outputs/apk/dogfood/AniCloudAI-Sovereign-dogfood.apk
-            android/app/build/outputs/apk/dogfood/AniCloudAI-Sovereign-dogfood.apk.sha256
-            android/app/build/outputs/apk/dogfood/certificate-sha256.txt
-            android/app/build/outputs/apk/dogfood/commit.txt
+            ${{ runner.temp }}/anicloud-dogfood/AniCloudAI-Sovereign-dogfood.apk
+            ${{ runner.temp }}/anicloud-dogfood/AniCloudAI-Sovereign-dogfood.apk.sha256
+            ${{ runner.temp }}/anicloud-dogfood/certificate-sha256.txt
+            ${{ runner.temp }}/anicloud-dogfood/commit.txt
           if-no-files-found: error
           retention-days: 30
