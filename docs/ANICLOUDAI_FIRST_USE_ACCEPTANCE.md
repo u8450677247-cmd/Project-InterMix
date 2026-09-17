@@ -80,9 +80,17 @@ Use **Balanced** unless a step names another mode.
    **COPY ALL** and verify the whole card is copied.
 7. Move through Home, Matrix, Files, Agents, and System, then return to Chat. The transcript and draft
    must remain intact.
-8. Resize through portrait, landscape, split-screen, free-form, and desktop mode. No message or Send,
-   STOP, mode, or navigation control may become unreachable.
-9. Swipe AniCloudAI out of Recents, reopen it, authenticate, and ask: `What codename did I give you?`
+8. In Pixel desktop mode, leave Android's status area, taskbar/navigation bar, app title, and window
+   controls visible. Record both the physical display size and the smaller usable app bounds. The
+   cockpit must consume those system insets instead of drawing controls behind them.
+9. Resize through portrait, landscape, split-screen, free-form, maximized desktop, and restored
+   desktop windows. Chat and System Lens must scroll independently; when usable height or width is
+   insufficient, secondary panels must compact or collapse rather than making message, Send, STOP,
+   mode, file, or navigation controls unreachable.
+10. During one long Quality turn, move, resize, minimize, and restore the free-form window. The
+    foreground inference service must keep one generation alive without duplicating or losing the
+    partial response.
+11. Swipe AniCloudAI out of Recents, reopen it, authenticate, and ask: `What codename did I give you?`
    Both the visible transcript and bounded recent-turn recall must survive.
 
 ## Flight D — mode, numbers, cancellation, and sessions
@@ -176,6 +184,7 @@ Conversation continuity: PASS / FAIL
 Sentence copy / COPY ALL: PASS / FAIL
 STOP and clean recovery: PASS / FAIL
 Session restart: PASS / FAIL
+Desktop/free-form system insets and live window move: PASS / FAIL
 Workspace picker / New folder / Up / Root: PASS / FAIL
 Approval deny / approve: PASS / FAIL
 Trash cancel / move / undo: PASS / FAIL
