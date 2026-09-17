@@ -25,8 +25,8 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("compileSdk = 36", app_build)
         self.assertIn("targetSdk = 36", app_build)
         self.assertIn("minSdk = 31", app_build)
-        self.assertIn("versionCode = 22", app_build)
-        self.assertIn('versionName = "0.8.11-scoped-autonomy"', app_build)
+        self.assertIn("versionCode = 23", app_build)
+        self.assertIn('versionName = "0.8.12-release-origin"', app_build)
         self.assertIn("jniLibs.useLegacyPackaging = true", app_build)
         self.assertIn("compose-bom:2026.03.01", app_build)
         self.assertIn('abiFilters += "arm64-v8a"', app_build)
@@ -39,6 +39,7 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn(
             'kotlinx-coroutines-core-jvm:1.11.0', app_build
         )
+        self.assertIn('androidx.work:work-runtime-ktx:2.11.2', app_build)
         self.assertNotIn('kotlinx-coroutines-android:1.9.0', app_build)
 
     def test_manifest_declares_biometric_and_visible_inference_service(self):
@@ -53,8 +54,11 @@ class AndroidFoundationTests(unittest.TestCase):
             permissions,
             {
                 "android.permission.USE_BIOMETRIC",
+                "android.permission.INTERNET",
                 "android.permission.POST_NOTIFICATIONS",
+                "android.permission.REQUEST_INSTALL_PACKAGES",
                 "android.permission.FOREGROUND_SERVICE",
+                "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
                 "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
                 "com.termux.permission.RUN_COMMAND",
             },
@@ -62,7 +66,27 @@ class AndroidFoundationTests(unittest.TestCase):
         services = root.findall("application/service")
         self.assertEqual(
             {service.attrib[android_name] for service in services},
-            {".InferenceForegroundService", ".TermuxExecutionResultService"},
+            {
+                ".InferenceForegroundService",
+                ".TermuxExecutionResultService",
+                "androidx.work.impl.foreground.SystemForegroundService",
+            },
+        )
+        application = root.find("application")
+        self.assertEqual(application.attrib[android_name], ".IntermixApplication")
+        receiver = root.find("application/receiver")
+        self.assertEqual(receiver.attrib[android_name], ".UpdateInstallReceiver")
+        self.assertEqual(
+            receiver.attrib["{http://schemas.android.com/apk/res/android}exported"],
+            "false",
+        )
+        self.assertEqual(
+            application.attrib["{http://schemas.android.com/apk/res/android}usesCleartextTraffic"],
+            "false",
+        )
+        self.assertEqual(
+            application.attrib["{http://schemas.android.com/apk/res/android}networkSecurityConfig"],
+            "@xml/network_security_config",
         )
         queries = root.find("queries")
         self.assertIsNotNone(queries)
@@ -139,7 +163,7 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("Backend.GPU()", runtime)
         self.assertIn("Backend.CPU()", runtime)
         self.assertIn("maxNumTokens = ContextPhysicalTokens", runtime)
-        self.assertIn("ContextOrchestrator.outputReserve(mode)", runtime)
+        self.assertIn("ContextOrchestrator.outputLimit(prompt, mode)", runtime)
         self.assertIn("sendMessageAsync", runtime)
         self.assertIn("callback = object : MessageCallback", runtime)
         self.assertIn("override fun onDone()", runtime)
@@ -460,8 +484,9 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("bottom = if (compact) 12.dp else 72.dp", ui)
         self.assertIn("keyboardVisible = WindowInsets.ime.getBottom(density) > 0", ui)
         self.assertIn("if (!keyboardVisible)", ui)
-        self.assertIn('AnswerMode.Performance -> "FAST · 1K"', ui)
-        self.assertIn('AnswerMode.Quality -> "DEEP · 2K"', ui)
+        self.assertIn('AnswerMode.Performance -> "SHORT · 1.5K"', ui)
+        self.assertIn('AnswerMode.Adaptive -> "BALANCED · 4K"', ui)
+        self.assertIn('AnswerMode.Quality -> "QUALITY · 8K"', ui)
         self.assertIn("RETURN = NEW LINE · TAP SEND TO SUBMIT", ui)
 
     def test_context_orchestrator_is_bounded_private_and_measured(self):
@@ -477,12 +502,12 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("fitHeadAndTail", orchestrator)
         self.assertIn("recordContextWindow", repository)
         self.assertIn("Records measurements only", repository)
-        self.assertIn("ContextOrchestrator.outputReserve(mode)", runtime)
+        self.assertIn("ContextOrchestrator.outputLimit(prompt, mode)", runtime)
         self.assertIn("privatePayload = lane == ContextLane.Story", view_model)
         self.assertIn("buildWorkspaceMissionPrompt", view_model)
         self.assertIn("buildStoryForgePrompt", view_model)
-        self.assertIn("TOKENS/CALL", ui)
-        self.assertIn("PER-CALL OUTPUT, NOT A DOCUMENT LIMIT", ui)
+        self.assertIn("FULL 8,000 CONTEXT", ui)
+        self.assertIn("QUALITY SHARES THE FULL 8K WINDOW", ui)
         self.assertIn("CONTEXT ORCHESTRATOR", ui)
         self.assertIn("20-POLICY PACK READY", ui)
 
@@ -575,14 +600,56 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn('"WAIT FOR SAFE BOUNDARY"', ui)
         self.assertIn('"APPROVE & WRITE"', ui)
 
-    def test_external_data_boundary_is_visible_and_offline_by_default(self):
+    def test_external_data_boundary_is_visible_and_updater_only(self):
         manifest = (APP / "src/main/AndroidManifest.xml").read_text(encoding="utf-8")
         ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
-        self.assertNotIn("android.permission.INTERNET", manifest)
+        self.assertIn("android.permission.INTERNET", manifest)
+        self.assertIn("android.permission.REQUEST_INSTALL_PACKAGES", manifest)
         self.assertIn("DataBoundaryCard", ui)
         self.assertIn("EXTERNAL DATA BOUNDARY", ui)
+        self.assertIn("only built-in network lane is the fail-closed release updater", ui)
+        self.assertIn("never sends prompts", ui)
         self.assertIn("Android does not show a runtime Internet permission dialog", ui)
         self.assertIn("API TOKEN VAULT · NOT ENABLED", ui)
+
+    def test_release_updater_is_pinned_resumable_and_locally_verified(self):
+        manifest = (SOURCE / "ReleaseManifest.kt").read_text(encoding="utf-8")
+        client = (SOURCE / "ReleaseOriginClient.kt").read_text(encoding="utf-8")
+        worker = (SOURCE / "ReleaseUpdateWorker.kt").read_text(encoding="utf-8")
+        installer = (SOURCE / "UpdateInstallReceiver.kt").read_text(encoding="utf-8")
+        checkpoint = (SOURCE / "UpdateCheckpointManager.kt").read_text(encoding="utf-8")
+        matrix = (SOURCE / "MemoryMatrixRepository.kt").read_text(encoding="utf-8")
+        scheduler = (SOURCE / "UpdateScheduler.kt").read_text(encoding="utf-8")
+        app_build = (APP / "build.gradle.kts").read_text(encoding="utf-8")
+        combined = manifest + client + worker + installer
+
+        self.assertIn('Signature.getInstance("Ed25519")', manifest)
+        self.assertIn('origin.scheme.equals("https"', manifest)
+        self.assertIn("instanceFollowRedirects = false", client)
+        self.assertIn("as HttpsURLConnection", client)
+        self.assertIn('setRequestProperty("User-Agent", "Intermix-Updater/1")', client)
+        self.assertIn('"channels/$ReleaseChannel/release.json"', client)
+        self.assertNotIn('"manifest.json.sig"', client)
+        self.assertIn('setRequestProperty("Range", "bytes=$offset-")', client)
+        self.assertIn("manifest.apkSha256", client)
+        self.assertIn("pinnedSignerSha256", client)
+        self.assertIn("canRequestPackageInstalls()", installer)
+        self.assertIn("USER_ACTION_REQUIRED", installer)
+        self.assertIn("STATUS_PENDING_USER_ACTION", installer)
+        self.assertIn("UpdateNotifications.installationAction", installer)
+        self.assertIn("UpdateCheckpointManager(applicationContext).create", worker)
+        self.assertIn("createUpdateCheckpoint", checkpoint + matrix)
+        self.assertIn("librarianIntegrityCheck", worker + matrix)
+        self.assertIn("NetworkType.UNMETERED", scheduler)
+        self.assertIn("setInitialDelay", scheduler)
+        self.assertIn("RELEASE_MANIFEST_ED25519_PUBLIC_KEY_B64", app_build)
+        self.assertIn("RELEASE_APK_CERT_SHA256", app_build)
+        self.assertNotIn("http://", combined)
+        network_security = (
+            APP / "src/main/res/xml/network_security_config.xml"
+        ).read_text(encoding="utf-8")
+        self.assertIn('cleartextTrafficPermitted="false"', network_security)
+        self.assertIn('<certificates src="system"', network_security)
 
     def test_first_use_flight_explains_real_prompts_and_recovery(self):
         ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
@@ -601,7 +668,7 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("## Flight C — the ordinary conversation people try first", flight)
         self.assertIn("## Flight E — project permission and human file controls", flight)
         self.assertIn("Uninstalling AniCloudAI is different", flight)
-        self.assertIn("This candidate declares no Android `INTERNET` permission", flight)
+        self.assertIn("Android `INTERNET` only for fail-closed release checks", flight)
 
     def test_matrix_and_custom_destination_icons_are_real_surfaces(self):
         ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")

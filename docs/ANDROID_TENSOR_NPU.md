@@ -11,9 +11,9 @@ LiteRT-LM engine resident:
 | Reasoning + coding | compatible E4B `.litertlm` | GPU first, measured CPU fallback |
 
 The E2B lane is fail-closed. It cannot silently load a package compiled for a
-different accelerator and it cannot fall back to GPU. Adaptive mode uses E2B
+different accelerator and it cannot fall back to GPU. Balanced mode uses E2B
 for ordinary conversation and memory-oriented turns, and E4B for technical,
-coding, research, or long-form work. Performance prefers E2B; Quality prefers
+coding, research, or long-form work. Short prefers E2B; Quality prefers
 E4B. The deterministic Android controller—not generated model text—owns the
 decision.
 
@@ -68,7 +68,7 @@ After installing the persistently signed dogfood APK:
 3. confirm the full check-up becomes **NPU READY** and `/models` says the E2B
    backend policy is NPU-only;
 4. send a short prompt in Performance mode and record model load plus TTFT;
-5. send a coding prompt in Adaptive mode and confirm the route switches to E4B;
+5. send a coding prompt in Balanced mode and confirm the route switches to E4B;
 6. send another ordinary prompt and confirm the engine unloads E4B before E2B;
 7. test STOP during a long turn; and
 8. capture System Lens with no personal workspace or conversation content.

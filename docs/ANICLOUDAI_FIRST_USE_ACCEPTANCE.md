@@ -30,10 +30,13 @@ not a pass, and a model saying that an action succeeded is never evidence that A
 | E2B document picker | Imports the exact reviewed Tensor G5 conversation/NPU candidate | E4B remains the usable route; no GPU substitution is allowed for E2B |
 | Workspace tree picker | Grants persistent access to one selected project tree through Android's Storage Access Framework | Existing grant remains unchanged; choosing nothing changes no files |
 | Termux command permission | Enables the separately switched-on developer execution plugin | Native Chat, Matrix, Workspace, Numeric Matrix, and Story Forge remain available |
+| Install unknown apps for Intermix | Lets the already-installed app hand a locally verified APK to Android PackageInstaller | The current version and durable state remain usable; approve and retry later |
+| Android package confirmation | Gives the user final control over replacing the installed APK | The verified download and pre-update checkpoint remain available for a safe retry |
 
-This candidate declares no Android `INTERNET` permission and has no API Token Vault. It must not ask
-for an API key, mobile-data access, a provider login, Accessibility, all-files access, device
-administrator access, or root. Treat any such request as a release-blocking defect for this build.
+This candidate declares Android `INTERNET` only for fail-closed release checks against the pinned
+HTTPS origin. The updater sends no prompts, Matrix memory, model files, or project content. There is
+still no API Token Vault, provider login, Accessibility, all-files access, device-administrator
+access, or root. Treat any such request as a release-blocking defect for this build.
 
 ## Flight A — identity, update, and truthful boundaries
 
@@ -44,8 +47,12 @@ administrator access, or root. Treat any such request as a release-blocking defe
 3. Review the notification prompt. Grant it for the primary flight. Later, deny it from Android
    settings and confirm an ordinary foreground turn still completes and exposes in-app STOP.
 4. Open **System** and record `/version`, model, backend, build, device RAM, thermal state, and route.
-5. Confirm **External Data Boundary** says `OFFLINE` and **API TOKEN VAULT** says `NOT ENABLED`.
-6. Confirm **Developer plugin · Termux** starts disabled.
+5. Confirm **External Data Boundary** says `LOCAL AI`, describes the updater-only HTTPS lane, and
+   **API TOKEN VAULT** says `NOT ENABLED`.
+6. If a staged release is available, confirm the app downloads on an unmetered connection, verifies
+   its signed manifest, APK hash, package/version, and signing identity, then asks before install.
+   Denying either Android install prompt must leave the current app and checkpoint intact.
+7. Confirm **Developer plugin · Termux** starts disabled.
 
 ## Flight B — model import and recovery
 
@@ -61,7 +68,7 @@ administrator access, or root. Treat any such request as a release-blocking defe
 
 ## Flight C — the ordinary conversation people try first
 
-Use **Adaptive** unless a step names another mode.
+Use **Balanced** unless a step names another mode.
 
 1. Send: `What's up? In one short paragraph, tell me what you can do entirely on this device.`
 2. Send: `For this acceptance flight, remember that my codename is Brass Moth.`

@@ -9,7 +9,7 @@ continuity but never grants authority.
 
 ## 1. Long Forge workspace sessions — current build
 
-`0.8.11-scoped-autonomy` separates ordinary Chat from long-running project work,
+`0.8.12-release-origin` separates ordinary Chat from long-running project work,
 adds non-destructive fresh/reopen conversation controls, and turns one explicit start tap into
 a bounded filesystem grant. A work session has a
 complete objective, one ASCII workspace root, a selected model posture, a durable Matrix
@@ -126,7 +126,8 @@ Current parity checkpoint:
 Research should live inside a dedicated work session, not gain unrestricted control over the user's
 normal browser.
 
-1. Add `INTERNET` only when the research feature exists and explain the permission in context.
+1. Keep research/provider traffic separate from the updater's narrow `INTERNET` lane and explain
+   every new outbound-data purpose in context.
 2. Use an embedded, inspectable browser surface shared by user and agent.
 3. Separate navigation, extraction, download, and externally visible actions into typed tools.
 4. Treat every page, PDF, and download as untrusted data; resist instruction injection from content.

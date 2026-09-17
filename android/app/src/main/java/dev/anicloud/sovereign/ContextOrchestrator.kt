@@ -7,6 +7,7 @@ const val ContextStrategyPackSize = 20
 
 private const val SystemInstructionReserveTokens = 1_280
 private const val ContextSafetyHeadroomTokens = 640
+private const val MinimumRuntimeOutputTokens = 256
 private const val ConservativeCharactersPerToken = 3.0
 private const val RecoveryPromptFraction = 0.62
 
@@ -64,9 +65,17 @@ object ContextOrchestrator {
         check(ContextStrategy.entries.size == ContextStrategyPackSize)
     }
 
-    fun outputReserve(mode: AnswerMode): Int = when (mode) {
-        AnswerMode.Performance -> 1_024
-        AnswerMode.Adaptive -> 1_536
+    /** User-visible ceiling. Quality means the complete physical window, not an impossible 8K answer. */
+    fun outputCeiling(mode: AnswerMode): Int = when (mode) {
+        AnswerMode.Performance -> 1_536
+        AnswerMode.Adaptive -> 4_096
+        AnswerMode.Quality -> ContextPhysicalTokens
+    }
+
+    /** Space guaranteed before prompt fitting; Quality can expand into every unused token afterward. */
+    fun guaranteedOutputReserve(mode: AnswerMode): Int = when (mode) {
+        AnswerMode.Performance -> 1_536
+        AnswerMode.Adaptive -> 4_096
         AnswerMode.Quality -> 2_048
     }
 
@@ -80,11 +89,11 @@ object ContextOrchestrator {
         lane: ContextLane,
         recovery: Boolean = false,
     ): ContextPack {
-        val outputReserve = outputReserve(mode)
+        val guaranteedOutput = guaranteedOutputReserve(mode)
         val promptTokenBudget = (
             ContextPhysicalTokens -
                 SystemInstructionReserveTokens -
-                outputReserve -
+                guaranteedOutput -
                 ContextSafetyHeadroomTokens
             ).coerceAtLeast(1_000)
         val ordinaryCharacterBudget = (promptTokenBudget * ConservativeCharactersPerToken).toInt()
@@ -96,6 +105,7 @@ object ContextOrchestrator {
         val clean = rawPrompt.replace("\u0000", "").trim()
         val fitted = fitPrompt(clean, characterBudget)
         val prefill = SystemInstructionReserveTokens + estimateTokens(fitted)
+        val outputLimit = outputLimitForPrefill(prefill, mode)
         return ContextPack(
             prompt = fitted,
             lane = lane,
@@ -103,11 +113,24 @@ object ContextOrchestrator {
             promptCharacters = fitted.length,
             maxPromptCharacters = characterBudget,
             estimatedPrefillTokens = prefill,
-            outputReserveTokens = outputReserve,
-            estimatedHeadroomTokens = (ContextPhysicalTokens - prefill - outputReserve).coerceAtLeast(0),
+            outputReserveTokens = outputLimit,
+            estimatedHeadroomTokens = (ContextPhysicalTokens - prefill - outputLimit).coerceAtLeast(0),
             compacted = fitted != clean,
             recovery = recovery,
         )
+    }
+
+    /** Runtime limit for this already-fitted prompt. Quality expands until only safety headroom remains. */
+    fun outputLimit(prompt: String, mode: AnswerMode): Int = outputLimitForPrefill(
+        prefillTokens = SystemInstructionReserveTokens + estimateTokens(prompt),
+        mode = mode,
+    )
+
+    private fun outputLimitForPrefill(prefillTokens: Int, mode: AnswerMode): Int {
+        val available = (
+            ContextPhysicalTokens - prefillTokens - ContextSafetyHeadroomTokens
+            ).coerceAtLeast(MinimumRuntimeOutputTokens)
+        return minOf(outputCeiling(mode), available)
     }
 
     fun isCapacityFailure(failure: Throwable): Boolean {

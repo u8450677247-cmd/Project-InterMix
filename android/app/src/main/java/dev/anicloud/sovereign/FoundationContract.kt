@@ -8,9 +8,9 @@ const val AuthenticationGraceMillis = 30_000L
 const val DesktopThresholdDp = 1200
 
 enum class AnswerMode(val label: String, val description: String) {
-    Performance("Performance", "Prefer the fast conversational model"),
-    Adaptive("Adaptive", "Route each response by measured need"),
-    Quality("Quality", "Prefer the deeper reasoning model"),
+    Performance("Short", "Concise conversation and quick work up to 1.5K output"),
+    Adaptive("Balanced", "Deeper work with up to 4K output"),
+    Quality("Quality", "Use the complete 8K context window dynamically"),
 }
 
 enum class Appearance(val label: String) {

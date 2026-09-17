@@ -23,7 +23,7 @@ This repository is a developer preview with a functional native Android dogfood 
 <p align="center">
   <img alt="Sovereign Core: local and verified" src="https://img.shields.io/badge/Sovereign%20Core-local%20%2B%20verified-25F4FF">
   <img alt="AniCloudAI: native Kotlin and Compose" src="https://img.shields.io/badge/AniCloudAI-Kotlin%20%2B%20Compose-A855FF">
-  <img alt="Native candidate: 0.8.11 scoped autonomy" src="https://img.shields.io/badge/luxury%20candidate-0.8.11%20scoped%20autonomy-A855FF">
+  <img alt="Native candidate: 0.8.12 release origin" src="https://img.shields.io/badge/luxury%20candidate-0.8.12%20release%20origin-A855FF">
   <img alt="Tensor frontier: fingerprint locked NPU" src="https://img.shields.io/badge/Tensor%20frontier-fingerprint--locked%20NPU-FF2BD6">
 </p>
 
@@ -66,7 +66,7 @@ magenta marks **technology actively extending the boundary**.
 
 | Boundary | Current evidence |
 |---|---|
-| **Candidate** | `0.8.11-scoped-autonomy` (`versionCode 22`, source candidate pending CI/device proof) |
+| **Candidate** | `0.8.12-release-origin` (`versionCode 23`, source candidate pending CI/device proof) |
 | **Build path** | Android API 36, JDK 17, Gradle 9.4.1, Kotlin/Compose, arm64-v8a |
 | **Inference** | Native LiteRT-LM 0.17.0 candidate; proven E4B GPU path with measured CPU fallback; E2B/NPU remains device-gated |
 | **Fast route** | Exact-fingerprint E2B Tensor G5 package; NPU-only and never silently redirected to GPU |
@@ -80,7 +80,7 @@ magenta marks **technology actively extending the boundary**.
 | Surface | What it contributes |
 |---|---|
 | **Home** | Runtime vitality, active model, available Android memory, thermal condition, Matrix totals, current work, and a direct return to the last native session. |
-| **Chat** | Multiline composition, Performance/Adaptive/Quality posture, streamed local generation, visible STOP, bounded recovery, Markdown/code rendering, and committed multi-turn continuity. |
+| **Chat** | Multiline composition, Short/Balanced/Quality posture, streamed local generation, visible STOP, bounded recovery, Markdown/code rendering, and committed multi-turn continuity. |
 | **Matrix** | App-private SQLite/WAL history, FTS5 recall, typed durable memories, provenance, pin/forget controls, session checkpoints, and a reversible Interaction Profile. |
 | **Workspace** | One user-selected Storage Access Framework project tree, project browser, syntax-colored editor, read-only inspection, approval-gated writes, private pre-write snapshots, and Long Forge work sessions. |
 | **Agents** | Human-readable queues for proposed file changes and Termux commands, exact scope and dependency disclosure, explicit approve/deny/run/stop controls, and durable result records. |
@@ -99,7 +99,9 @@ magenta marks **technology actively extending the boundary**.
   E2B is NPU-only on the reviewed Tensor G5 target; if dispatcher, fingerprint,
   device, memory, or initialization checks fail, the app explains why and safely
   restores E4B when available.
-- **An honest 8K boundary.** The physical model context remains 8,000 tokens.
+- **Three honest context postures.** Short caps output near 1.5K, Balanced caps it near 4K, and
+  Quality dynamically uses every available part of the physical 8,000-token window after system,
+  input, and safety capacity.
   The Matrix makes that window useful through selected recent turns, durable
   facts, session state, mission checkpoints, and verified tool results rather
   than advertising an imaginary infinite context.
@@ -128,15 +130,22 @@ magenta marks **technology actively extending the boundary**.
 
 #### Twenty policies, one bounded context controller
 
-The `0.8.11-scoped-autonomy` candidate builds on the 0.8.10 write-integrity boundary, replacing growing native conversation
+The `0.8.12-release-origin` candidate builds on the 0.8.10 write-integrity boundary, replacing growing native conversation
 state with a fresh, lane-specific context pack for every controller cycle. It
 reserves system, output, and safety capacity; protects the newest request;
 selects recent turns and Matrix memories; reconstructs mission checkpoints;
 keeps Story Forge payloads private until validation; records measurement-only
 context telemetry; and performs one smaller retry only for a capacity-shaped
-failure. Quality's `2,048` value is now labelled **tokens per call**, not a file
-or document ceiling. Long work continues through validated calls and durable
-checkpoints.
+failure. Quality now expands into unused physical context, Balanced reserves up to
+4,096 output tokens, and Short reserves up to 1,536. Long work continues through
+validated calls and durable checkpoints.
+
+The same candidate adds a fail-closed community update lane. A DS215j may serve
+the static bytes, but the device verifies a pinned Ed25519 manifest signature,
+APK SHA-256, package/version, and pinned Android signing certificate before it
+checkpoints local state and invokes PackageInstaller. Downloads are resumable,
+unmetered, and staggered; required Android confirmation is surfaced as a
+persistent notification. See [Android release-origin updates](docs/ANDROID_RELEASE_UPDATES.md).
 
 The established Termux engine remains the continuity reference, not merely a
 legacy interface. The native candidate now ports its layered reconstruction shape,
@@ -266,7 +275,7 @@ Long Forge's file-write grant never implies command authority.
 
 ### What remains before a native public preview
 
-- Complete the 0.8.11 device acceptance pass: immediate latest-message reveal,
+- Complete the 0.8.12 device acceptance pass: updater recovery plus immediate latest-message reveal,
   multi-turn recall, transcript persistence across window changes and process
   restart, one-click Long Forge continuation, mission-relative writes, and
   snapshot recovery.
@@ -367,7 +376,7 @@ the deterministic controller routes ordinary conversation through it and uses a
 bounded E2B intent/memory handoff before difficult E4B turns. The engine closes
 one profile before loading the other; this is not a simultaneous two-model RAM load.
 
-The native Android `0.8.11-scoped-autonomy` source candidate keeps a bounded recent
+The native Android `0.8.12-release-origin` source candidate keeps a bounded recent
 transcript in every ordinary turn, reloads the full committed session after each
 message, opens restored Chat and Work Session transcripts at their true tail,
 provides a centered `↓` latest-message escape hatch, embeds the reviewed 120-chapter Story
@@ -377,7 +386,8 @@ to the granted mission root. It also
 hardens Termux component discovery and the fingerprint-locked E2B route. It also prepares
 mission roots deterministically and grants create/write/mkdir autonomy inside that exact folder
 after one explicit start tap. It must still pass CI and exact-device dogfood before replacing
-signed 0.8.10 as the build baseline.
+signed 0.8.10 as the build baseline. Its updater remains disabled until the
+HTTPS origin and two public trust anchors are supplied by the protected build.
 It has separate import slots:
 
 - **E2B conversation + Memory Matrix:** only the reviewed
@@ -580,7 +590,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request.
 
 ## Project status
 
-`1.4.1-alpha.1` is the first sanitized public-source candidate derived from the private Trust + Speed v1.4.1 reference build. The established Termux cockpit remains the public alpha baseline. The Kotlin/Compose path has advanced from feasibility into the signed AniCloudAI dogfood described above; it is not yet a stable native release. The next milestone is evidence, not spectacle: complete 0.8.11 CI and exact-device scoped-write acceptance, publish reproducible E2B/E4B and optional Termux-plugin results, broaden the device matrix, and convert the private signed-artifact flow into a reviewable native preview. Follow [the roadmap](docs/ROADMAP.md), [native Android module](android/README.md), and [native feasibility history](docs/NATIVE_ANDROID.md) for the boundary between shipped, experimental, and planned work.
+`1.4.1-alpha.1` is the first sanitized public-source candidate derived from the private Trust + Speed v1.4.1 reference build. The established Termux cockpit remains the public alpha baseline. The Kotlin/Compose path has advanced from feasibility into the signed AniCloudAI dogfood described above; it is not yet a stable native release. The next milestone is evidence, not spectacle: complete 0.8.12 CI, signed-origin integration, and exact-device state-preserving update acceptance; publish reproducible E2B/E4B and optional Termux-plugin results; and broaden the device matrix. Follow [the roadmap](docs/ROADMAP.md), [native Android module](android/README.md), and [native feasibility history](docs/NATIVE_ANDROID.md) for the boundary between shipped, experimental, and planned work.
 
 ## License
 

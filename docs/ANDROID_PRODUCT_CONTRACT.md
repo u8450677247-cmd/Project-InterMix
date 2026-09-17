@@ -44,15 +44,15 @@ telemetry from a marketing device name or substitute `MemFree` for
 
 ## Conversation and answer routing
 
-The default is **Adaptive**. **Performance** and **Quality** are visible
+The default is **Balanced**. **Short** and **Quality** are visible
 one-response overrides unless the user deliberately changes the persistent
-default.
+default. The persisted enum names remain Adaptive and Performance for migration compatibility.
 
 | Mode | First routing preference | Contract |
 |---|---|---|
-| Performance | E2B librarian/conversation model | Fast conversation; escalate only for an explicit correctness gate |
-| Adaptive | Deterministic controller chooses E2B or E4B | Show the selected route and reason without exposing hidden reasoning |
-| Quality | E4B reasoning model | Prefer depth while retaining cancellation, verification, and thermal truth |
+| Short · 1.5K | E2B librarian/conversation model | Fast conversation; escalate only for an explicit correctness gate |
+| Balanced · 4K | Deterministic controller chooses E2B or E4B | Show the selected route and reason without exposing hidden reasoning |
+| Quality · 8K context | E4B reasoning model | Use all available physical context while retaining input and safety capacity |
 
 Only one large model is resident at a time. An E2B-to-E4B handoff contains
 bounded user intent, retrieved evidence, exact values, uncertainty, and task

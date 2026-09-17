@@ -109,8 +109,8 @@ object AdaptiveRuntimePolicy {
                 label = "E2B · NPU",
                 reason = when {
                     memoryFirst -> "Memory/librarian turn routed to E2B"
-                    mode == AnswerMode.Performance -> "Performance mode prefers conversational E2B"
-                    else -> "Adaptive mode selected conversational E2B"
+                    mode == AnswerMode.Performance -> "Short mode prefers conversational E2B"
+                    else -> "Balanced mode selected conversational E2B"
                 },
             )
         }

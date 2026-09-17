@@ -118,13 +118,14 @@ The Android candidate packages exactly twenty controller policies in `ContextOrc
 
 The pack preserves both the controller-contract head and newest-state tail when compaction is unavoidable. On a capacity-shaped native failure, it recreates the conversation and retries exactly once with a smaller recovery pack. Other failures do not enter an indiscriminate retry loop.
 
-## Why 2K is not the long-form ceiling
+## Why one decode cap is not the long-form ceiling
 
 LiteRT-LM’s `maxOutputToken` controls one generation call. Its Android API separately creates conversations, accepts initial messages, supports streamed callbacks/flows, and exposes manual tool calling.[^26] Therefore:
 
-- **Quality · 2,048 tokens/call** is a per-call output reserve.
-- It is not a 2,048-token conversation limit.
-- It is not a 2,048-token file or novel limit.
+- **Short · 1,536** and **Balanced · 4,096** are per-call output ceilings.
+- **Quality** dynamically consumes the unused part of the physical 8,000-token
+  context after system instructions, fitted input, and safety headroom.
+- None of these is a file, novel, or whole-project limit.
 - A long document is a sequence of validated, checkpointed calls.
 - Increasing output length without reserving prefill capacity can make overflow more likely.
 

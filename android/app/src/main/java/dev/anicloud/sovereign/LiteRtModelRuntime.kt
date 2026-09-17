@@ -76,7 +76,7 @@ class LiteRtModelRuntime(private val context: Context) {
     fun stream(prompt: String, mode: AnswerMode): Flow<String> {
         val activeConversation = conversation
             ?: error("No initialized model conversation is available.")
-        val outputLimit = ContextOrchestrator.outputReserve(mode)
+        val outputLimit = ContextOrchestrator.outputLimit(prompt, mode)
         // Keep the callback overload even after aligning LiteRT-LM 0.17.0 with
         // coroutines 1.11.0. AniCloudAI owns close/error/cancellation boundaries
         // and does not depend on a precompiled Flow adapter for stream recovery.
@@ -216,7 +216,7 @@ class LiteRtModelRuntime(private val context: Context) {
         ),
         automaticToolCalling = false,
         channels = emptyList(),
-        maxOutputToken = ContextOrchestrator.outputReserve(AnswerMode.Quality),
+        maxOutputToken = ContextOrchestrator.guaranteedOutputReserve(AnswerMode.Quality),
     )
 
     private fun sanitize(raw: String): String = raw

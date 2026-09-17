@@ -1139,7 +1139,8 @@ private fun SetupChecklist(
             }
             Text(
                 "OPTIONAL LATER · E2B/NPU and the Termux developer plugin are separate acceptance lanes. " +
-                    "This build has no INTERNET permission and must not ask for an API token.",
+                    "This build uses HTTPS only for signed release checks against its pinned origin. " +
+                    "Prompts, Matrix memory, and project files stay local; API tokens remain disabled.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 12.sp,
             )
@@ -1649,9 +1650,9 @@ private fun Composer(
                                 selected = selection.modeForNextResponse() == mode,
                                 onClick = { onMode(mode) },
                                 label = when (mode) {
-                                    AnswerMode.Performance -> "FAST · 1K"
-                                    AnswerMode.Adaptive -> "AUTO · 1.5K"
-                                    AnswerMode.Quality -> "DEEP · 2K"
+                                    AnswerMode.Performance -> "SHORT · 1.5K"
+                                    AnswerMode.Adaptive -> "BALANCED · 4K"
+                                    AnswerMode.Quality -> "QUALITY · 8K"
                                 },
                                 accent = answerModeAccent(mode),
                                 compact = true,
@@ -1671,9 +1672,9 @@ private fun Composer(
                                 selected = selection.modeForNextResponse() == mode,
                                 onClick = { onMode(mode) },
                                 label = when (mode) {
-                                    AnswerMode.Performance -> "Performance · 1K"
-                                    AnswerMode.Adaptive -> "Adaptive · 1.5K"
-                                    AnswerMode.Quality -> "Quality · 2K"
+                                    AnswerMode.Performance -> "Short · 1.5K"
+                                    AnswerMode.Adaptive -> "Balanced · 4K"
+                                    AnswerMode.Quality -> "Quality · 8K"
                                 },
                                 accent = answerModeAccent(mode),
                             )
@@ -1697,8 +1698,9 @@ private fun Composer(
             )
             if (!compact) {
                 Text(
-                    "PER-CALL OUTPUT, NOT A DOCUMENT LIMIT · LONG WORK CONTINUES THROUGH FRESH " +
-                        "CONTROLLER CALLS AND MATRIX CHECKPOINTS",
+                    "QUALITY SHARES THE FULL 8K WINDOW BETWEEN SYSTEM, INPUT, AND OUTPUT · " +
+                        "BALANCED/SHORT ARE OUTPUT CEILINGS · LONG WORK CONTINUES THROUGH " +
+                        "FRESH CONTROLLER CALLS AND MATRIX CHECKPOINTS",
                     color = MutedText,
                     fontFamily = FontFamily.Monospace,
                     fontSize = 9.sp,
@@ -3025,9 +3027,9 @@ private fun answerModeAccent(mode: AnswerMode): Color = when (mode) {
 }
 
 private fun answerModeTokenBudget(mode: AnswerMode): String = when (mode) {
-    AnswerMode.Performance -> "1,024 TOKENS/CALL"
-    AnswerMode.Adaptive -> "1,536 TOKENS/CALL"
-    AnswerMode.Quality -> "2,048 TOKENS/CALL"
+    AnswerMode.Performance -> "1,536 MAX OUTPUT"
+    AnswerMode.Adaptive -> "4,096 MAX OUTPUT"
+    AnswerMode.Quality -> "FULL 8,000 CONTEXT"
 }
 
 private fun answerModeRouteHint(mode: AnswerMode, cockpit: CockpitState): String = when (mode) {
@@ -3799,17 +3801,18 @@ private fun DataBoundaryCard() {
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f),
                 )
-                Text("OFFLINE", color = ResonanceMint, fontFamily = FontFamily.Monospace)
+                Text("LOCAL AI", color = ResonanceMint, fontFamily = FontFamily.Monospace)
             }
             Text(
-                "This APK does not declare Android INTERNET access and cannot send prompts to an " +
-                    "external provider.",
+                "This APK's only built-in network lane is the fail-closed release updater. It fetches " +
+                    "a signed manifest and APK from the pinned HTTPS origin; it never sends prompts, " +
+                    "Matrix memory, model files, or workspace content.",
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
-                "Android does not show a runtime Internet permission dialog. Before a future API " +
-                    "request, AniCloudAI must show its own review with provider, purpose, outbound " +
-                    "data preview, duration, spending scope, retention, and revoke controls.",
+                "Android does not show a runtime Internet permission dialog. Update installation may " +
+                    "separately require install-source approval and Android's package confirmation. " +
+                    "Any future provider or research lane must show its own outbound-data review.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 12.sp,
             )

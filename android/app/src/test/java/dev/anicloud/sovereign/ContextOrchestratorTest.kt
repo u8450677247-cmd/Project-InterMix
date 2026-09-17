@@ -22,12 +22,30 @@ class ContextOrchestratorTest {
                 mode = mode,
                 lane = ContextLane.Chat,
             )
-            assertEquals(ContextOrchestrator.outputReserve(mode), pack.outputReserveTokens)
+            assertTrue(
+                pack.outputReserveTokens >= ContextOrchestrator.guaranteedOutputReserve(mode),
+            )
+            assertTrue(pack.outputReserveTokens <= ContextOrchestrator.outputCeiling(mode))
             assertTrue(
                 pack.estimatedPrefillTokens + pack.outputReserveTokens <= ContextPhysicalTokens,
             )
             assertFalse(pack.compacted)
         }
+    }
+
+    @Test
+    fun qualityExpandsIntoUnusedPhysicalContext() {
+        val shortPrompt = "[CURRENT USER REQUEST]\nGive a careful answer."
+        val quality = ContextOrchestrator.pack(shortPrompt, AnswerMode.Quality, ContextLane.Chat)
+        val balanced = ContextOrchestrator.pack(shortPrompt, AnswerMode.Adaptive, ContextLane.Chat)
+        val concise = ContextOrchestrator.pack(shortPrompt, AnswerMode.Performance, ContextLane.Chat)
+
+        assertTrue(quality.outputReserveTokens > 4_096)
+        assertEquals(4_096, balanced.outputReserveTokens)
+        assertEquals(1_536, concise.outputReserveTokens)
+        assertTrue(
+            quality.estimatedPrefillTokens + quality.outputReserveTokens <= ContextPhysicalTokens,
+        )
     }
 
     @Test

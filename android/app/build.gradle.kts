@@ -3,6 +3,9 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+fun String.asBuildConfigString(): String =
+    "\"" + replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
 android {
     namespace = "dev.anicloud.sovereign.prototype"
     compileSdk = 36
@@ -11,14 +14,40 @@ android {
         applicationId = "dev.anicloud.sovereign.prototype"
         minSdk = 31
         targetSdk = 36
-        versionCode = 22
-        versionName = "0.8.11-scoped-autonomy"
+        versionCode = 23
+        versionName = "0.8.12-release-origin"
 
         buildConfigField("String", "TENSOR_DISPATCH_VERSION", "\"2.2.0\"")
         buildConfigField(
             "String",
             "TENSOR_DISPATCH_ARCHIVE_SHA256",
             "\"b4c8380df3e9652677dbb93a5aad4499eb756a9b7d9651a9baacb122faadbf0d\"",
+        )
+        // Public trust anchors, supplied by the protected release pipeline. Empty values keep the
+        // updater disabled instead of ever trusting an unconfigured or manifest-selected origin.
+        buildConfigField(
+            "String",
+            "RELEASE_ORIGIN_URL",
+            providers.gradleProperty("INTERMIX_RELEASE_ORIGIN_URL")
+                .orElse(providers.environmentVariable("INTERMIX_RELEASE_ORIGIN_URL"))
+                .getOrElse("")
+                .asBuildConfigString(),
+        )
+        buildConfigField(
+            "String",
+            "RELEASE_MANIFEST_ED25519_PUBLIC_KEY_B64",
+            providers.gradleProperty("INTERMIX_RELEASE_MANIFEST_PUBLIC_KEY_B64")
+                .orElse(providers.environmentVariable("INTERMIX_RELEASE_MANIFEST_PUBLIC_KEY_B64"))
+                .getOrElse("")
+                .asBuildConfigString(),
+        )
+        buildConfigField(
+            "String",
+            "RELEASE_APK_CERT_SHA256",
+            providers.gradleProperty("INTERMIX_RELEASE_APK_CERT_SHA256")
+                .orElse(providers.environmentVariable("INTERMIX_RELEASE_APK_CERT_SHA256"))
+                .getOrElse("")
+                .asBuildConfigString(),
         )
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -75,6 +104,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
+    implementation("androidx.work:work-runtime-ktx:2.11.2")
     // LiteRT-LM 0.17.0 declares coroutines 1.11.0. Keep Android and core on
     // the same strict version so its precompiled runtime sees one ABI.
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0") {

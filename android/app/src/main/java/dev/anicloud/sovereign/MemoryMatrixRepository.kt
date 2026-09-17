@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import android.database.DatabaseUtils
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -126,6 +127,40 @@ class MemoryMatrixRepository(private val context: Context) :
         setWriteAheadLoggingEnabled(true)
         writableDatabase
         migrateLegacyHistory()
+    }
+
+    /** Creates a transactionally consistent pre-update copy without closing the live Matrix. */
+    fun createUpdateCheckpoint(target: File): File {
+        require(target.parentFile?.canonicalFile?.toPath()?.startsWith(context.noBackupFilesDir.canonicalFile.toPath()) == true) {
+            "Update checkpoint must remain in app-private no-backup storage."
+        }
+        target.parentFile?.mkdirs()
+        require(!target.exists()) { "Update checkpoint already exists." }
+        writableDatabase.rawQuery("PRAGMA wal_checkpoint(FULL)", null).use { it.moveToFirst() }
+        writableDatabase.execSQL(
+            "VACUUM INTO ${DatabaseUtils.sqlEscapeString(target.absolutePath)}",
+        )
+        require(target.isFile && target.length() > 0L) { "Matrix checkpoint was not created." }
+        return target
+    }
+
+    /** Deterministic post-migration Librarian gate; it never mutates or repairs user state. */
+    fun librarianIntegrityCheck(): String {
+        val db = readableDatabase
+        val quickCheck = db.rawQuery("PRAGMA quick_check(1)", null).use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else "missing-result"
+        }
+        require(quickCheck == "ok") { "SQLite quick_check failed: ${quickCheck.take(120)}" }
+        val foreignKeyFailure = db.rawQuery("PRAGMA foreign_key_check", null).use { it.moveToFirst() }
+        require(!foreignKeyFailure) { "SQLite foreign-key integrity check failed." }
+        val required = setOf("settings", "sessions", "messages", "memories", "project_events")
+        val actual = mutableSetOf<String>()
+        db.rawQuery("SELECT name FROM sqlite_master WHERE type='table'", null).use { cursor ->
+            while (cursor.moveToNext()) actual += cursor.getString(0)
+        }
+        val missing = required - actual
+        require(missing.isEmpty()) { "Matrix schema is missing: ${missing.sorted().joinToString()}" }
+        return "SQLite quick_check=ok · foreign keys=ok · required tables=${required.size}"
     }
 
     override fun onConfigure(db: SQLiteDatabase) {

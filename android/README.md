@@ -2,9 +2,10 @@
 
 This module is the private Pixel 10 Pro reference cockpit for Project Intermix.
 The original disconnected shell has passed its first device test. The current
-`0.8.11-scoped-autonomy` source candidate combines the stable E4B boundary with
+`0.8.12-release-origin` source candidate combines the stable E4B boundary with
 the native Memory Matrix, controller-mediated project workspace, and the first
-checkpointed long-form work-session loop. Its cyan–magenta–violet spectral
+checkpointed long-form work-session loop, plus a locally verified community
+update lane backed by a static HTTPS release origin. Its cyan–magenta–violet spectral
 glass pass concentrates fluorescence on focus, mode, code, and mission progress
 while preserving neutral long-form reading surfaces.
 
@@ -18,8 +19,10 @@ while preserving neutral long-form reading surfaces.
 - streaming SHA-256 verification while the model is copied into app-private,
   no-backup storage;
 - one resident E4B engine with GPU initialization first and CPU fallback;
-- an 8,000-token physical context, a 20-policy context pack, and truthful
-  per-call output limits;
+- an 8,000-token physical context, a 20-policy context pack, and Short 1.5K,
+  Balanced 4K, and dynamically expanding Quality output limits;
+- signed-manifest release checks, staggered resumable downloads, local APK hash
+  and signer verification, durable checkpoints, and Android-controlled install confirmation;
 - real native token streaming with an always-visible STOP control;
 - STOP recovery that cancels JNI inference, keeps the safe visible draft clearly
   marked as non-canonical, and rebuilds conversation state before the next turn;
