@@ -70,3 +70,8 @@ android/**/build/
 *.aab
 *.jks
 *.keystore
+*.pk8
+*.pem
+*.key
+*.p12
+*.pfx

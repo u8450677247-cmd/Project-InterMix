@@ -10,6 +10,11 @@ on:
       - "docs/ANDROID_PRODUCT_CONTRACT.md"
       - "docs/ANDROID_TENSOR_NPU.md"
       - "docs/ANDROID_INTERACTION_PROFILE.md"
+      - "docs/ANDROID_RELEASE_UPDATES.md"
+      - "tools/termux_dogfood_update.sh"
+      - "tools/verify_android_release_trust.py"
+      - "tests/test_android_foundation.py"
+      - "tests/test_android_release_trust.py"
       - ".github/workflows/android-foundation.yml"
   pull_request:
     paths:
@@ -18,6 +23,11 @@ on:
       - "docs/ANDROID_PRODUCT_CONTRACT.md"
       - "docs/ANDROID_TENSOR_NPU.md"
       - "docs/ANDROID_INTERACTION_PROFILE.md"
+      - "docs/ANDROID_RELEASE_UPDATES.md"
+      - "tools/termux_dogfood_update.sh"
+      - "tools/verify_android_release_trust.py"
+      - "tests/test_android_foundation.py"
+      - "tests/test_android_release_trust.py"
       - ".github/workflows/android-foundation.yml"
   workflow_dispatch:
     inputs:
@@ -40,7 +50,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
-      candidate_artifact_id: ${{ steps.upload-candidate.outputs.artifact-id }}
+      candidate_artifact_id: ${{ steps.upload-release-candidate.outputs.artifact-id }}
 
     steps:
       - name: Check out source
@@ -73,6 +83,11 @@ jobs:
       - name: Package checksum-pinned Tensor G5 NPU dispatcher
         run: bash tools/fetch_tensor_dispatcher.sh
 
+      - name: Test release gates and validate the Termux helper
+        run: |
+          python3 -m unittest discover -s tests -p 'test_android*.py' -v
+          bash -n tools/termux_dogfood_update.sh
+
       - name: Test and assemble the adaptive Tensor cockpit
         run: >-
           gradle -p android
@@ -81,12 +96,12 @@ jobs:
           --no-daemon
           --stacktrace
 
-      - name: Stage the exact unprivileged candidate and provenance
+      - name: Stage the unprivileged debug artifact and provenance
         shell: bash
         run: |
           set -euo pipefail
           source_apk="$GITHUB_WORKSPACE/android/app/build/outputs/apk/debug/app-debug.apk"
-          candidate_root="$RUNNER_TEMP/anicloud-candidate"
+          candidate_root="$RUNNER_TEMP/anicloud-debug"
           candidate_name="AniCloudAI-Sovereign-candidate.apk"
           mkdir -p "$candidate_root"
           install -m 600 "$source_apk" "$candidate_root/$candidate_name"
@@ -102,9 +117,76 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: AniCloudAI-e4b-cockpit-debug
-          path: ${{ runner.temp }}/anicloud-candidate/
+          path: ${{ runner.temp }}/anicloud-debug/
           if-no-files-found: error
           retention-days: 7
+
+      - name: Validate the pinned release trust anchors
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_dogfood }}
+        shell: bash
+        env:
+          INTERMIX_RELEASE_ORIGIN_URL: ${{ vars.INTERMIX_RELEASE_ORIGIN_URL }}
+          INTERMIX_RELEASE_MANIFEST_PUBLIC_KEY_B64: ${{ vars.INTERMIX_RELEASE_MANIFEST_PUBLIC_KEY_B64 }}
+          INTERMIX_RELEASE_APK_CERT_SHA256: ${{ vars.INTERMIX_RELEASE_APK_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          python3 tools/verify_android_release_trust.py \
+            --summary "$RUNNER_TEMP/release-trust.json"
+
+      - name: Assemble the non-debuggable release candidate
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_dogfood }}
+        env:
+          INTERMIX_RELEASE_ORIGIN_URL: ${{ vars.INTERMIX_RELEASE_ORIGIN_URL }}
+          INTERMIX_RELEASE_MANIFEST_PUBLIC_KEY_B64: ${{ vars.INTERMIX_RELEASE_MANIFEST_PUBLIC_KEY_B64 }}
+          INTERMIX_RELEASE_APK_CERT_SHA256: ${{ vars.INTERMIX_RELEASE_APK_CERT_SHA256 }}
+        run: >-
+          gradle -p android
+          :app:assembleRelease
+          --no-daemon
+          --stacktrace
+
+      - name: Stage the exact unsigned release candidate and trust provenance
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_dogfood }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          analyzer="$sdk_root/cmdline-tools/latest/bin/apkanalyzer"
+          signer="$sdk_root/build-tools/36.0.0/apksigner"
+          source_apk="$GITHUB_WORKSPACE/android/app/build/outputs/apk/release/app-release-unsigned.apk"
+          candidate_root="$RUNNER_TEMP/anicloud-candidate"
+          candidate_name="AniCloudAI-Sovereign-candidate.apk"
+          test -x "$analyzer"
+          test -x "$signer"
+          test -f "$source_apk"
+          debuggable="$("$analyzer" manifest debuggable "$source_apk" | tr -d '[:space:]')"
+          if [[ "$debuggable" != "false" ]]; then
+            echo "::error::Protected signing accepts only a non-debuggable release APK."
+            exit 1
+          fi
+          if "$signer" verify "$source_apk" >/dev/null 2>&1; then
+            echo "::error::Release candidate reached the protected job already signed."
+            exit 1
+          fi
+          mkdir -p "$candidate_root"
+          install -m 600 "$source_apk" "$candidate_root/$candidate_name"
+          install -m 600 "$RUNNER_TEMP/release-trust.json" "$candidate_root/release-trust.json"
+          (
+            cd "$candidate_root"
+            sha256sum "$candidate_name" > "$candidate_name.sha256"
+          )
+          printf '%s\n' "$GITHUB_SHA" > "$candidate_root/commit.txt"
+          printf '%s\n' "$GITHUB_RUN_ID" > "$candidate_root/run-id.txt"
+
+      - name: Retain the verified release candidate for protected signing
+        id: upload-release-candidate
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_dogfood }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: AniCloudAI-e4b-cockpit-release-candidate
+          path: ${{ runner.temp }}/anicloud-candidate/
+          if-no-files-found: error
+          retention-days: 1
 
   dogfood-signing:
     name: Protected persistent dogfood signing
@@ -162,6 +244,7 @@ jobs:
               "AniCloudAI-Sovereign-candidate.apk": 512 * 1024 * 1024,
               "AniCloudAI-Sovereign-candidate.apk.sha256": 512,
               "commit.txt": 128,
+              "release-trust.json": 2048,
               "run-id.txt": 64,
           }
           with zipfile.ZipFile(archive) as source:
@@ -203,6 +286,8 @@ jobs:
           [[ "$license_status" -eq 0 ]]
           "$sdkmanager_dir/sdkmanager" "build-tools;36.0.0"
           test -x "$sdk_root/build-tools/36.0.0/apksigner"
+          test -x "$sdk_root/build-tools/36.0.0/zipalign"
+          test -x "$sdkmanager_dir/apkanalyzer"
 
       - name: Sign and verify the persistent dogfood APK
         shell: bash
@@ -219,8 +304,9 @@ jobs:
           signing_root="$(mktemp -d "$RUNNER_TEMP/anicloud-signing.XXXXXX")"
           private_key="$signing_root/anicloud-dogfood.pk8"
           certificate="$signing_root/anicloud-dogfood-cert.pem"
+          aligned_apk="$signing_root/aligned-candidate.apk"
           cleanup_signing() {
-            rm -f -- "$private_key" "$certificate"
+            rm -f -- "$private_key" "$certificate" "$aligned_apk"
             rmdir -- "$signing_root" 2>/dev/null || true
           }
           trap cleanup_signing EXIT HUP INT TERM
@@ -240,20 +326,63 @@ jobs:
           )"
           [[ "$private_public_sha" == "$certificate_public_sha" ]]
 
+          candidate_root="$RUNNER_TEMP/anicloud-candidate"
+          pinned_certificate_sha="$(python3 - "$candidate_root/release-trust.json" <<'PY'
+          import json
+          import re
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as source:
+              payload = json.load(source)
+          expected = {
+              "schema",
+              "release_origin_url",
+              "manifest_public_key_sha256",
+              "apk_signer_sha256",
+          }
+          if set(payload) != expected or payload.get("schema") != 1:
+              raise SystemExit("invalid release trust provenance")
+          signer = payload.get("apk_signer_sha256", "")
+          if re.fullmatch(r"[0-9a-f]{64}", signer) is None:
+              raise SystemExit("invalid pinned certificate fingerprint")
+          print(signer)
+          PY
+          )"
+          certificate_sha="$(
+            openssl x509 -in "$certificate" -outform DER |
+              sha256sum | awk '{print $1}'
+          )"
+          if [[ "$certificate_sha" != "$pinned_certificate_sha" ]]; then
+            echo "::error::Protected signing certificate does not match the pin embedded in the APK."
+            exit 1
+          fi
+
           sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
           signer="$sdk_root/build-tools/36.0.0/apksigner"
-          source_apk="$RUNNER_TEMP/anicloud-candidate/AniCloudAI-Sovereign-candidate.apk"
+          aligner="$sdk_root/build-tools/36.0.0/zipalign"
+          analyzer="$sdk_root/cmdline-tools/latest/bin/apkanalyzer"
+          source_apk="$candidate_root/AniCloudAI-Sovereign-candidate.apk"
           output_root="$RUNNER_TEMP/anicloud-dogfood"
           output_name="AniCloudAI-Sovereign-dogfood.apk"
           output_apk="$output_root/$output_name"
           mkdir -p "$output_root"
 
+          debuggable="$("$analyzer" manifest debuggable "$source_apk" | tr -d '[:space:]')"
+          [[ "$debuggable" == "false" ]] || {
+            echo "::error::Candidate became debuggable before protected signing."
+            exit 1
+          }
+          "$aligner" -P 16 -f -v 4 "$source_apk" "$aligned_apk"
+          "$aligner" -P 16 -c -v 4 "$aligned_apk"
+
           "$signer" sign \
             --key "$private_key" \
             --cert "$certificate" \
             --out "$output_apk" \
-            "$source_apk"
+            "$aligned_apk"
           "$signer" verify --verbose --print-certs "$output_apk"
+          "$aligner" -P 16 -c -v 4 "$output_apk"
+          [[ "$("$analyzer" manifest debuggable "$output_apk" | tr -d '[:space:]')" == "false" ]]
 
           mapfile -t certificate_shas < <(
             "$signer" verify --print-certs "$output_apk" |
@@ -267,6 +396,7 @@ jobs:
           )
           printf '%s\n' "${certificate_shas[0]}" > "$output_root/certificate-sha256.txt"
           printf '%s\n' "$GITHUB_SHA" > "$output_root/commit.txt"
+          install -m 600 "$candidate_root/release-trust.json" "$output_root/release-trust.json"
 
       - name: Retain the persistently signed dogfood APK
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -277,5 +407,6 @@ jobs:
             ${{ runner.temp }}/anicloud-dogfood/AniCloudAI-Sovereign-dogfood.apk.sha256
             ${{ runner.temp }}/anicloud-dogfood/certificate-sha256.txt
             ${{ runner.temp }}/anicloud-dogfood/commit.txt
+            ${{ runner.temp }}/anicloud-dogfood/release-trust.json
           if-no-files-found: error
           retention-days: 30

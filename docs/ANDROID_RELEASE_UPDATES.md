@@ -15,37 +15,46 @@ certificate locally before asking Android PackageInstaller to proceed.
 | Android PackageInstaller | Enforce platform signing/update rules and collect user confirmation when required | Bypass the app's local verification/checkpoint sequence |
 
 The first community APK must already be signed by the long-lived production Android certificate.
-Android will not update an APK signed by a different identity. Keep that APK private key and the
-separate Ed25519 manifest key in protected CI secret storage with recovery copies offline.
+Android will not update an APK signed by a different identity. Keep that APK private key in the
+reviewer-protected signing environment. Keep the independent Ed25519 manifest private key in a
+protected publisher workspace; neither private key belongs on the NAS. Maintain encrypted recovery
+copies offline before inviting community devices into the update lineage.
 
 ### CI signing isolation
 
 The Android workflow deliberately separates compilation from signing:
 
-1. Push and pull-request jobs check out source, run repository code, test, assemble, and upload a
-   candidate bundle without receiving any signing secret.
+1. Push and pull-request jobs check out source, run repository code, test, and retain an unprivileged
+   debug artifact without receiving any signing secret.
 2. Dogfood signing runs only after an explicit `workflow_dispatch` with `sign_dogfood=true`.
-3. That job enters the `dogfood-signing` GitHub environment, which must have at least one required
+3. The dispatch validates all three public trust anchors, then assembles a separate unsigned release
+   APK. Gradle refuses every release build with missing or malformed anchors. CI also proves the APK
+   is non-debuggable and unsigned before handing it across the job boundary.
+4. The signing job enters the `dogfood-signing` GitHub environment, which must have at least one required
    reviewer. For the one-person lane, self-approval may remain enabled so this is a deliberate
    release checkpoint rather than a second-person dependency.
-4. The signing runner never checks out repository code. It downloads the exact candidate artifact
-   ID produced by its required build job, accepts only the four expected bounded files, and verifies
-   run ID, commit, and SHA-256 before the key becomes available.
-5. Every external GitHub Action is pinned to a full commit SHA. Signing material is scoped only to
-   the signing step, removed before the signed artifact uploader runs, and never enters the DS215j.
+5. The signing runner never checks out repository code. It downloads the exact candidate artifact
+   ID produced by its required build job, accepts only the five expected bounded files, and verifies
+   run ID, commit, SHA-256, non-debuggable state, and trust provenance before signing.
+6. The embedded APK certificate pin must equal the protected certificate's SHA-256. The runner
+   zip-aligns, signs, and re-verifies the final APK. Every external GitHub Action is pinned to a full
+   commit SHA. Signing material is scoped only to that step, removed before artifact upload, and
+   never enters the DS215j.
 
 Before initializing the dogfood identity, create **Settings → Environments → dogfood-signing** and
 add the repository owner as a required reviewer. Then run
 `tools/termux_dogfood_update.sh --initialize-key`. The helper refuses an unprotected environment,
 stores the two signing values as environment secrets, deletes same-named repository-level secrets,
-and dispatches the protected job. Do not leave fallback signing-key copies in repository or
-organization secrets: another workflow could otherwise request them without crossing the
-environment approval gate.
+and stops safely until the public origin is known. Do not leave fallback signing-key copies in
+repository or organization secrets: another workflow could otherwise request them without crossing
+the environment approval gate.
 
 ## Pinned build values
 
-The protected build supplies three public values. An all-empty configuration disables checks;
-any partial or malformed configuration fails closed.
+Debug builds may leave all three values empty, which keeps update checks disabled. Every release
+build requires all three values and fails before APK assembly if any value is missing or malformed.
+The protected signing job then independently checks that the certificate pin equals the certificate
+it actually uses.
 
 | Gradle property or environment variable | Value |
 |---|---|
@@ -55,6 +64,26 @@ any partial or malformed configuration fails closed.
 
 The origin is compiled into the APK. A manifest cannot redirect a device to another host, and HTTP
 redirects are rejected. The public key and certificate hash are trust anchors, not secrets.
+
+Once the outbound-only tunnel/CDN hostname is live, configure the public anchors and dispatch the
+first hardened candidate from the existing Termux checkout:
+
+```bash
+tools/termux_dogfood_update.sh \
+  --configure-release-trust \
+  --origin https://YOUR_PUBLIC_HOST/intermix/ \
+  --branch feature/anicloud-release-origin-20260917
+```
+
+The helper reuses the protected APK identity, creates or reuses a separate Ed25519 manifest private
+key under Termux-private storage, validates the complete trust tuple, and writes only the origin,
+manifest public key, and certificate fingerprint to GitHub repository variables. It never uploads
+the manifest private key. Back up
+`$HOME/.local/share/anicloud-release-manifest/manifest-ed25519.pem` before publishing a manifest.
+If GitHub already contains either public pin but the matching local identity is absent or different,
+the helper refuses silent rotation. Restore the original backup; an Android signer or manifest-key
+rotation requires an explicitly designed transition release and cannot be repaired by overwriting a
+variable.
 
 Derive those two public anchors in a protected workspace; do not paste either private key into an
 issue, repository variable, server, or support chat:
@@ -210,8 +239,8 @@ procedure.
 
 Before enabling the origin in a community build:
 
-1. Record the exact HTTPS base URL, Ed25519 public-key DER Base64, and production certificate
-   SHA-256 in protected build configuration.
+1. Run the release-trust helper with the exact public HTTPS base URL and verify the protected CI
+   artifact reports the expected manifest-key and production-certificate fingerprints.
 2. Prove the origin rejects redirects and supports a resumed download from several offsets.
 3. Install the production-signed bootstrap APK on a disposable device and preserve its local state.
 4. Publish a higher `version_code` to a 1-device/5% cohort and interrupt download, reboot, decline

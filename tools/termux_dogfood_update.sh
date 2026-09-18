@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Bootstrap one private dogfood identity with native OpenSSL, store its encoded
-# signing inputs only in a reviewer-protected GitHub environment, and fetch APKs
-# signed by the isolated CI job. This avoids Android 17's incompatible Termux
-# Java signing tools. Key material is never committed, printed, or placed in
-# Android shared storage.
+# Bootstrap one private dogfood identity plus an independent Ed25519 manifest
+# identity with native OpenSSL, configure only public updater trust anchors as
+# repository variables, and fetch APKs signed by the isolated CI job. This
+# avoids Android 17's incompatible Termux Java signing tools. Private key
+# material is never committed, printed, or placed in Android shared storage.
 
 repo="${ANICLOUD_GITHUB_REPOSITORY:-u8450677247-cmd/Project-InterMix}"
 script_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,26 +21,38 @@ signing_environment="${ANICLOUD_DOGFOOD_ENVIRONMENT:-dogfood-signing}"
 key_root="${ANICLOUD_DOGFOOD_KEY_DIR:-$HOME/.local/share/anicloud-dogfood-signing}"
 private_key="$key_root/anicloud-dogfood.pk8"
 certificate="$key_root/anicloud-dogfood-cert.pem"
+manifest_key_root="${ANICLOUD_RELEASE_MANIFEST_KEY_DIR:-$HOME/.local/share/anicloud-release-manifest}"
+manifest_private_key="$manifest_key_root/manifest-ed25519.pem"
 downloads="${ANICLOUD_DOWNLOADS_DIR:-$HOME/storage/downloads}"
 initialize_key=false
+configure_release_trust=false
+release_origin="${INTERMIX_RELEASE_ORIGIN_URL:-}"
 open_installer=false
 run_id=""
 
 usage() {
     printf '%s\n' \
         "Usage:" \
-        "  $0 --initialize-key [--branch NAME]" \
+        "  $0 --initialize-key [--origin HTTPS_URL] [--branch NAME]" \
+        "  $0 --configure-release-trust --origin HTTPS_URL [--branch NAME]" \
         "  $0 [--open] [--branch NAME] [--run-id ID]" \
         "" \
         "Initialization generates the identity in Termux-private storage," \
         "uploads encoded copies only to the protected $signing_environment" \
-        "GitHub environment, removes repository-level copies, and starts CI." \
-        "Back up both identity files securely; losing them prevents updates."
+        "GitHub environment, and removes repository-level secret copies." \
+        "Release-trust configuration creates a separate local manifest key," \
+        "publishes only its public key plus public origin/signer pins, then starts CI." \
+        "Back up all private identity files securely; losing them prevents updates."
 }
 
 while (($#)); do
     case "$1" in
         --initialize-key) initialize_key=true ;;
+        --configure-release-trust) configure_release_trust=true ;;
+        --origin)
+            shift
+            release_origin="${1:?--origin requires a value}"
+            ;;
         --open) open_installer=true ;;
         --branch)
             shift
@@ -69,7 +81,20 @@ while (($#)); do
     shift
 done
 
-for command_name in gh sha256sum; do
+if [[ "$initialize_key" == true && "$configure_release_trust" == true ]]; then
+    printf '%s\n' "Choose either --initialize-key or --configure-release-trust, not both." >&2
+    exit 2
+fi
+if [[ -n "$release_origin" && "$initialize_key" != true && "$configure_release_trust" != true ]]; then
+    printf '%s\n' "--origin requires --initialize-key or --configure-release-trust." >&2
+    exit 2
+fi
+if [[ "$open_installer" == true && ( "$initialize_key" == true || "$configure_release_trust" == true ) ]]; then
+    printf '%s\n' "--open cannot be combined with key or release-trust configuration." >&2
+    exit 2
+fi
+
+for command_name in gh sha256sum python3; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
         printf 'Missing command: %s\n' "$command_name" >&2
         exit 1
@@ -77,14 +102,18 @@ for command_name in gh sha256sum; do
 done
 
 umask 077
-if [[ "$initialize_key" == true ]]; then
-    for command_name in openssl base64; do
+if [[ "$initialize_key" == true || "$configure_release_trust" == true ]]; then
+    for command_name in openssl base64 python3; do
         if ! command -v "$command_name" >/dev/null 2>&1; then
             printf 'Missing command: %s\n' "$command_name" >&2
             printf '%s\n' "On Termux, install OpenSSL with: pkg install openssl-tool" >&2
             exit 1
         fi
     done
+    if [[ -z "$checkout_root" || ! -f "$checkout_root/tools/verify_android_release_trust.py" ]]; then
+        printf '%s\n' "Run this helper from a complete Project Intermix Git checkout." >&2
+        exit 1
+    fi
 
     reviewer_count="$(
         gh api "repos/$repo/environments/$signing_environment" \
@@ -97,7 +126,16 @@ if [[ "$initialize_key" == true ]]; then
             "and allow that reviewer to approve their own deployment for this one-person release lane." >&2
         exit 1
     fi
+fi
 
+if [[ "$initialize_key" == true ]]; then
+    environment_secret_names="$(
+        gh secret list \
+            --repo "$repo" \
+            --env "$signing_environment" \
+            --json name \
+            --jq '.[].name'
+    )"
     if [[ -f "$private_key" && -f "$certificate" ]]; then
         printf '%s\n' "Reusing the complete private dogfood identity in $key_root."
     elif [[ -e "$private_key" || -e "$certificate" || -e "$key_root/keystore.password" || -e "$key_root/anicloud-dogfood.jks" ]]; then
@@ -105,6 +143,15 @@ if [[ "$initialize_key" == true ]]; then
         printf 'Move this directory to a backup location, then retry: %s\n' "$key_root" >&2
         exit 1
     else
+        if grep -Eq \
+            '^(ANICLOUD_DOGFOOD_PRIVATE_KEY_B64|ANICLOUD_DOGFOOD_CERTIFICATE_B64)$' \
+            <<< "$environment_secret_names"
+        then
+            printf '%s\n' \
+                "Protected dogfood secrets already exist but the local identity is missing." \
+                "Restore $key_root from backup; refusing to rotate the Android update identity." >&2
+            exit 1
+        fi
         mkdir -p "$key_root"
         chmod 700 "$key_root"
         temp_pem="$(mktemp "$key_root/.private.XXXXXX.pem")"
@@ -150,6 +197,18 @@ if [[ "$initialize_key" == true ]]; then
             tr -d ':'
     )"
     test -n "$certificate_sha"
+    configured_signer_pin="$(
+        gh variable list \
+            --repo "$repo" \
+            --json name,value \
+            --jq '.[] | select(.name == "INTERMIX_RELEASE_APK_CERT_SHA256") | .value'
+    )"
+    if [[ -n "$configured_signer_pin" && "$configured_signer_pin" != "$certificate_sha" ]]; then
+        printf '%s\n' \
+            "The local dogfood certificate differs from the repository's configured update pin." \
+            "Restore the original identity; refusing to rotate the Android signer." >&2
+        exit 1
+    fi
 
     base64 "$private_key" | tr -d '\n' |
         gh secret set ANICLOUD_DOGFOOD_PRIVATE_KEY_B64 \
@@ -175,6 +234,114 @@ if [[ "$initialize_key" == true ]]; then
     printf '%s\n' \
         "Persistent signing inputs moved to the protected $signing_environment environment." \
         "Repository-level copies are absent." \
+        "Signing certificate SHA-256: $certificate_sha"
+fi
+
+if [[ "$initialize_key" == true || "$configure_release_trust" == true ]]; then
+    if [[ ! -f "$private_key" || ! -f "$certificate" ]]; then
+        printf '%s\n' \
+            "The complete dogfood signing identity is unavailable in $key_root." \
+            "Run $0 --initialize-key first." >&2
+        exit 1
+    fi
+    certificate_sha="$(
+        openssl x509 -in "$certificate" -outform DER |
+            sha256sum | awk '{print $1}'
+    )"
+    [[ "$certificate_sha" =~ ^[0-9a-f]{64}$ ]] || {
+        printf '%s\n' "Could not derive the dogfood certificate SHA-256." >&2
+        exit 1
+    }
+    configured_manifest_public_key="$(
+        gh variable list \
+            --repo "$repo" \
+            --json name,value \
+            --jq '.[] | select(.name == "INTERMIX_RELEASE_MANIFEST_PUBLIC_KEY_B64") | .value'
+    )"
+    configured_signer_pin="$(
+        gh variable list \
+            --repo "$repo" \
+            --json name,value \
+            --jq '.[] | select(.name == "INTERMIX_RELEASE_APK_CERT_SHA256") | .value'
+    )"
+    if [[ -n "$configured_signer_pin" && "$configured_signer_pin" != "$certificate_sha" ]]; then
+        printf '%s\n' \
+            "The local dogfood certificate differs from the repository's configured update pin." \
+            "Restore the original identity; refusing to rotate the Android signer." >&2
+        exit 1
+    fi
+
+    if [[ -z "$release_origin" ]]; then
+        if [[ "$configure_release_trust" == true ]]; then
+            printf '%s\n' "--configure-release-trust requires --origin with the public HTTPS base URL." >&2
+            exit 2
+        fi
+        printf '%s\n' \
+            "Signing identity initialization is complete; no APK was dispatched." \
+            "The release build remains safely gated until the public origin is known." \
+            "Next:" \
+            "  $0 --configure-release-trust --origin https://YOUR_PUBLIC_HOST/intermix/ --branch $branch"
+        exit 0
+    fi
+
+    if [[ -f "$manifest_private_key" ]]; then
+        openssl pkey -in "$manifest_private_key" -check -noout
+        printf '%s\n' "Reusing the private manifest identity in $manifest_key_root."
+    elif [[ -e "$manifest_private_key" ]]; then
+        printf 'Manifest key path exists but is not a regular file: %s\n' "$manifest_private_key" >&2
+        exit 1
+    else
+        if [[ -n "$configured_manifest_public_key" ]]; then
+            printf '%s\n' \
+                "A manifest public key is already configured but its local private key is missing." \
+                "Restore $manifest_private_key from backup; refusing silent key rotation." >&2
+            exit 1
+        fi
+        mkdir -p "$manifest_key_root"
+        chmod 700 "$manifest_key_root"
+        temp_manifest_key="$(mktemp "$manifest_key_root/.manifest-ed25519.XXXXXX.pem")"
+        cleanup_manifest_key_temporary() {
+            rm -f -- "$temp_manifest_key"
+        }
+        trap cleanup_manifest_key_temporary EXIT HUP INT TERM
+        openssl genpkey -algorithm ED25519 -out "$temp_manifest_key"
+        openssl pkey -in "$temp_manifest_key" -check -noout
+        mv -- "$temp_manifest_key" "$manifest_private_key"
+        chmod 600 "$manifest_private_key"
+        cleanup_manifest_key_temporary
+        trap - EXIT HUP INT TERM
+        printf '%s\n' "Created a private manifest identity in $manifest_key_root."
+    fi
+
+    manifest_public_key_b64="$(
+        openssl pkey -in "$manifest_private_key" -pubout -outform DER |
+            base64 | tr -d '\n'
+    )"
+    if [[ -n "$configured_manifest_public_key" && "$configured_manifest_public_key" != "$manifest_public_key_b64" ]]; then
+        printf '%s\n' \
+            "The local manifest key differs from the repository's configured public key." \
+            "Restore the original manifest identity; refusing silent key rotation." >&2
+        exit 1
+    fi
+    INTERMIX_RELEASE_ORIGIN_URL="$release_origin" \
+    INTERMIX_RELEASE_MANIFEST_PUBLIC_KEY_B64="$manifest_public_key_b64" \
+    INTERMIX_RELEASE_APK_CERT_SHA256="$certificate_sha" \
+        python3 "$checkout_root/tools/verify_android_release_trust.py"
+
+    gh variable set INTERMIX_RELEASE_ORIGIN_URL \
+        --repo "$repo" \
+        --body "$release_origin"
+    gh variable set INTERMIX_RELEASE_MANIFEST_PUBLIC_KEY_B64 \
+        --repo "$repo" \
+        --body "$manifest_public_key_b64"
+    gh variable set INTERMIX_RELEASE_APK_CERT_SHA256 \
+        --repo "$repo" \
+        --body "$certificate_sha"
+
+    printf '%s\n' \
+        "Validated public release trust anchors are configured for $repo." \
+        "The manifest private key remains only in Termux-private storage." \
+        "Release origin: $release_origin" \
         "Signing certificate SHA-256: $certificate_sha" \
         "Starting $workflow on $branch."
     gh workflow run "$workflow" \
@@ -292,6 +459,44 @@ artifact_commit="$(tr -d '[:space:]' < "$temp_root/artifact/commit.txt")"
     printf 'Artifact commit mismatch: run=%s artifact=%s\n' "$head_sha" "$artifact_commit" >&2
     exit 1
 }
+trust_summary="$temp_root/artifact/release-trust.json"
+[[ -f "$trust_summary" ]] || {
+    printf '%s\n' \
+        "Signed artifact has no release-trust provenance; refusing the legacy debug artifact." >&2
+    exit 1
+}
+IFS=$'\t' read -r artifact_origin artifact_manifest_key_sha artifact_pinned_signer < <(
+    python3 - "$trust_summary" <<'PY'
+import json
+import re
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    payload = json.load(source)
+expected = {
+    "schema",
+    "release_origin_url",
+    "manifest_public_key_sha256",
+    "apk_signer_sha256",
+}
+if set(payload) != expected or payload.get("schema") != 1:
+    raise SystemExit("invalid release trust provenance")
+origin = payload.get("release_origin_url", "")
+manifest_key = payload.get("manifest_public_key_sha256", "")
+signer = payload.get("apk_signer_sha256", "")
+if not origin.startswith("https://") or any(character.isspace() for character in origin):
+    raise SystemExit("invalid release origin provenance")
+if re.fullmatch(r"[0-9a-f]{64}", manifest_key) is None:
+    raise SystemExit("invalid manifest-key provenance")
+if re.fullmatch(r"[0-9a-f]{64}", signer) is None:
+    raise SystemExit("invalid signer provenance")
+print(origin, manifest_key, signer, sep="\t")
+PY
+)
+[[ "$artifact_pinned_signer" == "$artifact_certificate_sha" ]] || {
+    printf '%s\n' "Signed artifact certificate does not match its embedded release pin." >&2
+    exit 1
+}
 
 if [[ -f "$certificate" ]] && command -v openssl >/dev/null 2>&1; then
     local_certificate_sha="$(
@@ -316,6 +521,8 @@ printf '%s\n' \
     "Commit: $head_sha" \
     "Signed APK SHA-256: $signed_sha" \
     "Signing certificate SHA-256: $artifact_certificate_sha" \
+    "Manifest public-key SHA-256: $artifact_manifest_key_sha" \
+    "Release origin: $artifact_origin" \
     "APK: $signed_apk"
 
 if [[ "$open_installer" == true ]]; then
