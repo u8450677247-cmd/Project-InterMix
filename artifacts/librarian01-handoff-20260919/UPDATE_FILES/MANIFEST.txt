@@ -1,0 +1,26 @@
+Atomic implementation object:
+  194a63b5748b2a0ae9b9e0c7982a676100379b1b
+
+Expected parent:
+  329eed769c441c6687078c9b6cb4c032aa80f882
+
+Published branch:
+  feature/intermix-librarian-continuity-20260919
+
+Operational update contents:
+  engine/librarian/
+  engine/librarian_cli.py
+  engine/librarian_bridge.py
+  engine/llm_controller.py
+  bin/intermix-librarian
+  tools/install_librarian_service.sh
+  tools/benchmark_librarian.py
+  install.sh
+  android/app/src/main/AndroidManifest.xml
+  android/app/src/main/java/dev/anicloud/sovereign/LibrarianNetworkSentinel.kt
+  tests/test_librarian_continuity.py
+  tests/test_android_foundation.py
+  .github/workflows/tests.yml
+  docs/LIBRARIAN01.md
+
+The complete 31-file status list is in ../FILES_CHANGED.txt.

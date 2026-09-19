@@ -1,0 +1,18 @@
+BUILD ARTIFACTS
+Captured: 2026-09-19 UTC
+
+Deterministic source archive:
+  Name: Project_Intermix_v1.4.1-alpha.1_source.zip
+  Size: 2537748 bytes
+  SHA-256: b12fdce6a81a33847c085a8318e4ed43a5848a4bbc7a6229b605c0db72ef34ec
+  Build command: python3 tools/build_release.py . --output-dir <outside-repository>
+  Audit result: PASS
+
+The generated ZIP is intentionally outside the source tree so the public repository
+does not commit generated archives. Rebuild from implementation commit
+194a63b5748b2a0ae9b9e0c7982a676100379b1b and compare the checksum above.
+
+APK/binary status:
+  Not produced locally. This checkout has no Gradle executable and no repository
+  gradlew launcher. The pinned GitHub Android workflow is the compiler gate. No signing
+  material was accessed and no unsigned artifact is represented as deployable.

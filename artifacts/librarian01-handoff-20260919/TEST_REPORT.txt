@@ -1,0 +1,70 @@
+LIBRARIAN-01 VALIDATION REPORT
+Captured: 2026-09-19 UTC
+Implementation commit: 194a63b5748b2a0ae9b9e0c7982a676100379b1b
+
+BASELINE
+Command: python3 -m unittest discover -s tests -v
+Result: 142 tests executed; 137 passed, 5 skipped, 0 failed, 0 errors.
+
+FINAL REGRESSION
+Command: PYTHONPATH=engine PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+Result: 166 tests executed; 161 passed, 5 skipped, 0 failed, 0 errors.
+Elapsed: 3.787 seconds.
+
+CONTINUITY COVERAGE
+- Transactional migration from the supplied v0.1 + v0.2 schema: PASS
+- Exact event replay (100 deliveries -> 1 commit + 99 duplicates): PASS
+- Mutated-ID, global-ID and source-sequence conflict rejection: PASS
+- Authority-owned receive time and strict bounded schema checks: PASS
+- Evidence/provenance enforcement and changed derived replay rejection: PASS
+- Contradiction -> friction -> explicit resolution flow: PASS
+- Bounded context without embeddings: PASS
+- Snapshot, manifest hash, atomic archive copy and safe restore: PASS
+- Corrupt bytes, unexpected digest and unsafe restore rejection: PASS
+- Offline NAS queue and verified retry: PASS
+- Resource-gated workers, lease retry/backoff and terminal friction: PASS
+- Auth, node-role denial, origin spoof rejection and Cortex outbox: PASS
+- Idempotent heartbeat, job/result and snapshot request handling: PASS
+- Controller event/context/accepted-memory/assistant closed loop: PASS
+- Android network-sentinel source contract: PASS
+
+SYNTHETIC CLOSED-LOOP BENCHMARK
+Command: python3 tools/benchmark_librarian.py --events 1000 --queries 100 --atom-stride 10
+Result: PASS
+Unique events: 1000
+Evidence-backed atoms: 100
+Duplicate replay deliveries: 1000, with exact cardinality preserved
+Context queries: 100
+Ingest: 0.920628 seconds (1086.22 events/second)
+Memory commits: 0.127289 seconds (785.61/second)
+Context queries: 0.710332 seconds (140.78/second)
+Duplicate replay: 0.696336 seconds
+Snapshot: 0.006113 seconds
+Archive replication: 0.003897 seconds
+Database/snapshot size: 966656 bytes
+Maximum resident memory: 19900 KiB
+Integrity: true
+Archive verification: true
+Restored counts: 1000 events, 100 atoms
+Scope note: synthetic workspace evidence only; not Redmi hardware performance.
+
+LIVE SERVICE SMOKE
+- Additive initialization: PASS
+- SQLite quick-check and foreign-key check: PASS
+- Authenticated loopback GET /v1/health: PASS
+- Clean process shutdown: PASS
+- Bearer token mode: 0600 PASS
+
+STATIC/RELEASE CHECKS
+- python3 -m compileall -q engine tools tests: PASS
+- git diff --check: PASS
+- Shell syntax checks for new scripts: PASS
+- python3 tools/public_release_audit.py .: PASS
+- python3 tools/build_release.py . --output-dir <outside-repository>: PASS
+- Source release version: 1.4.1-alpha.1
+- Audited source files: 182
+
+NOT RUN LOCALLY
+- Android Gradle/Kotlin compile: local Gradle and repository gradlew are absent.
+  The existing pinned GitHub Android workflow is the required compiler gate.
+- Physical Redmi, Pixel and DS215j flights: require device owner access.

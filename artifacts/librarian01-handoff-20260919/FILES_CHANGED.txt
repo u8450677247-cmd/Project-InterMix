@@ -1,0 +1,33 @@
+Changes from 329eed769c441c6687078c9b6cb4c032aa80f882 to 194a63b5748b2a0ae9b9e0c7982a676100379b1b
+
+M  .github/workflows/tests.yml
+M  CHANGELOG.md
+M  README.md
+M  android/app/src/main/AndroidManifest.xml
+A  android/app/src/main/java/dev/anicloud/sovereign/LibrarianNetworkSentinel.kt
+A  bin/intermix-librarian
+M  docs/INSTALLATION.md
+A  docs/LIBRARIAN01.md
+M  docs/MEMORY.md
+A  docs/implementation/LIBRARIAN01_PROGRESS.md
+A  docs/implementation/LIBRARIAN01_REPO_MAP.md
+A  engine/librarian/__init__.py
+A  engine/librarian/client.py
+A  engine/librarian/health.py
+A  engine/librarian/legacy.py
+A  engine/librarian/models.py
+A  engine/librarian/network.py
+A  engine/librarian/schema.sql
+A  engine/librarian/service.py
+A  engine/librarian/snapshots.py
+A  engine/librarian/store.py
+A  engine/librarian/workers.py
+A  engine/librarian_bridge.py
+A  engine/librarian_cli.py
+M  engine/llm_controller.py
+M  install.sh
+M  tests/test_android_foundation.py
+A  tests/test_librarian_continuity.py
+A  tools/benchmark_librarian.py
+A  tools/install_librarian_service.sh
+M  tools/public_release_audit.py

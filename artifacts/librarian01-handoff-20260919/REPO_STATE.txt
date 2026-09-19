@@ -1,0 +1,11 @@
+Captured: 2026-09-19 UTC
+Repository: https://github.com/u8450677247-cmd/Project-InterMix.git
+Integration base branch: feature/anicloud-release-origin-20260917
+Integration base commit: 329eed769c441c6687078c9b6cb4c032aa80f882
+Working branch: feature/intermix-librarian-continuity-20260919
+Implementation commit: 194a63b5748b2a0ae9b9e0c7982a676100379b1b
+Implementation subject: feat: add LIBRARIAN-01 continuity service
+Implementation delta: 31 files changed, 7108 insertions, 5 deletions
+Handoff commit: the branch tip containing this file; resolve with `git rev-parse HEAD`
+Expected worktree after handoff commit: clean
+Publish policy: push branch and open a PR; do not merge automatically
