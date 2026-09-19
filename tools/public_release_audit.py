@@ -44,11 +44,15 @@ REQUIRED_EXECUTABLES = {
     "install.sh",
     "bin/intermix",
     "bin/intermix-doctor",
+    "bin/intermix-librarian",
     "bin/intermix-providers",
     "bin/intermix-rollback",
     "tools/device_probe.py",
+    "tools/benchmark_librarian.py",
     "tools/build_release.py",
+    "tools/install_librarian_service.sh",
     "tools/public_release_audit.py",
+    "engine/librarian_cli.py",
 }
 
 FORBIDDEN_DIRECTORY_NAMES = {

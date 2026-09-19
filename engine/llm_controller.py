@@ -29,6 +29,7 @@ from claim_contracts import ClaimContract, classify_claim, extract_versions
 from freshness_policy import assess_freshness
 from generation_guard import GENERATION_RUNTIME, RepetitionWatchdog
 from idle_maintenance import cancel_idle_maintenance, maintenance_status
+from librarian_bridge import CONTINUITY_BRIDGE
 from memory_protocol import HiddenMemoryFilter, apply_memory_payload, parse_memory_payload
 from memory_store import DEFAULT_DB, MemoryStore
 from model_router import (
@@ -729,6 +730,12 @@ async def _stream_inference_turn(
             "controller_clock": numeric_ledger.clock,
         },
     )
+    continuity_turn = await asyncio.to_thread(
+        CONTINUITY_BRIDGE.capture_user_turn,
+        clean_query,
+        session_id=session_id,
+    )
+    distributed_context = continuity_turn.context_block()
     if GENERATION_RUNTIME.cancelled:
         yield "generation_stopped", _record_generation_stop(session_id)
         return
@@ -935,6 +942,10 @@ async def _stream_inference_turn(
         if agent_mode and task_id:
             task_state = increment_epoch(task_id)
             mission_context = format_mission_context(task_state)
+        if distributed_context:
+            mission_context = "\n\n".join(
+                part for part in (mission_context, distributed_context) if part
+            )
         yield "phase", _phase("assembling", "Building bounded virtual context")
         prompt = build_prompt(
             STORE,
@@ -1221,6 +1232,19 @@ async def _stream_inference_turn(
             source_message_id=user_message_id,
             grounded_evidence=web_data,
         )
+        await asyncio.to_thread(
+            CONTINUITY_BRIDGE.capture_assistant_turn,
+            display_visible,
+            session_id=session_id,
+            parent_event_global_id=continuity_turn.event_global_id,
+        )
+        if protocol_result["stored"]:
+            await asyncio.to_thread(
+                CONTINUITY_BRIDGE.sync_committed_memories,
+                STORE,
+                source_message_id=user_message_id,
+                source_event_global_id=continuity_turn.event_global_id,
+            )
         if not protocol_result["session_updated"]:
             _fallback_session_update(session_id, clean_query)
 

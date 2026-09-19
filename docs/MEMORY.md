@@ -31,6 +31,11 @@ running or paused so its checkpoint cannot be detached from its project ledger.
 
 The database remains local at `~/project-intermix/memory/sovereign.db` by default and is ignored by source control.
 
+The optional [LIBRARIAN-01 distributed continuity service](LIBRARIAN01.md) adds
+immutable cross-node event IDs, evidence edges, explicit friction, bounded
+context packets, and verified snapshots without replacing these existing tables
+or placing a live SQLite/WAL on the NAS.
+
 ## Hidden proposal protocol
 
 The model can append a bounded hidden JSON memory proposal. A streaming filter removes the protocol even when markers cross token-chunk boundaries. Controller validation then checks operation type, field limits, source message, explicitness, sensitivity, and provenance before applying anything.
