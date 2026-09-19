@@ -11,6 +11,7 @@ import unittest
 import uuid
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,10 +19,16 @@ ENGINE = ROOT / "engine"
 sys.path.insert(0, str(ENGINE))
 
 from librarian.client import LibrarianClient, LibrarianClientError
-from librarian.health import HealthReporter
+from librarian.health import BATTERY_THERMAL_LIMIT_C, DEVICE_THERMAL_LIMIT_C, HealthReporter
 from librarian.legacy import project_existing_memory
 from librarian.models import EventEnvelope, ValidationError, canonical_json, now_ms
-from librarian.network import NetworkSnapshot, ResourceSnapshot, StaticNetworkSentinel
+from librarian.network import (
+    LocalResourceProvider,
+    NetworkSnapshot,
+    ResourceSnapshot,
+    StaticNetworkSentinel,
+    ThermalReading,
+)
 from librarian.service import LibrarianApplication, build_server
 from librarian.snapshots import FilesystemArchiveTarget, SnapshotManager, hash_file, restore_snapshot
 from librarian.store import ContinuityStore, apply_transactional_migration
@@ -37,6 +44,68 @@ class StaticResources:
 
     def snapshot(self) -> ResourceSnapshot:
         return self.value
+
+
+class ResourceProbeTests(unittest.TestCase):
+    def test_android_control_zones_are_not_reported_as_temperatures(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+
+            def add_zone(index: int, sensor_type: str, raw: str) -> None:
+                zone = root / f"thermal_zone{index}"
+                zone.mkdir()
+                (zone / "type").write_text(sensor_type, encoding="utf-8")
+                (zone / "temp").write_text(raw, encoding="utf-8")
+
+            # Captured on the Redmi LIBRARIAN-01 flight, plus equivalent BCL
+            # aliases. Charge/current/voltage controller inputs are not
+            # temperatures even though Android exposes them as thermal zones.
+            add_zone(9, "soc", "63")
+            add_zone(8, "socd", "92")
+            add_zone(2, "pm6150-ibat-lvl1", "546")
+            add_zone(1, "pm6150-ibat-lvl0", "546")
+            add_zone(5, "pm6150-vbat-lvl2", "3737")
+            add_zone(7, "pm6150l-vph-lvl2", "3000")
+            add_zone(26, "cpu-1-0-usr", "37700")
+            add_zone(10, "pm6150l-tz", "37000")
+            add_zone(74, "battery", "34200")
+
+            reading = LocalResourceProvider._thermal(root)
+            battery = LocalResourceProvider._battery_thermal(root)
+
+        self.assertIsNotNone(reading)
+        assert reading is not None
+        self.assertAlmostEqual(reading.temperature_c, 37.7)
+        self.assertEqual(reading.sensor_type, "cpu-1-0-usr")
+        self.assertEqual(reading.zone, "thermal_zone26")
+        self.assertIsNotNone(battery)
+        assert battery is not None
+        self.assertAlmostEqual(battery.temperature_c, 34.2)
+        self.assertEqual(battery.sensor_type, "battery")
+        self.assertEqual(battery.zone, "thermal_zone74")
+
+    def test_named_battery_zone_falls_back_when_power_supply_is_unreadable(self):
+        readings = [
+            ThermalReading(temperature_c=34.2, sensor_type="battery", zone="thermal_zone74"),
+            ThermalReading(
+                temperature_c=37.7,
+                sensor_type="cpu-1-0-usr",
+                zone="thermal_zone26",
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            provider = LocalResourceProvider(temporary)
+            with (
+                mock.patch.object(provider, "_battery", return_value=(63.0, None, None)),
+                mock.patch.object(provider, "_thermal_readings", return_value=readings),
+            ):
+                snapshot = provider.snapshot()
+
+        self.assertAlmostEqual(snapshot.battery_temperature_c or 0, 34.2)
+        self.assertEqual(snapshot.battery_temperature_sensor_type, "battery")
+        self.assertEqual(snapshot.battery_temperature_sensor_zone, "thermal_zone74")
+        self.assertAlmostEqual(snapshot.thermal_temperature_c or 0, 37.7)
+        self.assertEqual(snapshot.thermal_sensor_type, "cpu-1-0-usr")
 
 
 class LibrarianTestCase(unittest.TestCase):
@@ -549,6 +618,44 @@ class SnapshotWorkerAndHealthTests(LibrarianTestCase):
         outcome = WorkerSupervisor(self.store, resources=safe).run_once()
         self.assertEqual(outcome["state"], "done")
         self.assertEqual(self.store.get_job(job_id)["state"], "done")
+
+    def test_health_uses_sensor_class_specific_thermal_limits(self):
+        def report(*, battery: float | None, device: float | None) -> dict:
+            resources = StaticResources(
+                ResourceSnapshot(
+                    free_ram_mib=2048,
+                    total_ram_mib=4096,
+                    free_storage_mib=20_000,
+                    total_storage_mib=100_000,
+                    battery_pct=None,
+                    battery_temperature_c=battery,
+                    charging=None,
+                    thermal_temperature_c=device,
+                    thermal_sensor_type="cpu-1-0-usr" if device is not None else None,
+                    thermal_sensor_zone="thermal_zone26" if device is not None else None,
+                )
+            )
+            return HealthReporter(self.store, resources=resources).report()
+
+        normal_silicon = report(battery=None, device=63.0)
+        self.assertNotIn("THERMAL_LIMIT", normal_silicon["states"])
+        self.assertEqual(normal_silicon["thermal_policy"]["triggered_by"], [])
+        self.assertEqual(
+            normal_silicon["thermal_policy"]["battery_limit_c"],
+            BATTERY_THERMAL_LIMIT_C,
+        )
+        self.assertEqual(
+            normal_silicon["thermal_policy"]["device_limit_c"],
+            DEVICE_THERMAL_LIMIT_C,
+        )
+
+        hot_battery = report(battery=BATTERY_THERMAL_LIMIT_C, device=37.7)
+        self.assertIn("THERMAL_LIMIT", hot_battery["states"])
+        self.assertEqual(hot_battery["thermal_policy"]["triggered_by"], ["battery"])
+
+        hot_device = report(battery=None, device=DEVICE_THERMAL_LIMIT_C)
+        self.assertIn("THERMAL_LIMIT", hot_device["states"])
+        self.assertEqual(hot_device["thermal_policy"]["triggered_by"], ["device"])
 
     def test_health_is_explicit_when_cortex_nas_and_wan_disappear(self):
         network = StaticNetworkSentinel(

@@ -120,6 +120,11 @@ Current parity checkpoint:
 - Native parity is still blocked on the incremental project manifest, typed event
   domains/retention UI, grounded freshness and citations, stronger verified-work
   completion rules, and an on-device E2B librarian flight.
+- System now includes a Keystore-backed write-only Provider Key Drop. It exposes
+  configured/empty state without a secret read path and keeps native grounding
+  visibly off. The Termux `intermix-flight` command supplies daily live-authority
+  health plus a disposable full continuity loop; exact-device E2B offload and a
+  reviewed native outbound-data client remain separate gates.
 
 ## 4. Native research and shared browser
 
@@ -128,6 +133,7 @@ normal browser.
 
 1. Keep research/provider traffic separate from the updater's narrow `INTERNET` lane and explain
    every new outbound-data purpose in context.
+   Credential storage alone never activates provider traffic.
 2. Use an embedded, inspectable browser surface shared by user and agent.
 3. Separate navigation, extraction, download, and externally visible actions into typed tools.
 4. Treat every page, PDF, and download as untrusted data; resist instruction injection from content.

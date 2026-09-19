@@ -13,6 +13,20 @@ may still change.
   replay-safe authenticated Cortex protocol, resource-gated workers, verified
   SQLite snapshots/NAS replication, supervised Termux service, and a narrow
   Android network-sentinel boundary.
+- A mode-600 `intermix-flight` daily on-device harness that checks the live
+  Librarian authority, creates one idempotent snapshot per UTC day, and runs
+  synthetic ingest/provenance/recall/archive/restore only in a disposable shadow
+  database so operational testing cannot pollute continuity.
+- An explicit `--provider-canary` flight lane capped at one to three configured
+  adapters. It sends one fixed public query, discards retrieved content, and
+  records only redacted health metrics; collision-resistant reports are
+  append-only and accompanied by SHA-256 sidecars.
+- A native Android Provider Key Drop backed by a non-exportable Android Keystore
+  AES-GCM key. It reports only encrypted/empty status, has no public secret read
+  path, blocks capture while the password-masked key dialog is open, and keeps
+  the provider client visibly off pending outbound-data review.
+- Explicit grounding budgets: three primary providers, four adaptive workers,
+  and six/eight total requests, with a documented two-to-three-provider default.
 - One-click scoped Work Session autonomy: the launch grants create/write/mkdir authority only
   inside one prepared mission directory and bounded action/write budgets, while ordinary Chat,
   Termux execution, dependencies, and network access retain their separate review boundaries.
@@ -107,6 +121,12 @@ may still change.
 
 ### Fixed
 
+- LIBRARIAN-01 no longer treats Android battery-state, current, or voltage
+  thermal-zone control values (`soc`/`socd`, `ibat`, `vbat`, or `vph`) as
+  degrees Celsius. Health now reports battery/device sensor provenance, can use
+  a named battery thermal zone when the power-supply surface is unreadable, and
+  applies separate 43 °C battery and 80 °C device backpressure limits while
+  preserving fail-closed per-job temperature gates.
 - Phone Chat now gives the transcript the available viewport, fits all three answer modes without
   horizontal scrolling, collapses diagnostics while the keyboard is open, keeps the input/send
   row visible through IME resize, and temporarily hides bottom navigation during text entry.

@@ -516,6 +516,27 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("CONTEXT ORCHESTRATOR", ui)
         self.assertIn("20-POLICY PACK READY", ui)
 
+    def test_provider_key_drop_is_keystore_backed_write_only_and_truthful(self):
+        vault = (SOURCE / "ProviderCredentialVault.kt").read_text(encoding="utf-8")
+        view_model = (SOURCE / "SovereignViewModel.kt").read_text(encoding="utf-8")
+        ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
+        self.assertIn('KeyStore.getInstance(AndroidKeyStore)', vault)
+        self.assertIn('CipherTransformation = "AES/GCM/NoPadding"', vault)
+        self.assertIn("setRandomizedEncryptionRequired(true)", vault)
+        self.assertIn("plaintext.fill(0)", vault)
+        self.assertIn("Context.MODE_PRIVATE", vault)
+        self.assertNotIn("Cipher.DECRYPT_MODE", vault)
+        self.assertNotIn("fun get", vault)
+        self.assertIn("storeProviderCredential", view_model)
+        self.assertIn("removeProviderCredential", view_model)
+        self.assertIn("PasswordVisualTransformation()", ui)
+        self.assertIn('var secret by remember(editingProviderName)', ui)
+        self.assertNotIn('var secret by rememberSaveable(editingProviderName)', ui)
+        self.assertIn("WindowManager.LayoutParams.FLAG_SECURE", ui)
+        self.assertIn("Screen capture is blocked while this window is open", ui)
+        self.assertIn("CLIENT OFF", ui)
+        self.assertIn("will be made from this screen.", ui)
+
     def test_native_continuity_ports_the_termux_reconstruction_baseline(self):
         capture = (SOURCE / "ContinuityCapture.kt").read_text(encoding="utf-8")
         repository = (SOURCE / "MemoryMatrixRepository.kt").read_text(encoding="utf-8")
@@ -615,7 +636,8 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("only built-in network lane is the fail-closed release updater", ui)
         self.assertIn("never sends prompts", ui)
         self.assertIn("Android does not show a runtime Internet permission dialog", ui)
-        self.assertIn("API TOKEN VAULT · NOT ENABLED", ui)
+        self.assertIn("API CREDENTIAL VAULT · KEYSTORE READY", ui)
+        self.assertIn("Stored provider keys do not activate a network client", ui)
 
     def test_release_updater_is_pinned_resumable_and_locally_verified(self):
         manifest = (SOURCE / "ReleaseManifest.kt").read_text(encoding="utf-8")

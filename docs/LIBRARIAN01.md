@@ -213,10 +213,18 @@ service does not invent reachability.
 
 Jobs can require minimum free RAM, a maximum observed temperature, and charging.
 A requirement with an unknown or unsafe sensor value remains pending. The
-current default pressure signals are below 384 MiB free RAM, at least 43 °C at
-the hottest available sensor, and below ten percent free storage. These are
-conservative controller thresholds, not a substitute for initial on-device
-thermal characterization with the battery installed.
+current default pressure signals are below 384 MiB free RAM, a battery at or
+above 43 °C, a filtered physical device sensor at or above 80 °C, and below ten
+percent free storage. Battery and silicon limits are deliberately separate:
+Android kernels may publish state-of-charge (`soc`/`socd`), battery-current
+(`ibat`), and battery-voltage (`vbat`/`vph`) control channels through the
+thermal-zone ABI even though their values are not temperatures. The sentinel
+rejects those channels before unit normalization. When the normal power-supply
+battery surface is unreadable, a named `battery`/`bms` temperature zone is used
+as a narrow fallback. Health reports the selected battery and device sensor
+provenance. These are conservative controller backpressure thresholds, not
+hardware maximums or a substitute for initial on-device thermal
+characterization with the battery installed.
 
 The portable sentinel uses read-only Linux/Android kernel surfaces. The native
 Android skeleton uses `ConnectivityManager` for transport, validated Internet,
@@ -267,6 +275,56 @@ The benchmark creates only synthetic temporary data. It measures immutable
 ingest, evidence-backed memory commits, bounded queries, duplicate replay,
 snapshot creation, archive verification, and restore. Its four-GiB result is a
 process-envelope check in the current test environment, not Redmi device proof.
+
+### Daily on-device flight
+
+After installation, run the daily flight on LIBRARIAN-01:
+
+```bash
+intermix-flight
+```
+
+The flight checks the live database's schema, integrity, health state, queues,
+and resources. By default it creates one replay-safe live snapshot per UTC day.
+It then exercises immutable ingest, duplicate replay, an evidence-backed memory
+commit, bounded recall, snapshot, filesystem archive, and restore in a disposable
+shadow database on the same phone and storage path. Synthetic flight content is
+therefore never inserted into real continuity.
+
+Reports are mode 600 beneath
+`~/project-intermix/archive/librarian-flight-reports/`. They contain provider
+readiness booleans and controller budgets, never key values or live queries.
+Each report has a collision-resistant filename and an adjacent SHA-256 sidecar;
+the publisher refuses to replace an existing report artifact.
+
+After optional provider keys are configured, explicitly add a fixed,
+non-personal live canary for at most two providers:
+
+```bash
+intermix-flight --provider-canary
+```
+
+Use `--canary-providers 1`, `2`, or `3` to choose the cap. The canary sends only
+the built-in `python-docs-v1` public query, discards titles, snippets, URLs, and
+page content, and retains provider names, redacted errors, counts, timing, and a
+pass/fail state. The flag is not enabled by default because key storage alone
+must never authorize outbound traffic or quota use.
+
+To verify the mounted DS215j copy in the same flight:
+
+```bash
+intermix-flight --archive-root /path/to/mounted/archive
+```
+
+To perform health plus the disposable shadow loop without creating the day's
+live snapshot:
+
+```bash
+intermix-flight --no-snapshot-live
+```
+
+This produces real device/runtime evidence, but one passing run is not a battery,
+thermal, network-loss, or long-duration compatibility claim.
 
 Before calling the Redmi compatible, collect on-device cold/warm latency,
 resident RAM, sustained-write growth, battery temperature, thermal throttling,

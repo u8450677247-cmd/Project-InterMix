@@ -136,6 +136,42 @@ Provider: Wikipedia
             self.assertIn("tpu", lowered)
         self.assertIn("implementation", plan.expansion_focus)
 
+    def test_provider_concurrency_and_request_budgets_are_explicit(self):
+        policy = web_search.provider_policy()
+        self.assertEqual(policy["primary_concurrency"], 3)
+        self.assertEqual(policy["adaptive_concurrency"], 4)
+        self.assertEqual(policy["base_request_budget"], 6)
+        self.assertEqual(policy["adaptive_request_budget"], 8)
+        self.assertLessEqual(
+            policy["primary_concurrency"],
+            policy["base_request_budget"],
+        )
+
+    def test_provider_canary_is_bounded_and_discards_result_content(self):
+        calls: list[str] = []
+
+        def provider(query, limit):
+            calls.append(query)
+            return [
+                {
+                    "title": "Python official documentation standard library",
+                    "url": "https://docs.python.org/3/library/",
+                    "snippet": "Python language standard library official documentation.",
+                    "provider": "Canary fixture",
+                    "published": "",
+                }
+            ]
+
+        configured = [(f"_fixture_{index}", provider) for index in range(6)]
+        with patch.object(web_search, "_configured_wave", new=lambda: configured):
+            report = web_search.run_provider_canary(max_providers=99)
+
+        self.assertEqual(report["status"], "passed")
+        self.assertEqual(report["requests_used"], 3)
+        self.assertEqual(len(calls), 3)
+        self.assertNotIn("docs.python.org", repr(report))
+        self.assertNotIn("standard library official documentation", repr(report))
+
     def test_design_question_gets_design_and_tradeoff_follow_ups(self):
         plan = build_search_query_plan(
             "How was the LiteRT Android runtime designed and implemented?",

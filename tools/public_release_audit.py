@@ -44,6 +44,7 @@ REQUIRED_EXECUTABLES = {
     "install.sh",
     "bin/intermix",
     "bin/intermix-doctor",
+    "bin/intermix-flight",
     "bin/intermix-librarian",
     "bin/intermix-providers",
     "bin/intermix-rollback",
@@ -52,6 +53,7 @@ REQUIRED_EXECUTABLES = {
     "tools/build_release.py",
     "tools/install_librarian_service.sh",
     "tools/public_release_audit.py",
+    "tools/run_librarian_daily_flight.py",
     "engine/librarian_cli.py",
 }
 

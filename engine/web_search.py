@@ -31,6 +31,10 @@ load_provider_environment()
 
 
 USER_AGENT = "Mozilla/5.0 (Android; Project Intermix/1.4.1-alpha.1) AppleWebKit/537.36"
+PRIMARY_PROVIDER_CONCURRENCY = 3
+ADAPTIVE_PROVIDER_CONCURRENCY = 4
+BASE_REQUEST_BUDGET = 6
+ADAPTIVE_REQUEST_BUDGET = 8
 
 STOPWORDS = {
     "a", "about", "an", "and", "are", "for", "from", "how", "in", "is",
@@ -175,6 +179,17 @@ def provider_status() -> list[dict[str, Any]]:
         }
         for name in names
     ]
+
+
+def provider_policy() -> dict[str, int | str]:
+    """Return the active non-secret search budget for UI and flight diagnostics."""
+    return {
+        "strategy": "smallest reliable independent source set",
+        "primary_concurrency": PRIMARY_PROVIDER_CONCURRENCY,
+        "adaptive_concurrency": ADAPTIVE_PROVIDER_CONCURRENCY,
+        "base_request_budget": BASE_REQUEST_BUDGET,
+        "adaptive_request_budget": ADAPTIVE_REQUEST_BUDGET,
+    }
 
 
 def _raise_if_blocked(page: str) -> None:
@@ -898,7 +913,9 @@ def _run_wave(
         return [], cooling, 0, []
     results: list[dict[str, str]] = []
     errors: list[str] = []
-    with ThreadPoolExecutor(max_workers=min(3, len(selected))) as executor:
+    with ThreadPoolExecutor(
+        max_workers=min(PRIMARY_PROVIDER_CONCURRENCY, len(selected)),
+    ) as executor:
         futures = {
             executor.submit(provider, query, max_results): name
             for name, provider in selected
@@ -914,6 +931,45 @@ def _run_wave(
                 _provider_succeeded(name)
                 results.extend(batch)
     return results, errors, len(selected), [_provider_key(name) for name, _ in selected]
+
+
+def run_provider_canary(max_providers: int = 2) -> dict[str, Any]:
+    """Exercise configured search adapters with fixed public input and no result retention."""
+    provider_limit = max(1, min(int(max_providers), PRIMARY_PROVIDER_CONCURRENCY))
+    configured = _configured_wave()[:provider_limit]
+    if not configured:
+        return {
+            "status": "unconfigured",
+            "canary_profile": "python-docs-v1",
+            "requests_used": 0,
+            "providers_attempted": [],
+            "provider_errors": [],
+            "result_count": 0,
+            "relevant_result_count": 0,
+            "distinct_source_count": 0,
+            "elapsed_seconds": 0.0,
+        }
+    query = "Python language official documentation standard library"
+    started = time.perf_counter()
+    results, errors, used, providers = _run_wave(
+        configured,
+        query,
+        2,
+        provider_limit,
+    )
+    relevant = [item for item in results if _result_is_relevant(query, item)]
+    status = "passed" if relevant else "failed" if errors else "no_relevant_results"
+    return {
+        "status": status,
+        "canary_profile": "python-docs-v1",
+        "requests_used": used,
+        "providers_attempted": sorted(set(providers)),
+        "provider_errors": errors[-provider_limit:],
+        "result_count": len(results),
+        "relevant_result_count": len(relevant),
+        "distinct_source_count": len(_distinct_hosts(relevant)),
+        "elapsed_seconds": round(time.perf_counter() - started, 6),
+    }
 
 
 def _distinct_hosts(results: Sequence[dict[str, str]]) -> set[str]:
@@ -1011,7 +1067,9 @@ def _run_adaptive_round(
     errors = list(cooling)
     providers_used: list[str] = []
     queries_used: list[str] = []
-    with ThreadPoolExecutor(max_workers=min(4, len(jobs))) as executor:
+    with ThreadPoolExecutor(
+        max_workers=min(ADAPTIVE_PROVIDER_CONCURRENCY, len(jobs)),
+    ) as executor:
         futures = {
             executor.submit(provider, query, max_results): (name, query)
             for name, provider, query in jobs
@@ -1062,7 +1120,7 @@ def search_web(
         if len(planned_follow_ups) >= 2:
             break
 
-    request_budget = 8 if planned_follow_ups else 6
+    request_budget = ADAPTIVE_REQUEST_BUDGET if planned_follow_ups else BASE_REQUEST_BUDGET
     follow_up_reserve = min(3, request_budget - 1) if planned_follow_ups else 0
     primary_budget = request_budget - follow_up_reserve
     requests_used = 0
@@ -1090,6 +1148,7 @@ def search_web(
                 "distinct_sources": len(_distinct_hosts(accepted)),
                 "providers_used": sorted(set(providers_used)),
                 "provider_errors": errors[-3:],
+                "provider_policy": provider_policy(),
             }
         )
         if accepted:
@@ -1128,7 +1187,11 @@ def search_web(
         if _is_volatile(gate_query)
         else [("_wikipedia", _wikipedia)]
     )
-    waves = [configured[:3], configured[3:] + specialized, discovery]
+    waves = [
+        configured[:PRIMARY_PROVIDER_CONCURRENCY],
+        configured[PRIMARY_PROVIDER_CONCURRENCY:] + specialized,
+        discovery,
+    ]
     for wave in waves:
         if not wave or requests_used >= primary_budget:
             continue
@@ -1212,7 +1275,9 @@ __all__ = [
     "evidence_source_ids",
     "extract_verified_fact",
     "last_search_report",
+    "provider_policy",
     "provider_status",
+    "run_provider_canary",
     "search_web",
     "validate_web_evidence",
 ]

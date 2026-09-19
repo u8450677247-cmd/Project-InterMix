@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -eu
+
+project_dir="${INTERMIX_PROJECT_DIR:-$HOME/project-intermix}"
+if [ -L "$project_dir/current" ] || [ -d "$project_dir/current" ]; then
+    release_dir="$project_dir/current"
+else
+    release_dir="$project_dir"
+fi
+
+flight="$release_dir/tools/run_librarian_daily_flight.py"
+if [ ! -f "$flight" ]; then
+    printf 'The LIBRARIAN-01 daily flight was not found at %s\n' "$flight" >&2
+    exit 1
+fi
+
+exec python "$flight" "$@"
