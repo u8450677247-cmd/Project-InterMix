@@ -59,6 +59,7 @@ class AndroidFoundationTests(unittest.TestCase):
             {
                 "android.permission.USE_BIOMETRIC",
                 "android.permission.INTERNET",
+                "android.permission.ACCESS_NETWORK_STATE",
                 "android.permission.POST_NOTIFICATIONS",
                 "android.permission.REQUEST_INSTALL_PACKAGES",
                 "android.permission.FOREGROUND_SERVICE",

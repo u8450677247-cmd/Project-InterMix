@@ -8,6 +8,11 @@ may still change.
 
 ### Added
 
+- The LIBRARIAN-01 distributed continuity candidate: an additive immutable-event
+  lattice, evidence-backed memory and friction, bounded source-linked context,
+  replay-safe authenticated Cortex protocol, resource-gated workers, verified
+  SQLite snapshots/NAS replication, supervised Termux service, and a narrow
+  Android network-sentinel boundary.
 - One-click scoped Work Session autonomy: the launch grants create/write/mkdir authority only
   inside one prepared mission directory and bounded action/write budgets, while ordinary Chat,
   Termux execution, dependencies, and network access retain their separate review boundaries.

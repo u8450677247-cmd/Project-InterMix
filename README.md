@@ -158,6 +158,17 @@ The research basis, 200-mechanism implementation catalogue, E2B/E4B policy,
 two-day sequence, and design-partner release gates are documented in
 [Context, Memory, and Environment Architecture](docs/ANICLOUDAI_CONTEXT_MEMORY_ENVIRONMENT_RESEARCH.md).
 
+### LIBRARIAN-01 distributed continuity
+
+The additive LIBRARIAN-01 candidate turns a Redmi Note 9 Pro into the persistent
+continuity authority, keeps the Pixel 10 Pro replaceable as the reasoning cortex,
+and limits the DS215j to verified snapshots and releases. Immutable events,
+evidence-backed memory, visible contradictions, bounded source-linked context,
+offline replay, and hash-verified restore are implemented without moving a live
+SQLite/WAL onto the NAS. Deployment remains opt-in and fail-closed; follow the
+[LIBRARIAN-01 runbook](docs/LIBRARIAN01.md) for the exact trust and device-evidence
+boundary.
+
 ### The Long Forge: bounded autonomous project work
 
 Long Forge turns Workspace Lens into more than a file viewer. The user provides
@@ -340,7 +351,7 @@ The detailed contracts live in [the native Android module](android/README.md),
 | Cold/idle available memory | Approximately 7.0–7.6 GiB in the owner's test environment |
 | Resident-hot available memory | Approximately 2.6–3.7 GiB in the owner's test environment |
 | Cooling used during long tests | Optional Black Shark Magnetic/FunCooler 6 Pro (BR62); approximately 25 °C owner-observed device temperature |
-| Test suite | 127 deterministic public-alpha checks across memory, routing, grounding, cancellation, stream integrity, inference, workspace, release safety, benchmark integrity, and interface behavior |
+| Test suite | 166 deterministic public-alpha checks across memory, distributed continuity, routing, grounding, cancellation, stream integrity, inference, workspace, release safety, benchmark integrity, and interface behavior |
 
 These are observations, not guarantees. Android memory pressure, other applications, firmware, drivers, ambient temperature, model build, and compiled caches can materially change the result.
 

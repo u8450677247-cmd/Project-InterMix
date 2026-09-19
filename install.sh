@@ -455,7 +455,7 @@ done
 if [ -L "$project_dir/current" ]; then
     readlink "$project_dir/current" > "$snapshot_dir/previous_current_target.txt"
 fi
-for launcher in intermix sovereign intermix-providers intermix-doctor intermix-rollback; do
+for launcher in intermix sovereign intermix-providers intermix-doctor intermix-librarian intermix-rollback; do
     if [ -e "${PREFIX:-/usr/local}/bin/$launcher" ]; then
         cp -a "${PREFIX:-/usr/local}/bin/$launcher" "$snapshot_dir/" 2>/dev/null || true
     fi
@@ -553,6 +553,7 @@ PY
 INTERMIX_CONFIG_FILE="$config_file" PYTHONPATH="$release_dir/engine" \
 python - "$memory_existed" "$sensitive_mode" "$VERSION" <<'PY'
 import sys
+from librarian.store import ContinuityStore
 from memory_store import MemoryStore
 
 store = MemoryStore()
@@ -563,6 +564,13 @@ if sys.argv[1] == "0":
 store.set_setting("installed_public_release", sys.argv[3])
 status = store.status()
 print(f"SQLite schema v{status['schema_version']} · {status['messages']} messages · {status['memories']} memories")
+lattice = ContinuityStore(store.db_path)
+lattice.register_node("cortex-primary", "cortex", "CORTEX-PRIMARY", platform="Pixel")
+lattice.register_node("archive-ds215j", "archive", "DS215j", platform="Synology")
+integrity = lattice.integrity_check()
+if not integrity["ok"]:
+    raise SystemExit(f"Continuity Lattice integrity check failed: {integrity}")
+print(f"Continuity Lattice {lattice.schema_version()} · integrity verified")
 PY
 
 
@@ -587,7 +595,7 @@ fi
 
 launcher_dir="${PREFIX:-/usr/local}/bin"
 mkdir -p "$launcher_dir"
-for launcher in intermix intermix-providers intermix-doctor intermix-rollback; do
+for launcher in intermix intermix-providers intermix-doctor intermix-librarian intermix-rollback; do
     install -m 0755 "$release_dir/bin/$launcher" "$launcher_dir/$launcher"
 done
 ln -sf intermix "$launcher_dir/sovereign"
@@ -604,6 +612,7 @@ printf 'Rollback snapshot: %s\n' "$snapshot_dir"
 printf 'Configuration: %s (mode 600; contains no provider keys)\n' "$config_file"
 printf 'Launch: intermix  (compatibility alias: sovereign)\n'
 printf 'Provider vault: intermix-providers\n'
+printf 'Continuity service: intermix-librarian --help\n'
 printf 'Share-safe diagnostics: intermix-doctor --json\n'
 printf 'The model was validated but not loaded; first launch may compile caches for several minutes.\n'
 printf 'Legacy data was not imported. Review the report before ever using --apply.\n'

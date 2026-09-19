@@ -2,7 +2,7 @@ name: tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, "feature/intermix-*"]
   pull_request:
   workflow_dispatch:
 
@@ -41,7 +41,7 @@ jobs:
       - name: Compile Python and validate shell
         run: |
           python -m compileall -q engine tools tests
-          bash -n install.sh bin/intermix bin/intermix-doctor bin/intermix-providers bin/intermix-rollback
+          bash -n install.sh bin/intermix bin/intermix-doctor bin/intermix-librarian bin/intermix-providers bin/intermix-rollback tools/install_librarian_service.sh
 
       - name: Run deterministic tests
         env:

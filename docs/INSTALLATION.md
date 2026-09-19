@@ -119,3 +119,10 @@ intermix-doctor --json > intermix-device-report.json
 Inspect the JSON before attaching it. The tool avoids personal identifiers and
 does not load the model, but only the user can decide whether a report is safe
 for their context.
+
+## Optional distributed continuity service
+
+The additive LIBRARIAN-01 service is installed with the source but remains a
+separate, explicitly configured runtime. Its supervised installer defaults to
+loopback and the down state. See the [LIBRARIAN-01 runbook](LIBRARIAN01.md) before
+binding an interface, connecting a Cortex node, or selecting a NAS mount.
