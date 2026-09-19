@@ -70,7 +70,7 @@ magenta marks **technology actively extending the boundary**.
 | **Build path** | Android API 36, JDK 17, Gradle 9.4.1, Kotlin/Compose, arm64-v8a |
 | **Inference** | Native LiteRT-LM 0.17.0 candidate; proven E4B GPU path with measured CPU fallback; E2B/NPU remains device-gated |
 | **Fast route** | Exact-fingerprint E2B Tensor G5 package; NPU-only and never silently redirected to GPU |
-| **Evidence** | 132 deterministic public checks plus Android unit tests, assembly, signing, and artifact retention in CI |
+| **Evidence** | 171 deterministic Python/source-contract checks in this candidate (166 pass, 5 optional Textual skips); Android unit tests, assembly, signing, and artifact retention remain separate CI gates |
 | **Signing** | Persistent dogfood identity, allowing an in-place update that preserves private app data |
 | **Reference hardware** | Pixel 10 Pro, Tensor G5, Android 17; other devices remain unverified candidates |
 | **Acceptance state** | Signed 0.8.10 passed CI and is installed on the reference device. Its first scoped write flight rejected a missing target instead of claiming success, preserved the complete audit trail, and stopped a recursive loop. That flight also exposed stale Story Forge preset reuse and `write_file`-before-create drift; 0.8.11 moves those environment decisions into Android. CI and exact-device write success remain required |
@@ -493,6 +493,20 @@ intermix-doctor --json > intermix-device-report.json
 
 The default report does not load the model, run inference, read personal files, or collect serial numbers, Android IDs, usernames, hostnames, IP addresses, credentials, prompts, or absolute paths.
 
+On LIBRARIAN-01, run the daily continuity flight after the service database has
+been initialized:
+
+```bash
+intermix-flight
+```
+
+It checks the live authority and creates one idempotent verified snapshot per UTC
+day, while all synthetic ingest/recall/restore tests stay inside a disposable
+shadow database. See [the Librarian flight contract](docs/LIBRARIAN01.md#daily-on-device-flight).
+After keys are configured, `intermix-flight --provider-canary` additionally tests
+up to two provider adapters with one fixed non-personal query and discards all
+retrieved content.
+
 ## Provider setup
 
 No web credential is required for local chat. Optional providers are configured outside the cockpit through hidden input:
@@ -503,7 +517,11 @@ intermix-providers
 
 Keys are stored only in `~/.config/intermix/providers.env` with mode `600`, are allowlisted controller-side, and are never shown in provider status, placed in SQLite, or passed to the model. Do not paste keys into chat, issues, screenshots, or logs.
 
-Grounding uses query classification and a bounded provider wave. The controller derives at most three anchored query wordings from the user's request. It tries the primary wording first and launches one parallel follow-up round only when the evidence is missing or lacks independent corroboration. Official resolvers and authoritative registries are preferred for exact claims; optional search APIs expand coverage; DuckDuckGo is a cooled fallback. Captcha, proxy rotation, IP hopping, and rate-limit evasion are deliberately out of scope.
+Grounding uses query classification and a bounded provider wave. The controller derives at most three anchored query wordings from the user's request. It tries at most three configured providers in the primary wave and launches one adaptive round with at most four concurrent requests only when evidence is missing or lacks independent corroboration. The complete request ceiling is six normally or eight with planned follow-ups. Official resolvers and authoritative registries are preferred for exact claims; optional search APIs expand coverage; DuckDuckGo is a cooled fallback. Captcha, proxy rotation, IP hopping, and rate-limit evasion are deliberately out of scope.
+
+The native Android System screen now provides an encrypted Provider Key Drop,
+but native search remains visibly **CLIENT OFF** until its outbound-data review
+and adapters are complete. Live grounding continues through the Termux vault.
 
 Inspect the deterministic plan before searching with `/web plan …`, and inspect the most recent execution budget with `/web last plan`. Non-exact grounded answers may offer a short evidence-backed “Further path” about implementation, design rationale, trade-offs, or limitations; that section is omitted when sources do not support it.
 

@@ -455,7 +455,7 @@ done
 if [ -L "$project_dir/current" ]; then
     readlink "$project_dir/current" > "$snapshot_dir/previous_current_target.txt"
 fi
-for launcher in intermix sovereign intermix-providers intermix-doctor intermix-librarian intermix-rollback; do
+for launcher in intermix sovereign intermix-providers intermix-doctor intermix-librarian intermix-flight intermix-rollback; do
     if [ -e "${PREFIX:-/usr/local}/bin/$launcher" ]; then
         cp -a "${PREFIX:-/usr/local}/bin/$launcher" "$snapshot_dir/" 2>/dev/null || true
     fi
@@ -595,7 +595,7 @@ fi
 
 launcher_dir="${PREFIX:-/usr/local}/bin"
 mkdir -p "$launcher_dir"
-for launcher in intermix intermix-providers intermix-doctor intermix-librarian intermix-rollback; do
+for launcher in intermix intermix-providers intermix-doctor intermix-librarian intermix-flight intermix-rollback; do
     install -m 0755 "$release_dir/bin/$launcher" "$launcher_dir/$launcher"
 done
 ln -sf intermix "$launcher_dir/sovereign"
@@ -613,6 +613,7 @@ printf 'Configuration: %s (mode 600; contains no provider keys)\n' "$config_file
 printf 'Launch: intermix  (compatibility alias: sovereign)\n'
 printf 'Provider vault: intermix-providers\n'
 printf 'Continuity service: intermix-librarian --help\n'
+printf 'Daily continuity flight: intermix-flight\n'
 printf 'Share-safe diagnostics: intermix-doctor --json\n'
 printf 'The model was validated but not loaded; first launch may compile caches for several minutes.\n'
 printf 'Legacy data was not imported. Review the report before ever using --apply.\n'

@@ -61,6 +61,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
     private val workspaceRepository = WorkspaceRepository(application)
     private val termuxBridge = TermuxExecutionBridge(application)
     private val termuxBridgeConfig = TermuxBridgeConfigStore(application)
+    private val providerVault = ProviderCredentialVault(application)
     private val runtime = LiteRtModelRuntime(application)
     private val powerManager = application.getSystemService(PowerManager::class.java)
     private val activityManager = application.getSystemService(ActivityManager::class.java)
@@ -74,6 +75,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             pendingActions = memoryMatrix.pendingWorkspaceActions(),
             pendingExecutions = memoryMatrix.pendingExecutionActions(),
             termuxBridge = termuxBridge.status(),
+            providerVault = providerVault.snapshot(),
             conversationModel = restoredConversationModel,
             reasoningModel = restoredReasoningModel,
         ),
@@ -178,6 +180,38 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                     "Developer plugin · Termux disabled; native chat, Matrix, and Workspace remain available."
                 },
             )
+        }
+    }
+
+    fun storeProviderCredential(provider: ProviderCredential, secret: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val stored = runCatching { providerVault.store(provider, secret) }.isSuccess
+            _state.update {
+                it.copy(
+                    providerVault = providerVault.snapshot(),
+                    detail = if (stored) {
+                        "${provider.displayName} credential encrypted. Native grounding remains off."
+                    } else {
+                        "${provider.displayName} credential was not stored; the vault failed closed."
+                    },
+                )
+            }
+        }
+    }
+
+    fun removeProviderCredential(provider: ProviderCredential) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val removed = runCatching { providerVault.remove(provider) }.isSuccess
+            _state.update {
+                it.copy(
+                    providerVault = providerVault.snapshot(),
+                    detail = if (removed) {
+                        "${provider.displayName} credential removed."
+                    } else {
+                        "${provider.displayName} credential removal failed closed."
+                    },
+                )
+            }
         }
     }
 

@@ -1,5 +1,9 @@
 package dev.anicloud.sovereign.prototype.ui
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -45,6 +49,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
@@ -63,6 +68,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -91,6 +97,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -121,6 +129,9 @@ import dev.anicloud.sovereign.prototype.MatrixMemory
 import dev.anicloud.sovereign.prototype.MemoryMatrixSnapshot
 import dev.anicloud.sovereign.prototype.PendingWorkspaceAction
 import dev.anicloud.sovereign.prototype.PendingExecutionAction
+import dev.anicloud.sovereign.prototype.ProviderCredential
+import dev.anicloud.sovereign.prototype.ProviderCredentialPolicy
+import dev.anicloud.sovereign.prototype.ProviderVaultSnapshot
 import dev.anicloud.sovereign.prototype.RuntimePhase
 import dev.anicloud.sovereign.prototype.SovereignViewModel
 import dev.anicloud.sovereign.prototype.StoryForgeBenchmarkFolder
@@ -153,6 +164,8 @@ private data class CockpitActions(
     val onStopExecutionAction: (Long) -> Unit,
     val onRequestTermuxPermission: () -> Unit,
     val onSetTermuxPluginEnabled: (Boolean) -> Unit,
+    val onStoreProviderCredential: (ProviderCredential, String) -> Unit,
+    val onRemoveProviderCredential: (ProviderCredential) -> Unit,
     val onForgetMemory: (Long) -> Unit,
     val onSetMemoryPinned: (Long, Boolean) -> Unit,
 )
@@ -239,6 +252,8 @@ fun AniCloudApp(
         onStopExecutionAction = sovereignViewModel::stopExecutionAction,
         onRequestTermuxPermission = { termuxPermission.launch(TermuxRunCommandPermission) },
         onSetTermuxPluginEnabled = sovereignViewModel::setTermuxPluginEnabled,
+        onStoreProviderCredential = sovereignViewModel::storeProviderCredential,
+        onRemoveProviderCredential = sovereignViewModel::removeProviderCredential,
         onForgetMemory = sovereignViewModel::forgetMemory,
         onSetMemoryPinned = sovereignViewModel::setMemoryPinned,
     )
@@ -3609,7 +3624,10 @@ private fun SystemSurface(
             PrivacyStateCard()
         }
         item {
-            DataBoundaryCard()
+            ProviderVaultCard(cockpit.providerVault, cockpitActions)
+        }
+        item {
+            DataBoundaryCard(cockpit.providerVault)
         }
     }
 }
@@ -3709,7 +3727,11 @@ private fun SystemLens(cockpit: CockpitState, modifier: Modifier = Modifier) {
             cockpit.modelLoadMillis?.let(::formatDuration) ?: "NOT MEASURED",
             if (cockpit.modelLoadMillis == null) MutedText else CognitionViolet,
         )
-        LensValue("GROUNDING", "OFFLINE", MutedText)
+        LensValue(
+            "GROUNDING",
+            if (cockpit.providerVault.ready) "KEYS STORED · CLIENT OFF" else "OFFLINE",
+            if (cockpit.providerVault.ready) WaitingAmber else MutedText,
+        )
         LensValue("ROUTE", cockpit.routeLabel.uppercase(), modelVitalityColor(cockpit))
         HorizontalDivider(color = MaterialTheme.colorScheme.outline)
         Text(
@@ -3790,7 +3812,186 @@ private fun PrivacyStateCard() {
 }
 
 @Composable
-private fun DataBoundaryCard() {
+private fun ProviderVaultCard(
+    vault: ProviderVaultSnapshot,
+    actions: CockpitActions,
+) {
+    var editingProviderName by rememberSaveable { mutableStateOf<String?>(null) }
+    val editingProvider = ProviderCredential.entries.firstOrNull {
+        it.wireName == editingProviderName
+    }
+    // Never place a plaintext credential in Android's saved-instance-state Bundle.
+    var secret by remember(editingProviderName) { mutableStateOf("") }
+    val localContext = LocalContext.current
+    val activityWindow = remember(localContext) {
+        localContext.findActivity()?.window
+    }
+    DisposableEffect(activityWindow, editingProvider != null) {
+        val wasSecure = ((activityWindow?.attributes?.flags ?: 0) and
+            WindowManager.LayoutParams.FLAG_SECURE) != 0
+        if (editingProvider != null) {
+            activityWindow?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
+        onDispose {
+            if (editingProvider != null && !wasSecure) {
+                activityWindow?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            }
+        }
+    }
+
+    fun closeEditor() {
+        secret = ""
+        editingProviderName = null
+    }
+
+    OutlinedCard {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "PROVIDER KEY DROP",
+                        color = CognitionViolet,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        "${vault.configuredCount}/${ProviderCredential.entries.size} encrypted",
+                        color = if (vault.ready) ResonanceMint else MutedText,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                    )
+                }
+                Text(
+                    "CLIENT OFF",
+                    color = WaitingAmber,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                )
+            }
+            Text(
+                "Keys are encrypted with a non-exportable Android Keystore key. Values are never " +
+                    "shown again, sent to the model, written to Matrix, or included in diagnostics.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 13.sp,
+            )
+            ProviderCredential.entries.forEach { provider ->
+                val configured = provider in vault.configured
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .sovereignGlass(CognitionViolet, radius = 12.dp, depth = 0.38f)
+                        .padding(12.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(provider.displayName, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                provider.role,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 12.sp,
+                            )
+                        }
+                        Text(
+                            if (configured) "ENCRYPTED" else "EMPTY",
+                            color = if (configured) ResonanceMint else MutedText,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { editingProviderName = provider.wireName }) {
+                            Text(if (configured) "REPLACE" else "ADD KEY")
+                        }
+                        if (configured) {
+                            TextButton(onClick = { actions.onRemoveProviderCredential(provider) }) {
+                                Text("REMOVE", color = InterventionCoral)
+                            }
+                        }
+                    }
+                }
+            }
+            Text(
+                "GROUNDING POLICY · 2–3 independent providers per primary wave · hard cap 3 · " +
+                    "remaining configured providers stay as bounded fallbacks",
+                color = HorizonCyan,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+            )
+            Text(
+                "Storage is active; native search transport is intentionally not wired yet. " +
+                    "Use the Termux provider vault for live grounding today.",
+                color = WaitingAmber,
+                fontSize = 12.sp,
+            )
+        }
+    }
+
+    if (editingProvider != null) {
+        AlertDialog(
+            onDismissRequest = ::closeEditor,
+            title = { Text("${editingProvider.displayName} key") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "Paste once. Intermix will store authenticated ciphertext and will not " +
+                            "display the value again.",
+                    )
+                    OutlinedTextField(
+                        value = secret,
+                        onValueChange = { value ->
+                            if (value.toByteArray().size <= ProviderCredentialPolicy.MaximumSecretBytes) {
+                                secret = value
+                            }
+                        },
+                        label = { Text("API key") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                            imeAction = ImeAction.Done,
+                        ),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        "Screen capture is blocked while this window is open. No provider request " +
+                            "will be made from this screen.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = secret.isNotEmpty() && secret == secret.trim(),
+                    onClick = {
+                        actions.onStoreProviderCredential(editingProvider, secret)
+                        closeEditor()
+                    },
+                ) {
+                    Text("ENCRYPT & STORE")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = ::closeEditor) { Text("CANCEL") }
+            },
+        )
+    }
+}
+
+private fun Context.findActivity(): Activity? {
+    var current: Context? = this
+    while (current is ContextWrapper) {
+        if (current is Activity) return current
+        val base = current.baseContext
+        if (base === current) break
+        current = base
+    }
+    return current as? Activity
+}
+
+@Composable
+private fun DataBoundaryCard(vault: ProviderVaultSnapshot) {
     OutlinedCard {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
@@ -3812,13 +4013,14 @@ private fun DataBoundaryCard() {
             Text(
                 "Android does not show a runtime Internet permission dialog. Update installation may " +
                     "separately require install-source approval and Android's package confirmation. " +
-                    "Any future provider or research lane must show its own outbound-data review.",
+                    "Stored provider keys do not activate a network client. A future provider or " +
+                    "research lane must show its own outbound-data review before the first request.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 12.sp,
             )
             Text(
-                "API TOKEN VAULT · NOT ENABLED",
-                color = PulseMagenta,
+                "API CREDENTIAL VAULT · KEYSTORE READY · ${vault.configuredCount} CONFIGURED",
+                color = if (vault.ready) ResonanceMint else SoftViolet,
                 fontFamily = FontFamily.Monospace,
                 fontSize = 10.sp,
             )

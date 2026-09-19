@@ -76,6 +76,12 @@ def load_provider_environment(path: Path = VAULT_FILE) -> set[str]:
     return loaded
 
 
+def provider_configuration_status(path: Path = VAULT_FILE) -> dict[str, bool]:
+    """Return allowlisted readiness flags without exposing credential values."""
+    values = _read_values(path)
+    return {key: bool(values.get(key)) for key in ALLOWED_FIELDS}
+
+
 def _write_values(values: dict[str, str], path: Path = VAULT_FILE) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(path.parent, 0o700)
@@ -190,4 +196,10 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 
-__all__ = ["ALLOWED_FIELDS", "VAULT_FILE", "load_provider_environment", "main"]
+__all__ = [
+    "ALLOWED_FIELDS",
+    "VAULT_FILE",
+    "load_provider_environment",
+    "main",
+    "provider_configuration_status",
+]

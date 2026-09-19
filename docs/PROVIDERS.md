@@ -36,6 +36,56 @@ Provider availability can change. `/web status` reports configured/readiness sta
 
 An official exact result can short-circuit later waves. This reduces latency, API cost, rate-limit exposure, and contradictory snippets.
 
+### Active concurrency budget
+
+The current controller exposes its budget through `/web last plan` and the daily
+flight report:
+
+| Phase | Simultaneous requests | Total request ceiling |
+|---|---:|---:|
+| Primary configured wave | 3 | 6 without follow-up queries |
+| Adaptive corroboration | 4 | 8 when follow-up queries were planned |
+
+Three is a ceiling, not a target. Intermix stops as soon as authoritative,
+relevant evidence is sufficient. A practical default is two or three independent
+retrieval routes; configuring six providers makes the later routes available as
+fallbacks, not six-way fan-out on every question.
+
+Recommended profiles:
+
+- **Balanced:** Brave + Tavily + Exa. Three independently useful retrieval styles
+  fit the primary wave.
+- **Privacy-led:** a reviewed self-hosted SearXNG instance + Brave, with an
+  official resolver or registry whenever the question allows it.
+- **Broad fallback:** add SerpAPI after the primary set for queries where another
+  search-engine surface is valuable.
+- **Difficult live pages:** keep TinyFish available on demand. Its browser/agent
+  surfaces should not be the baseline for ordinary search.
+
+## Provider operating notes
+
+These are routing inputs, not promises of permanent pricing or quota. Check the
+linked official page before enabling billing or raising controller limits.
+
+| Provider | Current official signal | Intermix posture |
+|---|---|---|
+| [Brave Search API](https://brave.com/search/api/) | Independent index, web/LLM-context products, account QPS and usage pricing | Strong broad primary lane |
+| [Tavily rate limits](https://docs.tavily.com/documentation/rate-limits) | Separate development, production, and research limits | Research retrieval primary; retain credit budget |
+| [Exa Search](https://exa.ai/docs/reference/search) | Semantic/keyword/auto search with optional content retrieval and account-level limits | Independent semantic primary |
+| [SerpAPI FAQ](https://serpapi.com/faq) | Plan-based hourly throughput and search volume | Later broad fallback |
+| [TinyFish APIs](https://docs.tinyfish.ai/) | Search/Fetch plus longer-running Agent/Research surfaces; account concurrency may queue | Escalate for hard live pages, not routine fan-out |
+| [SearXNG Search API](https://docs.searxng.org/dev/search_api.html) | Instance-controlled JSON API; formats and limiter policy are administrator-defined | User-controlled privacy lane; prefer a reviewed private instance |
+
+Provider-advertised rate ceilings are much larger than Intermix's request budget.
+The smaller controller ceiling is intentional: it limits cost, data disclosure,
+latency, correlated failure, and duplicate evidence.
+
+For daily live adapter health, `intermix-flight --provider-canary` runs the fixed
+public `python-docs-v1` canary against at most two configured providers (three
+only when explicitly requested). It discards all result content and retains only
+redacted provider health metrics. This is opt-in because it consumes network and
+may consume provider quota.
+
 ## Validation
 
 Candidate evidence is scored for:
@@ -78,6 +128,15 @@ Supported non-secret fields:
 - `INTERMIX_SEARCH_LANGUAGE`
 
 The tool uses hidden input for keys, writes an allowlisted mode-600 vault atomically, and never prints secret values. The model cannot request or retrieve them.
+
+The native Android System screen now also contains a Keystore-backed, write-only
+**Provider Key Drop** for Brave, Tavily, Exa, SerpAPI, TinyFish, and GitHub. It
+stores authenticated ciphertext and configuration status only. Native provider
+transport is still disabled, so these Android entries do not cause network
+requests and cannot yet replace the live Termux vault. That separation prevents
+key storage from silently authorizing prompt or memory egress. The key-entry
+dialog is password-masked, is excluded from saved instance state, and temporarily
+sets Android `FLAG_SECURE` to block screenshots and non-secure display capture.
 
 If a key was ever pasted into chat, an issue, a screenshot, or terminal history, rotate it at the provider before storing the replacement in the vault.
 

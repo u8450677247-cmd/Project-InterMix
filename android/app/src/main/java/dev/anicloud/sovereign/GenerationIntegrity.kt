@@ -186,6 +186,7 @@ data class CockpitState(
     val pendingActions: List<PendingWorkspaceAction> = emptyList(),
     val pendingExecutions: List<PendingExecutionAction> = emptyList(),
     val termuxBridge: TermuxBridgeStatus = TermuxBridgeStatus(),
+    val providerVault: ProviderVaultSnapshot = ProviderVaultSnapshot(),
     val activeAgentActionId: Long? = null,
     val messages: List<ChatMessage> = listOf(
         ChatMessage(
