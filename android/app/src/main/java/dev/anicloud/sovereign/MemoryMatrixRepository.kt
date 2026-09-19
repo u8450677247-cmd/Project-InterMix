@@ -15,7 +15,7 @@ import java.util.Locale
 import java.util.UUID
 
 private const val MatrixDatabaseName = "sovereign_memory_v1.db"
-private const val MatrixSchemaVersion = 5
+private const val MatrixSchemaVersion = 6
 private const val LegacyHistoryName = "conversation_history_v1.json"
 private const val MaxStoredMessageCharacters = 32 * 1024
 private const val RecentConversationCharacterBudget = 4_096
@@ -25,6 +25,7 @@ private const val ActiveAgentMissionKey = "active_agent_mission"
 private const val MaxMissionObjectiveCharacters = 16 * 1024
 private const val SessionSummaryCharacterBudget = 2_000
 private const val SessionCheckpointEntryLimit = 12
+private const val MaxResonanceSnapshotCharacters = 128 * 1024
 
 data class MatrixMemory(
     val id: Long,
@@ -47,6 +48,7 @@ data class MemoryMatrixSnapshot(
     val numericCalculationCount: Int = 0,
     val recentCalculations: List<NumericCalculationRecord> = emptyList(),
     val interactionProfile: InteractionProfile = InteractionProfile(),
+    val resonance: ResonanceStateSnapshot = ResonanceStateSnapshot(),
     val contextWindowCount: Int = 0,
     val latestContextWindow: ContextWindowRecord? = null,
     val activeSessionCheckpoint: ActiveSessionCheckpoint = ActiveSessionCheckpoint(),
@@ -116,6 +118,29 @@ data class ProfileUpdateResult(
     val profile: InteractionProfile = InteractionProfile(),
 )
 
+data class ResonanceStateSnapshot(
+    val starterProfile: ResonanceProfileId = ResonanceProfileId.Everyday,
+    val configured: Boolean = false,
+    val adaptationEnabled: Boolean = true,
+    val revision: Int = 0,
+    val candidates: List<ResonanceTraitValue> = emptyList(),
+    val sessionModes: Set<ResonanceSessionMode> = emptySet(),
+    val updatedAt: String = "",
+    val lastReason: String = "Factory Resonance profile",
+) {
+    val resolved: ResolvedResonanceProfile
+        get() = ResonanceResolver.resolve(
+            starterProfile = ResonanceStarterProfiles.byId(starterProfile),
+            candidates = candidates,
+            sessionModes = sessionModes,
+        )
+}
+
+data class ResonanceChangeResult(
+    val changed: Boolean = false,
+    val snapshot: ResonanceStateSnapshot = ResonanceStateSnapshot(),
+)
+
 /**
  * App-private continuity store. Model text can propose memories, but only this
  * deterministic controller validates and commits them.
@@ -153,7 +178,15 @@ class MemoryMatrixRepository(private val context: Context) :
         require(quickCheck == "ok") { "SQLite quick_check failed: ${quickCheck.take(120)}" }
         val foreignKeyFailure = db.rawQuery("PRAGMA foreign_key_check", null).use { it.moveToFirst() }
         require(!foreignKeyFailure) { "SQLite foreign-key integrity check failed." }
-        val required = setOf("settings", "sessions", "messages", "memories", "project_events")
+        val required = setOf(
+            "settings",
+            "sessions",
+            "messages",
+            "memories",
+            "project_events",
+            "resonance_profile",
+            "resonance_trait",
+        )
         val actual = mutableSetOf<String>()
         db.rawQuery("SELECT name FROM sqlite_master WHERE type='table'", null).use { cursor ->
             while (cursor.moveToNext()) actual += cursor.getString(0)
@@ -277,6 +310,7 @@ class MemoryMatrixRepository(private val context: Context) :
         installNumericMatrix(db)
         installContextLedger(db)
         installInteractionProfile(db)
+        installResonance(db)
         installFts(db)
         ensureSession(db)
     }
@@ -286,6 +320,7 @@ class MemoryMatrixRepository(private val context: Context) :
         if (oldVersion < 3) installExecutionActions(db)
         if (oldVersion < 4) installNumericMatrix(db)
         if (oldVersion < 5) installContextLedger(db)
+        if (oldVersion < 6) installResonance(db)
     }
 
     @Synchronized
@@ -473,13 +508,14 @@ class MemoryMatrixRepository(private val context: Context) :
         maxActions: Int = 120,
         maxWriteBytes: Long = 1024L * 1024L,
         planKind: String = WorkspaceMissionKind,
+        activeBranch: String = "device-workspace",
     ): AgentMissionCheckpoint {
         val normalizedRoot = normalizeWorkspacePath(rootPath)
         require(Regex("[A-Za-z0-9][A-Za-z0-9._/-]{0,511}").matches(normalizedRoot)) {
             "Long-form mission roots use ASCII letters, numbers, dots, dashes, underscores, and slashes."
         }
         require(objective.isNotBlank()) { "A long-form mission objective is required." }
-        require(planKind in setOf(WorkspaceMissionKind, StoryForgeMissionKind)) {
+        require(planKind in setOf(WorkspaceMissionKind, StoryForgeMissionKind, EvolutionForgeMissionKind)) {
             "Unknown controller mission plan."
         }
         require(planKind != WorkspaceMissionKind || !isReservedStoryForgeBenchmarkRoot(normalizedRoot)) {
@@ -490,15 +526,37 @@ class MemoryMatrixRepository(private val context: Context) :
         require(existing == null || !existing.active) {
             "Mission ${existing?.id} is still ${existing?.status?.name?.lowercase()}; resume or cancel it first."
         }
+        val checkpointId = missionId(objective, planKind)
+        val boundedObjective = objective.replace("\u0000", "").trim().take(MaxMissionObjectiveCharacters)
+        val boundedActions = maxActions.coerceIn(1, 120)
+        val boundedWriteBytes = maxWriteBytes.coerceIn(64L * 1024L, 2L * 1024L * 1024L)
+        val evolutionState = if (planKind == EvolutionForgeMissionKind) {
+            EvolutionForgeStateCodec.encode(
+                EvolutionForgeController.start(
+                    missionId = checkpointId,
+                    objective = boundedObjective,
+                    workspaceRoot = normalizedRoot,
+                    activeBranch = activeBranch.replace("\u0000", "").trim().take(240)
+                        .ifBlank { "device-workspace" },
+                    actionBudget = boundedActions,
+                    writeBudget = boundedWriteBytes,
+                    atEpochMillis = Instant.now().toEpochMilli(),
+                ),
+            )
+        } else {
+            ""
+        }
         val checkpoint = AgentMissionCheckpoint(
-            id = missionId(objective, planKind),
+            id = checkpointId,
             rootPath = normalizedRoot,
-            objective = objective.replace("\u0000", "").trim().take(MaxMissionObjectiveCharacters),
+            objective = boundedObjective,
             mode = mode,
             startedMessageId = startedMessageId.coerceAtLeast(0L),
-            maxActions = maxActions.coerceIn(1, 120),
-            maxWriteBytes = maxWriteBytes.coerceIn(64L * 1024L, 2L * 1024L * 1024L),
+            maxActions = boundedActions,
+            maxWriteBytes = boundedWriteBytes,
             planKind = planKind,
+            planState = if (planKind == EvolutionForgeMissionKind) EvolutionStage.Inspect.name else "",
+            evolutionState = evolutionState,
             updatedAt = now(),
         )
         persistAgentMission(checkpoint)
@@ -516,6 +574,48 @@ class MemoryMatrixRepository(private val context: Context) :
     }
 
     @Synchronized
+    fun evolutionForgeState(): EvolutionForgeState? {
+        val mission = activeAgentMission()?.takeIf { it.planKind == EvolutionForgeMissionKind }
+            ?: return null
+        return runCatching { EvolutionForgeStateCodec.decode(mission.evolutionState) }.getOrNull()
+    }
+
+    @Synchronized
+    fun persistEvolutionForgeState(state: EvolutionForgeState): AgentMissionCheckpoint {
+        val current = activeAgentMission() ?: error("No Evolution Forge mission is active.")
+        require(current.planKind == EvolutionForgeMissionKind) { "The active mission is not Evolution Forge." }
+        require(state.missionId == current.id) { "Evolution checkpoint belongs to another mission." }
+        require(state.workspaceRoot == current.rootPath) { "Evolution checkpoint cannot widen the workspace root." }
+        require(state.objective == current.objective) { "Evolution checkpoint cannot replace the mission objective." }
+        val encoded = EvolutionForgeStateCodec.encode(state)
+        require(encoded.length <= 512 * 1024) { "Evolution Forge checkpoint is too large." }
+        val missionStatus = when (state.stage) {
+            EvolutionStage.Complete -> AgentMissionStatus.Completed
+            EvolutionStage.Blocked -> AgentMissionStatus.Failed
+            EvolutionStage.Paused -> AgentMissionStatus.Paused
+            else -> AgentMissionStatus.Running
+        }
+        val next = current.copy(
+            status = missionStatus,
+            planState = state.stage.name,
+            evolutionState = encoded,
+            guidance = state.userGuidanceQueue.map(EvolutionGuidance::text).takeLast(12),
+            lastAction = state.currentPatch?.let { "${state.stage.name}: ${it.id} ${it.name}" }
+                .orEmpty()
+                .take(700),
+            lastResult = (
+                state.verifiedResults.lastOrNull()
+                    ?: state.knownFailures.lastOrNull()
+                    ?: state.lastCheckpoint
+                ).take(2_000),
+            updatedAt = now(),
+        )
+        persistAgentMission(next)
+        updateActiveSessionTask(next)
+        return next
+    }
+
+    @Synchronized
     fun resumeAgentMission(): AgentMissionCheckpoint {
         val current = activeAgentMission() ?: error("No long-form mission checkpoint is available.")
         require(current.status in setOf(AgentMissionStatus.Paused, AgentMissionStatus.Running)) {
@@ -527,6 +627,28 @@ class MemoryMatrixRepository(private val context: Context) :
         ) {
             "Legacy general mission ${current.id} uses the reserved $StoryForgeBenchmarkFolder root. " +
                 "Cancel it, then start a general Work Session in a new folder or load Story Forge."
+        }
+        if (current.planKind == EvolutionForgeMissionKind) {
+            val evolution = EvolutionForgeStateCodec.decode(current.evolutionState)
+            val resumedEvolution = if (evolution.stage == EvolutionStage.Paused) {
+                EvolutionForgeController.resume(evolution, Instant.now().toEpochMilli())
+            } else {
+                evolution
+            }
+            val advancedEvolution = if (resumedEvolution.stage == EvolutionStage.Test) {
+                val evidence = latestEvolutionTestEvidence(resumedEvolution)
+                if (evidence != null) {
+                    EvolutionForgeController.recordTest(resumedEvolution, evidence)
+                } else {
+                    require(!hasPendingEvolutionTestExecution(current.id)) {
+                        "The approved Evolution Forge test is still running; resume after its result returns."
+                    }
+                    resumedEvolution
+                }
+            } else {
+                resumedEvolution
+            }
+            return persistEvolutionForgeState(advancedEvolution)
         }
         val resumed = current.copy(status = AgentMissionStatus.Running, updatedAt = now())
         persistAgentMission(resumed)
@@ -542,6 +664,15 @@ class MemoryMatrixRepository(private val context: Context) :
         }
         val clean = instruction.replace("\u0000", "").trim().take(2_000)
         require(clean.isNotBlank()) { "Mission guidance cannot be empty." }
+        if (current.planKind == EvolutionForgeMissionKind) {
+            val evolution = EvolutionForgeStateCodec.decode(current.evolutionState)
+            val guided = EvolutionForgeController.enqueueGuidance(
+                state = evolution,
+                text = clean,
+                atEpochMillis = Instant.now().toEpochMilli(),
+            )
+            return persistEvolutionForgeState(guided)
+        }
         val guided = current.copy(
             status = AgentMissionStatus.Running,
             guidance = (current.guidance + clean).takeLast(12),
@@ -620,9 +751,39 @@ class MemoryMatrixRepository(private val context: Context) :
         detail: String,
     ): AgentMissionCheckpoint? {
         val current = activeAgentMission() ?: return null
+        val cleanDetail = detail.replace("\u0000", "").trim().take(2_000)
+        if (current.planKind == EvolutionForgeMissionKind && status != AgentMissionStatus.Cancelled) {
+            val evolution = EvolutionForgeStateCodec.decode(current.evolutionState)
+            val timestamp = Instant.now().toEpochMilli()
+            val updated = when (status) {
+                AgentMissionStatus.Paused -> if (evolution.stage == EvolutionStage.Paused) {
+                    evolution
+                } else {
+                    EvolutionForgeController.pause(evolution, cleanDetail.ifBlank { "Paused safely" }, timestamp)
+                }
+                AgentMissionStatus.Running -> if (evolution.stage == EvolutionStage.Paused) {
+                    EvolutionForgeController.resume(evolution, timestamp)
+                } else {
+                    evolution
+                }
+                AgentMissionStatus.Failed -> if (evolution.active) {
+                    EvolutionForgeController.block(evolution, cleanDetail.ifBlank { "Controller failure" }, timestamp)
+                } else {
+                    evolution
+                }
+                AgentMissionStatus.Completed -> {
+                    require(evolution.stage == EvolutionStage.Complete) {
+                        "Evolution Forge can complete only from its verified controller stage."
+                    }
+                    evolution
+                }
+                AgentMissionStatus.Cancelled -> evolution
+            }
+            return persistEvolutionForgeState(updated)
+        }
         val next = current.copy(
             status = status,
-            lastResult = detail.replace("\u0000", "").trim().take(2_000),
+            lastResult = cleanDetail,
             updatedAt = now(),
         )
         persistAgentMission(next)
@@ -632,6 +793,12 @@ class MemoryMatrixRepository(private val context: Context) :
 
     fun agentMissionContext(): String {
         val mission = activeAgentMission()?.takeIf(AgentMissionCheckpoint::active) ?: return ""
+        if (mission.planKind == EvolutionForgeMissionKind) {
+            val evolution = runCatching { EvolutionForgeStateCodec.decode(mission.evolutionState) }
+                .getOrNull()
+                ?: return "[CONTROLLER-OWNED EVOLUTION FORGE]\nCheckpoint unavailable; pause and recover."
+            return EvolutionForgeContextCompiler.compile(evolution)
+        }
         if (mission.planKind == StoryForgeMissionKind) {
             val guidanceBlock = mission.guidance.joinToString("\n") { "- $it" }.take(2_400)
             return buildString {
@@ -996,6 +1163,7 @@ class MemoryMatrixRepository(private val context: Context) :
             numericCalculationCount = scalarInt(db, "SELECT COUNT(*) FROM numeric_calculations"),
             recentCalculations = recentCalculations(12),
             interactionProfile = interactionProfile(),
+            resonance = resonanceSnapshot(),
             contextWindowCount = scalarInt(db, "SELECT COUNT(*) FROM context_windows"),
             latestContextWindow = latestContextWindow(),
             activeSessionCheckpoint = activeSessionCheckpoint(),
@@ -1230,6 +1398,370 @@ class MemoryMatrixRepository(private val context: Context) :
     }
 
     @Synchronized
+    fun resonanceSnapshot(
+        domain: String = "",
+        project: String = "",
+        task: String = "",
+        sessionId: String = "",
+    ): ResonanceStateSnapshot {
+        val db = readableDatabase
+        val profile = db.rawQuery(
+            """
+            SELECT starter_profile,configured,adaptation_enabled,revision,updated_at,last_reason
+            FROM resonance_profile WHERE id=1
+            """.trimIndent(),
+            null,
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) {
+                ResonanceStateSnapshot()
+            } else {
+                ResonanceStateSnapshot(
+                    starterProfile = ResonanceProfileId.fromWireName(cursor.getString(0))
+                        ?: ResonanceProfileId.Everyday,
+                    configured = cursor.getInt(1) != 0,
+                    adaptationEnabled = cursor.getInt(2) != 0,
+                    revision = cursor.getInt(3).coerceAtLeast(0),
+                    updatedAt = cursor.getString(4),
+                    lastReason = cursor.getString(5),
+                )
+            }
+        }
+        val effectiveSessionId = sessionId.ifBlank { activeSessionId(db) }
+        val activePacks = activeResonancePackIds(db)
+        val candidates = db.rawQuery(
+            """
+            SELECT trait,value,confidence,source,scope,scope_key,
+                   updated_at_epoch_millis,last_reinforced_epoch_millis,decay_policy
+            FROM resonance_trait
+            ORDER BY id ASC
+            """.trimIndent(),
+            null,
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    val trait = ResonanceTrait.fromWireName(cursor.getString(0)) ?: continue
+                    val source = runCatching { ResonanceSource.valueOf(cursor.getString(3)) }.getOrNull()
+                        ?: continue
+                    val scope = runCatching { ResonanceScope.valueOf(cursor.getString(4)) }.getOrNull()
+                        ?: continue
+                    val scopeKey = cursor.getString(5)
+                    if (!resonanceScopeMatches(scope, scopeKey, domain, project, task, effectiveSessionId)) {
+                        continue
+                    }
+                    if (source == ResonanceSource.Pack && scopeKey.removePrefix("pack:") !in activePacks) continue
+                    ResonanceTraitValue.createOrNull(
+                        trait = trait,
+                        value = cursor.getDouble(1),
+                        confidence = cursor.getDouble(2),
+                        source = source,
+                        scope = scope,
+                        updatedAtEpochMillis = cursor.getLong(6),
+                        lastReinforcedEpochMillis = cursor.getLong(7),
+                        decayPolicy = cursor.getString(8),
+                    )?.let(::add)
+                }
+            }
+        }
+        val sessionModes = db.rawQuery(
+            "SELECT mode FROM resonance_session_override WHERE session_id=? ORDER BY mode",
+            arrayOf(effectiveSessionId),
+        ).use { cursor ->
+            buildSet {
+                while (cursor.moveToNext()) {
+                    runCatching { ResonanceSessionMode.valueOf(cursor.getString(0)) }
+                        .getOrNull()
+                        ?.let(::add)
+                }
+            }
+        }
+        return profile.copy(candidates = candidates, sessionModes = sessionModes)
+    }
+
+    @Synchronized
+    fun setResonanceStarterProfile(
+        profile: ResonanceProfileId,
+        sourceMessageId: Long = 0L,
+    ): ResonanceChangeResult = mutateResonance(
+        reason = "Selected ${profile.displayName} Resonance profile",
+        sourceMessageId = sourceMessageId,
+    ) { db ->
+        val current = resonanceProfileRow(db)
+        if (current.first == profile && current.second) return@mutateResonance false
+        val values = ContentValues().apply {
+            put("starter_profile", profile.wireName)
+            put("configured", 1)
+        }
+        db.update("resonance_profile", values, "id=1", null) == 1
+    }
+
+    @Synchronized
+    fun setResonanceAdaptationEnabled(
+        enabled: Boolean,
+        sourceMessageId: Long = 0L,
+    ): ResonanceChangeResult = mutateResonance(
+        reason = "Turned Resonance adaptation ${if (enabled) "on" else "off"}",
+        sourceMessageId = sourceMessageId,
+    ) { db ->
+        val current = db.rawQuery(
+            "SELECT adaptation_enabled FROM resonance_profile WHERE id=1",
+            null,
+        ).use { cursor -> cursor.moveToFirst() && cursor.getInt(0) != 0 }
+        if (current == enabled) return@mutateResonance false
+        db.update(
+            "resonance_profile",
+            ContentValues().apply { put("adaptation_enabled", if (enabled) 1 else 0) },
+            "id=1",
+            null,
+        ) == 1
+    }
+
+    @Synchronized
+    fun setResonanceTrait(
+        trait: ResonanceTrait,
+        value: Double,
+        confidence: Double = 1.0,
+        source: ResonanceSource = ResonanceSource.Explicit,
+        scope: ResonanceScope = ResonanceScope.Global,
+        scopeKey: String = "",
+        sourceMessageId: Long = 0L,
+    ): ResonanceChangeResult {
+        require(value.isFinite() && value in 0.0..1.0)
+        require(confidence.isFinite() && confidence in 0.0..1.0)
+        require(source != ResonanceSource.Base) { "Base profile values are not persisted as overrides." }
+        val requestedScopeKey = if (scope == ResonanceScope.Session && scopeKey.isBlank()) {
+            activeSessionId(writableDatabase)
+        } else {
+            scopeKey
+        }
+        val cleanScopeKey = validatedResonanceScopeKey(scope, requestedScopeKey)
+        return mutateResonance(
+            reason = "Set ${trait.wireName} at ${scope.name.lowercase(Locale.ROOT)} scope",
+            sourceMessageId = sourceMessageId,
+        ) { db ->
+            if (source == ResonanceSource.InferredLowRisk && !resonanceAdaptationEnabled(db)) {
+                return@mutateResonance false
+            }
+            upsertResonanceTrait(
+                db = db,
+                trait = trait,
+                value = value,
+                confidence = confidence,
+                source = source,
+                scope = scope,
+                scopeKey = cleanScopeKey,
+                decayPolicy = if (scope == ResonanceScope.Session) "session" else "none",
+            )
+            true
+        }
+    }
+
+    @Synchronized
+    fun applyResonanceFeedback(
+        action: ResonanceFeedbackAction,
+        scope: ResonanceScope = ResonanceScope.Global,
+        scopeKey: String = "",
+        sourceMessageId: Long = 0L,
+    ): ResonanceChangeResult {
+        val requestedScopeKey = if (scope == ResonanceScope.Session && scopeKey.isBlank()) {
+            activeSessionId(writableDatabase)
+        } else {
+            scopeKey
+        }
+        val cleanScopeKey = validatedResonanceScopeKey(scope, requestedScopeKey)
+        val beforeSnapshot = resonanceSnapshot(
+            domain = cleanScopeKey.takeIf { scope == ResonanceScope.Domain }.orEmpty(),
+            project = cleanScopeKey.takeIf { scope == ResonanceScope.Project }.orEmpty(),
+            task = cleanScopeKey.takeIf { scope == ResonanceScope.Task }.orEmpty(),
+            sessionId = cleanScopeKey.takeIf { scope == ResonanceScope.Session }.orEmpty(),
+        )
+        if (!beforeSnapshot.adaptationEnabled) return ResonanceChangeResult(snapshot = beforeSnapshot)
+        val probe = ResonanceFeedbackPolicy.apply(action, 0.5)
+        val change = ResonanceFeedbackPolicy.apply(
+            action,
+            beforeSnapshot.resolved.valueOf(probe.trait),
+        )
+        return mutateResonance(
+            reason = "Applied Resonance feedback ${action.name}",
+            sourceMessageId = sourceMessageId,
+        ) { db ->
+            upsertResonanceTrait(
+                db = db,
+                trait = change.trait,
+                value = change.after,
+                confidence = 0.85,
+                source = ResonanceSource.Feedback,
+                scope = scope,
+                scopeKey = cleanScopeKey,
+                decayPolicy = "none",
+            )
+            val values = ContentValues().apply {
+                put("action", action.name)
+                put("trait", change.trait.wireName)
+                put("before_value", change.before)
+                put("after_value", change.after)
+                put("scope", scope.name)
+                put("scope_key", cleanScopeKey)
+                putNullableMessageId("source_message_id", sourceMessageId)
+                put("undone", 0)
+                put("created_at", now())
+            }
+            db.insertOrThrow("resonance_feedback", null, values)
+            true
+        }
+    }
+
+    @Synchronized
+    fun setResonanceSessionModes(
+        modes: Set<ResonanceSessionMode>,
+        sessionId: String = "",
+        sourceMessageId: Long = 0L,
+    ): ResonanceChangeResult {
+        require(modes.size <= ResonanceSessionMode.entries.size)
+        val db = writableDatabase
+        val targetSession = sessionId.ifBlank { activeSessionId(db) }
+        return mutateResonance(
+            reason = if (modes.isEmpty()) "Cleared Resonance session modes" else "Updated Resonance session modes",
+            sourceMessageId = sourceMessageId,
+        ) { transaction ->
+            val existing = transaction.rawQuery(
+                "SELECT mode FROM resonance_session_override WHERE session_id=? ORDER BY mode",
+                arrayOf(targetSession),
+            ).use { cursor ->
+                buildSet {
+                    while (cursor.moveToNext()) add(cursor.getString(0))
+                }
+            }
+            val desired = modes.map(ResonanceSessionMode::name).toSet()
+            if (existing == desired) return@mutateResonance false
+            transaction.delete("resonance_session_override", "session_id=?", arrayOf(targetSession))
+            modes.sortedBy { it.name }.forEach { mode ->
+                transaction.insertOrThrow(
+                    "resonance_session_override",
+                    null,
+                    ContentValues().apply {
+                        put("session_id", targetSession)
+                        put("mode", mode.name)
+                        put("created_at", now())
+                    },
+                )
+            }
+            true
+        }
+    }
+
+    @Synchronized
+    fun installResonancePack(
+        pack: ResonanceExperiencePack,
+        manifestSha256: String,
+        sourceMessageId: Long = 0L,
+    ): ResonanceChangeResult {
+        val validation = ResonancePackValidator.validate(pack)
+        require(validation.valid) { validation.errors.joinToString("; ") }
+        require(Regex("^[0-9a-f]{64}$").matches(manifestSha256)) {
+            "Experience Pack manifest needs one lowercase SHA-256 digest."
+        }
+        return mutateResonance(
+            reason = "Installed signed Resonance pack ${pack.id} ${pack.version}",
+            sourceMessageId = sourceMessageId,
+        ) { db ->
+            val packValues = ContentValues().apply {
+                put("pack_id", pack.id)
+                put("version", pack.version)
+                put("name", pack.name)
+                put("manifest_sha256", manifestSha256)
+                put("active", 1)
+                put("installed_at", now())
+            }
+            db.insertWithOnConflict(
+                "resonance_pack_install",
+                null,
+                packValues,
+                SQLiteDatabase.CONFLICT_REPLACE,
+            )
+            pack.traits.forEach { (wireName, value) ->
+                val trait = ResonanceTrait.fromWireName(wireName)
+                    ?: error("Pack validation admitted an unknown trait.")
+                upsertResonanceTrait(
+                    db = db,
+                    trait = trait,
+                    value = value,
+                    confidence = 1.0,
+                    source = ResonanceSource.Pack,
+                    scope = ResonanceScope.Global,
+                    scopeKey = "pack:${pack.id}",
+                    decayPolicy = "none",
+                )
+            }
+            true
+        }
+    }
+
+    @Synchronized
+    fun resetResonanceAdaptation(sourceMessageId: Long = 0L): ResonanceChangeResult =
+        mutateResonance(
+            reason = "Reset learned Resonance adaptation",
+            sourceMessageId = sourceMessageId,
+        ) { db ->
+            val changedTraits = db.delete(
+                "resonance_trait",
+                "source!=?",
+                arrayOf(ResonanceSource.Pack.name),
+            )
+            val changedFeedback = db.delete("resonance_feedback", null, null)
+            val changedSessions = db.delete("resonance_session_override", null, null)
+            changedTraits + changedFeedback + changedSessions > 0
+        }
+
+    @Synchronized
+    fun undoLatestResonanceChange(sourceMessageId: Long = 0L): ResonanceStateSnapshot? {
+        val db = writableDatabase
+        val target = db.rawQuery(
+            """
+            SELECT id,profile_revision,old_state_json,reason
+            FROM resonance_revision
+            WHERE undone=0 AND reason NOT LIKE 'Undo Resonance revision%'
+            ORDER BY id DESC LIMIT 1
+            """.trimIndent(),
+            null,
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) null else ResonanceUndoTarget(
+                id = cursor.getLong(0),
+                revision = cursor.getInt(1),
+                oldStateJson = cursor.getString(2),
+                reason = cursor.getString(3),
+            )
+        } ?: return null
+        val oldState = target.oldStateJson
+        require(oldState.length <= MaxResonanceSnapshotCharacters)
+        db.beginTransaction()
+        try {
+            val currentRevision = resonanceRevision(db)
+            val before = resonanceStateToJson(db).toString()
+            restoreResonanceState(db, JSONObject(oldState))
+            val nextRevision = currentRevision + 1
+            val reason = "Undo Resonance revision ${target.revision}: ${target.reason}".take(500)
+            updateResonanceProfileRevision(db, nextRevision, reason)
+            db.execSQL(
+                "UPDATE resonance_revision SET undone=1 WHERE id=?",
+                arrayOf<Any?>(target.id),
+            )
+            insertResonanceRevision(
+                db = db,
+                revision = nextRevision,
+                oldState = before,
+                newState = resonanceStateToJson(db).toString(),
+                reason = reason,
+                sourceMessageId = sourceMessageId,
+                undone = true,
+            )
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return resonanceSnapshot()
+    }
+
+    @Synchronized
     fun queueWorkspaceAction(proposal: WorkspaceActionProposal): Long {
         require(proposal.kind.requiresApproval) { "Read-only actions do not enter the approval queue." }
         val now = now()
@@ -1354,6 +1886,55 @@ class MemoryMatrixRepository(private val context: Context) :
     @Synchronized
     fun executionAction(id: Long): PendingExecutionAction? =
         pendingExecutionActions(100).firstOrNull { it.id == id }
+
+    private fun latestEvolutionTestEvidence(state: EvolutionForgeState): EvolutionTestEvidence? {
+        val patch = state.currentPatch ?: return null
+        return readableDatabase.rawQuery(
+            """
+            SELECT id,kind,command,status,stdout,stderr,exit_code,error_code,error
+            FROM execution_actions
+            WHERE mission_id=? AND id>? AND kind IN ('test','build')
+              AND status IN ('completed','failed','cancelled')
+            ORDER BY id DESC LIMIT 1
+            """.trimIndent(),
+            arrayOf(state.missionId, state.lastExecutionEvidenceId.toString()),
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) return@use null
+            val id = cursor.getLong(0)
+            val kind = ExecutionKind.fromWireName(cursor.getString(1)) ?: return@use null
+            val command = cursor.getString(2)
+                .replace("\u0000", "")
+                .replace(Regex("\\s+"), " ")
+                .trim()
+                .take(240)
+            val status = cursor.getString(3)
+            val stdout = cursor.getString(4).replace("\u0000", "").trim().takeLast(700)
+            val stderr = cursor.getString(5).replace("\u0000", "").trim().takeLast(700)
+            val exitCode = if (cursor.isNull(6)) null else cursor.getInt(6)
+            val errorCode = if (cursor.isNull(7)) null else cursor.getInt(7)
+            val error = cursor.getString(8).replace("\u0000", "").trim().take(400)
+            val resultDetail = listOf(stdout, stderr, error).firstOrNull(String::isNotBlank)
+                ?: "No bounded terminal output was returned."
+            EvolutionTestEvidence(
+                patchId = patch.id,
+                patchAttempt = patch.attempt,
+                commandLabel = "${kind.label}: ${command.ifBlank { "approved command" }}".take(300),
+                summary = "$status · exit ${exitCode ?: "unavailable"} · $resultDetail".take(1_600),
+                passed = status == "completed" && exitCode == 0 && errorCode == -1,
+                controllerVerified = true,
+                recordedAtEpochMillis = Instant.now().toEpochMilli(),
+                sourceExecutionId = id,
+            )
+        }
+    }
+
+    private fun hasPendingEvolutionTestExecution(missionId: String): Boolean =
+        DatabaseUtils.longForQuery(
+            readableDatabase,
+            "SELECT COUNT(*) FROM execution_actions WHERE mission_id=? " +
+                "AND kind IN ('test','build') AND status IN ('pending','running','cancel_requested')",
+            arrayOf(missionId),
+        ) > 0L
 
     @Synchronized
     fun setExecutionActionStatus(id: Long, expected: String, status: String, detail: String = ""): Boolean {
@@ -1631,6 +2212,548 @@ class MemoryMatrixRepository(private val context: Context) :
         )
     }
 
+    /**
+     * Resonance is an additive delivery-preference store. It is intentionally separate from
+     * Matrix facts, provider credentials, and controller authority.
+     */
+    private fun installResonance(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS resonance_profile (
+                id INTEGER PRIMARY KEY CHECK(id=1),
+                starter_profile TEXT NOT NULL,
+                configured INTEGER NOT NULL DEFAULT 0,
+                adaptation_enabled INTEGER NOT NULL DEFAULT 1,
+                revision INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                last_reason TEXT NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS resonance_trait (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trait TEXT NOT NULL,
+                value REAL NOT NULL CHECK(value >= 0.0 AND value <= 1.0),
+                confidence REAL NOT NULL CHECK(confidence >= 0.0 AND confidence <= 1.0),
+                source TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                scope_key TEXT NOT NULL DEFAULT '',
+                updated_at_epoch_millis INTEGER NOT NULL,
+                last_reinforced_epoch_millis INTEGER NOT NULL,
+                decay_policy TEXT NOT NULL DEFAULT 'none',
+                created_at TEXT NOT NULL,
+                UNIQUE(trait,source,scope,scope_key)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS idx_resonance_trait_resolution " +
+                "ON resonance_trait(trait,scope,source,confidence,updated_at_epoch_millis)",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS resonance_feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                action TEXT NOT NULL,
+                trait TEXT NOT NULL,
+                before_value REAL NOT NULL,
+                after_value REAL NOT NULL,
+                scope TEXT NOT NULL,
+                scope_key TEXT NOT NULL DEFAULT '',
+                source_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+                undone INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS idx_resonance_feedback_undo " +
+                "ON resonance_feedback(undone,id DESC)",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS resonance_session_override (
+                session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                mode TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY(session_id,mode)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS resonance_pack_install (
+                pack_id TEXT NOT NULL,
+                version TEXT NOT NULL,
+                name TEXT NOT NULL,
+                manifest_sha256 TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1,
+                installed_at TEXT NOT NULL,
+                PRIMARY KEY(pack_id,version)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS resonance_revision (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                profile_revision INTEGER NOT NULL UNIQUE,
+                old_state_json TEXT NOT NULL,
+                new_state_json TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                source_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+                undone INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS idx_resonance_revision_undo " +
+                "ON resonance_revision(undone,id DESC)",
+        )
+        val defaults = ContentValues().apply {
+            put("id", 1)
+            put("starter_profile", ResonanceProfileId.Everyday.wireName)
+            put("configured", 0)
+            put("adaptation_enabled", 1)
+            put("revision", 0)
+            put("updated_at", now())
+            put("last_reason", "Factory Resonance profile")
+        }
+        db.insertWithOnConflict(
+            "resonance_profile",
+            null,
+            defaults,
+            SQLiteDatabase.CONFLICT_IGNORE,
+        )
+    }
+
+    private fun mutateResonance(
+        reason: String,
+        sourceMessageId: Long,
+        mutation: (SQLiteDatabase) -> Boolean,
+    ): ResonanceChangeResult {
+        val db = writableDatabase
+        var changed = false
+        db.beginTransaction()
+        try {
+            val previousState = resonanceStateToJson(db).toString()
+            require(previousState.length <= MaxResonanceSnapshotCharacters)
+            val previousRevision = resonanceRevision(db)
+            changed = mutation(db)
+            if (changed) {
+                val nextRevision = previousRevision + 1
+                val cleanReason = reason.replace("\u0000", "").trim().take(500)
+                require(cleanReason.isNotBlank())
+                updateResonanceProfileRevision(db, nextRevision, cleanReason)
+                val nextState = resonanceStateToJson(db).toString()
+                require(nextState.length <= MaxResonanceSnapshotCharacters)
+                insertResonanceRevision(
+                    db = db,
+                    revision = nextRevision,
+                    oldState = previousState,
+                    newState = nextState,
+                    reason = cleanReason,
+                    sourceMessageId = sourceMessageId,
+                    undone = false,
+                )
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return ResonanceChangeResult(changed = changed, snapshot = resonanceSnapshot())
+    }
+
+    private fun resonanceRevision(db: SQLiteDatabase): Int = db.rawQuery(
+        "SELECT revision FROM resonance_profile WHERE id=1",
+        null,
+    ).use { cursor -> if (cursor.moveToFirst()) cursor.getInt(0).coerceAtLeast(0) else 0 }
+
+    private fun resonanceProfileRow(db: SQLiteDatabase): Pair<ResonanceProfileId, Boolean> =
+        db.rawQuery(
+            "SELECT starter_profile,configured FROM resonance_profile WHERE id=1",
+            null,
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) {
+                ResonanceProfileId.Everyday to false
+            } else {
+                (ResonanceProfileId.fromWireName(cursor.getString(0)) ?: ResonanceProfileId.Everyday) to
+                    (cursor.getInt(1) != 0)
+            }
+        }
+
+    private fun resonanceAdaptationEnabled(db: SQLiteDatabase): Boolean = db.rawQuery(
+        "SELECT adaptation_enabled FROM resonance_profile WHERE id=1",
+        null,
+    ).use { cursor -> !cursor.moveToFirst() || cursor.getInt(0) != 0 }
+
+    private fun updateResonanceProfileRevision(
+        db: SQLiteDatabase,
+        revision: Int,
+        reason: String,
+    ) {
+        val values = ContentValues().apply {
+            put("revision", revision)
+            put("updated_at", now())
+            put("last_reason", reason)
+        }
+        require(db.update("resonance_profile", values, "id=1", null) == 1) {
+            "Resonance profile row is unavailable."
+        }
+    }
+
+    private fun upsertResonanceTrait(
+        db: SQLiteDatabase,
+        trait: ResonanceTrait,
+        value: Double,
+        confidence: Double,
+        source: ResonanceSource,
+        scope: ResonanceScope,
+        scopeKey: String,
+        decayPolicy: String,
+    ) {
+        require(source != ResonanceSource.Base)
+        val timestamp = Instant.now().toEpochMilli()
+        ResonanceTraitValue(
+            trait = trait,
+            value = value,
+            confidence = confidence,
+            source = source,
+            scope = scope,
+            updatedAtEpochMillis = timestamp,
+            lastReinforcedEpochMillis = timestamp,
+            decayPolicy = decayPolicy,
+        )
+        val values = ContentValues().apply {
+            put("trait", trait.wireName)
+            put("value", value)
+            put("confidence", confidence)
+            put("source", source.name)
+            put("scope", scope.name)
+            put("scope_key", scopeKey)
+            put("updated_at_epoch_millis", timestamp)
+            put("last_reinforced_epoch_millis", timestamp)
+            put("decay_policy", decayPolicy)
+            put("created_at", now())
+        }
+        db.insertWithOnConflict(
+            "resonance_trait",
+            null,
+            values,
+            SQLiteDatabase.CONFLICT_REPLACE,
+        ).also { require(it != -1L) { "Resonance trait could not be persisted." } }
+    }
+
+    private fun activeResonancePackIds(db: SQLiteDatabase): Set<String> = db.rawQuery(
+        "SELECT pack_id FROM resonance_pack_install WHERE active=1",
+        null,
+    ).use { cursor ->
+        buildSet {
+            while (cursor.moveToNext()) add(cursor.getString(0))
+        }
+    }
+
+    private fun resonanceScopeMatches(
+        scope: ResonanceScope,
+        scopeKey: String,
+        domain: String,
+        project: String,
+        task: String,
+        sessionId: String,
+    ): Boolean = when (scope) {
+        ResonanceScope.Global -> true
+        ResonanceScope.Domain -> domain.isNotBlank() && scopeKey == domain
+        ResonanceScope.Project -> project.isNotBlank() && scopeKey == project
+        ResonanceScope.Task -> task.isNotBlank() && scopeKey == task
+        ResonanceScope.Session -> sessionId.isNotBlank() && scopeKey == sessionId
+    }
+
+    private fun validatedResonanceScopeKey(scope: ResonanceScope, raw: String): String {
+        val clean = raw.replace("\u0000", "").trim().take(240)
+        if (scope == ResonanceScope.Global) {
+            require(clean.isEmpty()) { "Global Resonance preferences do not use a scope key." }
+            return ""
+        }
+        require(clean.isNotBlank() && '\n' !in clean && '\r' !in clean) {
+            "Narrow Resonance preferences require a bounded scope key."
+        }
+        return clean
+    }
+
+    private fun resonanceStateToJson(db: SQLiteDatabase): JSONObject {
+        val profile = db.rawQuery(
+            """
+            SELECT starter_profile,configured,adaptation_enabled,revision,updated_at,last_reason
+            FROM resonance_profile WHERE id=1
+            """.trimIndent(),
+            null,
+        ).use { cursor ->
+            require(cursor.moveToFirst()) { "Resonance profile row is unavailable." }
+            JSONObject()
+                .put("starter_profile", cursor.getString(0))
+                .put("configured", cursor.getInt(1) != 0)
+                .put("adaptation_enabled", cursor.getInt(2) != 0)
+                .put("revision", cursor.getInt(3))
+                .put("updated_at", cursor.getString(4))
+                .put("last_reason", cursor.getString(5))
+        }
+        val traits = db.rawQuery(
+            """
+            SELECT trait,value,confidence,source,scope,scope_key,updated_at_epoch_millis,
+                   last_reinforced_epoch_millis,decay_policy,created_at
+            FROM resonance_trait ORDER BY id ASC
+            """.trimIndent(),
+            null,
+        ).use { cursor ->
+            JSONArray().apply {
+                while (cursor.moveToNext()) {
+                    put(
+                        JSONObject()
+                            .put("trait", cursor.getString(0))
+                            .put("value", cursor.getDouble(1))
+                            .put("confidence", cursor.getDouble(2))
+                            .put("source", cursor.getString(3))
+                            .put("scope", cursor.getString(4))
+                            .put("scope_key", cursor.getString(5))
+                            .put("updated_at_epoch_millis", cursor.getLong(6))
+                            .put("last_reinforced_epoch_millis", cursor.getLong(7))
+                            .put("decay_policy", cursor.getString(8))
+                            .put("created_at", cursor.getString(9)),
+                    )
+                }
+            }
+        }
+        val feedback = db.rawQuery(
+            """
+            SELECT action,trait,before_value,after_value,scope,scope_key,source_message_id,
+                   undone,created_at
+            FROM resonance_feedback ORDER BY id ASC
+            """.trimIndent(),
+            null,
+        ).use { cursor ->
+            JSONArray().apply {
+                while (cursor.moveToNext()) {
+                    put(
+                        JSONObject()
+                            .put("action", cursor.getString(0))
+                            .put("trait", cursor.getString(1))
+                            .put("before_value", cursor.getDouble(2))
+                            .put("after_value", cursor.getDouble(3))
+                            .put("scope", cursor.getString(4))
+                            .put("scope_key", cursor.getString(5))
+                            .put(
+                                "source_message_id",
+                                if (cursor.isNull(6)) JSONObject.NULL else cursor.getLong(6),
+                            )
+                            .put("undone", cursor.getInt(7) != 0)
+                            .put("created_at", cursor.getString(8)),
+                    )
+                }
+            }
+        }
+        val sessions = db.rawQuery(
+            "SELECT session_id,mode,created_at FROM resonance_session_override ORDER BY session_id,mode",
+            null,
+        ).use { cursor ->
+            JSONArray().apply {
+                while (cursor.moveToNext()) {
+                    put(
+                        JSONObject()
+                            .put("session_id", cursor.getString(0))
+                            .put("mode", cursor.getString(1))
+                            .put("created_at", cursor.getString(2)),
+                    )
+                }
+            }
+        }
+        val packs = db.rawQuery(
+            """
+            SELECT pack_id,version,name,manifest_sha256,active,installed_at
+            FROM resonance_pack_install ORDER BY pack_id,version
+            """.trimIndent(),
+            null,
+        ).use { cursor ->
+            JSONArray().apply {
+                while (cursor.moveToNext()) {
+                    put(
+                        JSONObject()
+                            .put("pack_id", cursor.getString(0))
+                            .put("version", cursor.getString(1))
+                            .put("name", cursor.getString(2))
+                            .put("manifest_sha256", cursor.getString(3))
+                            .put("active", cursor.getInt(4) != 0)
+                            .put("installed_at", cursor.getString(5)),
+                    )
+                }
+            }
+        }
+        return JSONObject()
+            .put("profile", profile)
+            .put("traits", traits)
+            .put("feedback", feedback)
+            .put("session_overrides", sessions)
+            .put("pack_installs", packs)
+    }
+
+    private fun restoreResonanceState(db: SQLiteDatabase, state: JSONObject) {
+        require(state.toString().length <= MaxResonanceSnapshotCharacters)
+        val profile = state.getJSONObject("profile")
+        val starter = ResonanceProfileId.fromWireName(profile.getString("starter_profile"))
+            ?: error("Unknown starter profile in Resonance snapshot.")
+        val profileValues = ContentValues().apply {
+            put("starter_profile", starter.wireName)
+            put("configured", if (profile.getBoolean("configured")) 1 else 0)
+            put("adaptation_enabled", if (profile.getBoolean("adaptation_enabled")) 1 else 0)
+            put("revision", profile.getInt("revision").coerceAtLeast(0))
+            put("updated_at", profile.getString("updated_at").take(80))
+            put("last_reason", profile.getString("last_reason").replace("\u0000", "").take(500))
+        }
+        require(db.update("resonance_profile", profileValues, "id=1", null) == 1)
+
+        db.delete("resonance_trait", null, null)
+        val traits = state.optJSONArray("traits") ?: JSONArray()
+        require(traits.length() <= 512)
+        for (index in 0 until traits.length()) {
+            val item = traits.getJSONObject(index)
+            val trait = ResonanceTrait.fromWireName(item.getString("trait"))
+                ?: error("Unknown Resonance trait in snapshot.")
+            val source = ResonanceSource.valueOf(item.getString("source"))
+            val scope = ResonanceScope.valueOf(item.getString("scope"))
+            require(source != ResonanceSource.Base)
+            val candidate = ResonanceTraitValue(
+                trait = trait,
+                value = item.getDouble("value"),
+                confidence = item.getDouble("confidence"),
+                source = source,
+                scope = scope,
+                updatedAtEpochMillis = item.getLong("updated_at_epoch_millis"),
+                lastReinforcedEpochMillis = item.getLong("last_reinforced_epoch_millis"),
+                decayPolicy = item.getString("decay_policy"),
+            )
+            db.insertOrThrow(
+                "resonance_trait",
+                null,
+                ContentValues().apply {
+                    put("trait", candidate.trait.wireName)
+                    put("value", candidate.value)
+                    put("confidence", candidate.confidence)
+                    put("source", candidate.source.name)
+                    put("scope", candidate.scope.name)
+                    put("scope_key", item.getString("scope_key").take(240))
+                    put("updated_at_epoch_millis", candidate.updatedAtEpochMillis)
+                    put("last_reinforced_epoch_millis", candidate.lastReinforcedEpochMillis)
+                    put("decay_policy", candidate.decayPolicy)
+                    put("created_at", item.getString("created_at").take(80))
+                },
+            )
+        }
+
+        db.delete("resonance_feedback", null, null)
+        val feedback = state.optJSONArray("feedback") ?: JSONArray()
+        require(feedback.length() <= 2_048)
+        for (index in 0 until feedback.length()) {
+            val item = feedback.getJSONObject(index)
+            val action = ResonanceFeedbackAction.valueOf(item.getString("action"))
+            val trait = ResonanceTrait.fromWireName(item.getString("trait"))
+                ?: error("Unknown Resonance feedback trait.")
+            val scope = ResonanceScope.valueOf(item.getString("scope"))
+            val before = item.getDouble("before_value")
+            val after = item.getDouble("after_value")
+            require(before.isFinite() && before in 0.0..1.0 && after.isFinite() && after in 0.0..1.0)
+            db.insertOrThrow(
+                "resonance_feedback",
+                null,
+                ContentValues().apply {
+                    put("action", action.name)
+                    put("trait", trait.wireName)
+                    put("before_value", before)
+                    put("after_value", after)
+                    put("scope", scope.name)
+                    put("scope_key", item.getString("scope_key").take(240))
+                    if (item.isNull("source_message_id")) putNull("source_message_id")
+                    else put("source_message_id", item.getLong("source_message_id"))
+                    put("undone", if (item.getBoolean("undone")) 1 else 0)
+                    put("created_at", item.getString("created_at").take(80))
+                },
+            )
+        }
+
+        db.delete("resonance_session_override", null, null)
+        val sessions = state.optJSONArray("session_overrides") ?: JSONArray()
+        require(sessions.length() <= 512)
+        for (index in 0 until sessions.length()) {
+            val item = sessions.getJSONObject(index)
+            val mode = ResonanceSessionMode.valueOf(item.getString("mode"))
+            db.insertOrThrow(
+                "resonance_session_override",
+                null,
+                ContentValues().apply {
+                    put("session_id", item.getString("session_id"))
+                    put("mode", mode.name)
+                    put("created_at", item.getString("created_at").take(80))
+                },
+            )
+        }
+
+        db.delete("resonance_pack_install", null, null)
+        val packs = state.optJSONArray("pack_installs") ?: JSONArray()
+        require(packs.length() <= 64)
+        for (index in 0 until packs.length()) {
+            val item = packs.getJSONObject(index)
+            val id = item.getString("pack_id")
+            val version = item.getString("version")
+            val hash = item.getString("manifest_sha256")
+            require(Regex("^[a-z0-9][a-z0-9_.-]{0,63}$").matches(id))
+            require(version.length in 1..64)
+            require(Regex("^[0-9a-f]{64}$").matches(hash))
+            db.insertOrThrow(
+                "resonance_pack_install",
+                null,
+                ContentValues().apply {
+                    put("pack_id", id)
+                    put("version", version)
+                    put("name", item.getString("name").take(80))
+                    put("manifest_sha256", hash)
+                    put("active", if (item.getBoolean("active")) 1 else 0)
+                    put("installed_at", item.getString("installed_at").take(80))
+                },
+            )
+        }
+    }
+
+    private fun insertResonanceRevision(
+        db: SQLiteDatabase,
+        revision: Int,
+        oldState: String,
+        newState: String,
+        reason: String,
+        sourceMessageId: Long,
+        undone: Boolean,
+    ) {
+        require(oldState.length <= MaxResonanceSnapshotCharacters)
+        require(newState.length <= MaxResonanceSnapshotCharacters)
+        db.insertOrThrow(
+            "resonance_revision",
+            null,
+            ContentValues().apply {
+                put("profile_revision", revision)
+                put("old_state_json", oldState)
+                put("new_state_json", newState)
+                put("reason", reason.take(500))
+                putNullableMessageId("source_message_id", sourceMessageId)
+                put("undone", if (undone) 1 else 0)
+                put("created_at", now())
+            },
+        )
+    }
+
+    private fun ContentValues.putNullableMessageId(key: String, sourceMessageId: Long) {
+        if (sourceMessageId > 0L) put(key, sourceMessageId) else putNull(key)
+    }
+
     private fun persistProfileChange(
         current: InteractionProfile,
         proposed: InteractionProfile,
@@ -1773,6 +2896,7 @@ class MemoryMatrixRepository(private val context: Context) :
             .put("max_write_bytes", mission.maxWriteBytes)
             .put("plan_kind", mission.planKind)
             .put("plan_state", mission.planState)
+            .put("evolution_state", mission.evolutionState)
             .put("guidance", JSONArray(mission.guidance))
             .put("action_trail", JSONArray(mission.actionTrail))
             .put("last_action", mission.lastAction)
@@ -1799,9 +2923,11 @@ class MemoryMatrixRepository(private val context: Context) :
         maxWriteBytes = payload.optLong("max_write_bytes", 1024L * 1024L)
             .coerceIn(64L * 1024L, 2L * 1024L * 1024L),
         planKind = payload.optString("plan_kind", WorkspaceMissionKind)
-            .takeIf { it in setOf(WorkspaceMissionKind, StoryForgeMissionKind) }
+            .takeIf { it in setOf(WorkspaceMissionKind, StoryForgeMissionKind, EvolutionForgeMissionKind) }
             ?: WorkspaceMissionKind,
         planState = payload.optString("plan_state").replace("\u0000", "").trim().take(1_200),
+        evolutionState = payload.optString("evolution_state").replace("\u0000", "").trim()
+            .take(512 * 1024),
         guidance = buildList {
             val entries = payload.optJSONArray("guidance") ?: JSONArray()
             for (index in 0 until entries.length()) {
@@ -1861,7 +2987,11 @@ class MemoryMatrixRepository(private val context: Context) :
         .find(objective)
         ?.value
         ?.uppercase(Locale.ROOT)
-        ?: "${if (planKind == StoryForgeMissionKind) "SF" else "LF"}-" +
+        ?: "${when (planKind) {
+            StoryForgeMissionKind -> "SF"
+            EvolutionForgeMissionKind -> "EF"
+            else -> "LF"
+        }}-" +
             UUID.randomUUID().toString().take(8).uppercase(Locale.ROOT)
 
     private fun profilesEquivalent(left: InteractionProfile, right: InteractionProfile): Boolean =
@@ -2467,6 +3597,13 @@ class MemoryMatrixRepository(private val context: Context) :
         val id: Long,
         val revision: Int,
         val oldProfileJson: String,
+        val reason: String,
+    )
+
+    private data class ResonanceUndoTarget(
+        val id: Long,
+        val revision: Int,
+        val oldStateJson: String,
         val reason: String,
     )
 }

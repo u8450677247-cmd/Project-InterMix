@@ -32,7 +32,12 @@ object GenerationIntegrityGuard {
                 detail = "The stream contained a Unicode replacement character.",
             )
         }
-        if (Regex("(?i)</?\\s*(?:INTERMIX[_\\s-]*ACTION|INTERACTION)\\b").containsMatchIn(text)) {
+        if (
+            Regex(
+                "(?i)</?\\s*(?:INTERMIX[_\\s-]*(?:ACTION|EXEC|CALC|STORY|EVOLUTION)|" +
+                    "INTERACTION|MEMORY[_\\s-]*UPDATE|PROFILE[_\\s-]*UPDATE)\\b",
+            ).containsMatchIn(text)
+        ) {
             return IntegrityViolation(
                 code = "protocol-leak",
                 detail = "Controller protocol appeared in visible model text.",
@@ -137,6 +142,7 @@ data class AgentMissionCheckpoint(
     val maxWriteBytes: Long = 1024L * 1024L,
     val planKind: String = WorkspaceMissionKind,
     val planState: String = "",
+    val evolutionState: String = "",
     val guidance: List<String> = emptyList(),
     val actionTrail: List<String> = emptyList(),
     val lastAction: String = "",

@@ -100,6 +100,16 @@ class EvolutionForgeTest {
         assertEquals(2, state.currentPatch?.attempt)
         assertTrue(state.testEvidence.isNotEmpty())
         assertTrue(state.knownFailures.isNotEmpty())
+        state = EvolutionForgeController.acceptPlan(state, "Refinement plan", 6L)
+        assertFails {
+            EvolutionForgeController.completeImplementation(
+                state,
+                summary = "Tried to reuse attempt one",
+                claimedFiles = patch.expectedFiles,
+                claimedWrittenBytes = 42L,
+                atEpochMillis = 7L,
+            )
+        }
     }
 
     @Test
@@ -130,6 +140,153 @@ class EvolutionForgeTest {
                 testEvidence(patch, passed = false, at = 4L),
             )
         }
+        assertFails {
+            EvolutionForgeController.applyModelProposal(
+                implement(implementing, patch, 3L),
+                EvolutionModelProposal(
+                    action = "test",
+                    summary = "The model says the test passed",
+                    passed = true,
+                ),
+                atEpochMillis = 4L,
+            )
+        }
+    }
+
+    @Test
+    fun incrementalWritesNeedExactEvidenceBeforeImplementationCloses() {
+        val patch = patch("incremental", expectedFile = "src/first.kt").copy(
+            expectedFiles = listOf("src/first.kt", "src/second.kt"),
+        )
+        var state = planned(patch)
+        state = EvolutionForgeController.recordImplementation(
+            state,
+            mutation(patch, 3L).copy(files = listOf("src/first.kt"), writtenBytes = 20L),
+            complete = false,
+        )
+        state = EvolutionForgeController.recordImplementation(
+            state,
+            mutation(patch, 4L).copy(files = listOf("src/second.kt"), writtenBytes = 22L),
+            complete = false,
+        )
+
+        assertEquals(EvolutionStage.Implement, state.stage)
+        val context = EvolutionForgeContextCompiler.compile(state)
+        assertTrue(context.contains("src/first.kt · 20 bytes"))
+        assertTrue(context.contains("src/second.kt · 22 bytes"))
+        assertFails {
+            EvolutionForgeController.applyModelProposal(
+                state,
+                EvolutionModelProposal(
+                    action = "implementation",
+                    summary = "Claims only one file",
+                    files = listOf("src/first.kt"),
+                    writtenBytes = 20L,
+                ),
+                atEpochMillis = 5L,
+            )
+        }
+
+        val completed = EvolutionForgeController.applyModelProposal(
+            state,
+            EvolutionModelProposal(
+                action = "implementation",
+                summary = "Both controller-owned writes are present",
+                files = listOf("src/second.kt", "src/first.kt"),
+                writtenBytes = 42L,
+            ),
+            atEpochMillis = 5L,
+        )
+
+        assertEquals(EvolutionStage.Test, completed.stage)
+        assertEquals(2, completed.mutationEvidence.size)
+    }
+
+    @Test
+    fun workspaceObservationsPersistAsBoundedUntrustedEvidence() {
+        val observed = EvolutionForgeController.recordWorkspaceObservation(
+            state = started(),
+            actionLabel = "read_file",
+            relativePath = "src/main.kt",
+            evidence = "Controller read succeeded\n${"x".repeat(2_000)}",
+            atEpochMillis = 1L,
+        )
+
+        assertEquals(119, observed.actionBudgetRemaining)
+        assertTrue(observed.verifiedResults.single().startsWith("WORKSPACE OBSERVATION · UNTRUSTED"))
+        assertTrue(observed.verifiedResults.single().length <= 1_600)
+        assertTrue(EvolutionForgeContextCompiler.compile(observed).contains("src/main.kt"))
+        assertFails {
+            EvolutionForgeController.recordWorkspaceObservation(
+                state = started(),
+                actionLabel = "read_file",
+                relativePath = "../outside",
+                evidence = "unsafe",
+                atEpochMillis = 1L,
+            )
+        }
+    }
+
+    @Test
+    fun proposalReducerHonorsDurableStageOrder() {
+        val patch = patch("proposal-order")
+        var state = started()
+        state = EvolutionForgeController.applyModelProposal(
+            state,
+            EvolutionModelProposal("inspection", "Inspected bounded sources"),
+            atEpochMillis = 1L,
+        )
+        state = EvolutionForgeController.applyModelProposal(
+            state,
+            EvolutionModelProposal("select_patch", "Selected safe patch", patch = patch),
+            atEpochMillis = 2L,
+        )
+        state = EvolutionForgeController.applyModelProposal(
+            state,
+            EvolutionModelProposal("plan", "One-file bounded plan"),
+            atEpochMillis = 3L,
+        )
+
+        assertEquals(EvolutionStage.Implement, state.stage)
+        assertEquals(patch.id, state.currentPatch?.id)
+        assertFails {
+            EvolutionForgeController.applyModelProposal(
+                state,
+                EvolutionModelProposal("complete", "Unsupported early completion"),
+                atEpochMillis = 4L,
+            )
+        }
+    }
+
+    @Test
+    fun modelReviewClockAndNewPatchAttemptAreControllerNormalized() {
+        val patch = patch("normalized-review")
+        val candidate = backlog(
+            id = "candidate",
+            priority = EvolutionPriority.Regression,
+            value = 70,
+            at = 999L,
+            patch = patch("candidate-patch").copy(
+                status = EvolutionPatchStatus.Blocked,
+                mode = EvolutionPatchMode.PartialRevert,
+                attempt = 17,
+            ),
+        )
+        val state = passToReview(planned(patch), patch, 3L)
+        val reviewed = EvolutionForgeController.applyModelProposal(
+            state,
+            EvolutionModelProposal(
+                action = "review",
+                summary = "Review complete",
+                review = review(patch.id, EvolutionDecision.Keep, 999L, listOf(candidate)),
+            ),
+            atEpochMillis = 21L,
+        )
+
+        assertEquals(21L, reviewed.reviews.last().recordedAtEpochMillis)
+        assertEquals(21L, reviewed.rankedBacklog.single().createdAtEpochMillis)
+        assertEquals(1, reviewed.rankedBacklog.single().patch.attempt)
+        assertEquals(EvolutionPatchStatus.Proposed, reviewed.rankedBacklog.single().patch.status)
     }
 
     @Test
@@ -228,6 +385,29 @@ class EvolutionForgeTest {
         assertEquals(EvolutionStage.Paused, restored.stage)
         assertEquals(EvolutionStage.Test, restored.resumeStage)
         assertEquals(EvolutionStage.Test, EvolutionForgeController.resume(restored, 6L).stage)
+    }
+
+    @Test
+    fun consumedExecutionCursorSurvivesPatchLocalEvidenceReset() {
+        val first = patch("cursor-first")
+        var state = implement(planned(first), first, 3L)
+        state = EvolutionForgeController.recordTest(
+            state,
+            testEvidence(first, passed = true, at = 4L).copy(sourceExecutionId = 91L),
+        )
+        state = EvolutionForgeController.recordMeasurement(state, "Measured", 5L)
+        state = EvolutionForgeController.recordAdversarialCheck(state, "Passed", true, 6L)
+        state = EvolutionForgeController.recordUiReview(state, "Passed", true, 7L)
+        state = EvolutionForgeController.recordReview(
+            state,
+            review(first.id, EvolutionDecision.Keep, 8L),
+        )
+        state = EvolutionForgeController.recordCheckpoint(state, "First checkpoint", 9L)
+        state = EvolutionForgeController.selectPatch(state, patch("cursor-second"), 10L)
+
+        assertTrue(state.testEvidence.isEmpty())
+        assertEquals(91L, state.lastExecutionEvidenceId)
+        assertEquals(state, EvolutionForgeStateCodec.decode(EvolutionForgeStateCodec.encode(state)))
     }
 
     @Test
@@ -341,6 +521,7 @@ class EvolutionForgeTest {
 
     private fun mutation(patch: EvolutionPatch, at: Long) = EvolutionMutationEvidence(
         patchId = patch.id,
+        patchAttempt = patch.attempt,
         summary = "Controller verified the write",
         files = patch.expectedFiles,
         writtenBytes = 42L,
@@ -353,6 +534,7 @@ class EvolutionForgeTest {
 
     private fun testEvidence(patch: EvolutionPatch, passed: Boolean, at: Long) = EvolutionTestEvidence(
         patchId = patch.id,
+        patchAttempt = patch.attempt,
         commandLabel = "focused unit test",
         summary = if (passed) "All focused checks passed" else "Focused check exposed a regression",
         passed = passed,

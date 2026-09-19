@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import sqlite3
+import textwrap
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -234,9 +236,104 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("LegacyHistoryName.migrated", repository)
         self.assertIn("memoryMatrix.loadMessages()", view_model)
         self.assertIn("memoryMatrix.recallContext", view_model)
-        self.assertIn("MatrixSchemaVersion = 5", repository)
+        self.assertIn("MatrixSchemaVersion = 6", repository)
         self.assertIn("CREATE TABLE IF NOT EXISTS context_windows", repository)
         self.assertIn("undoLatestProfileChange", repository)
+
+    def test_resonance_is_durable_scoped_bounded_and_user_controllable(self):
+        repository = (SOURCE / "MemoryMatrixRepository.kt").read_text(encoding="utf-8")
+        resonance = (SOURCE / "Resonance.kt").read_text(encoding="utf-8")
+        view_model = (SOURCE / "SovereignViewModel.kt").read_text(encoding="utf-8")
+        asset = APP / "src/main/assets/anicloud_resonance_starter_profiles_v1_1.json"
+
+        for table in (
+            "resonance_profile", "resonance_trait", "resonance_feedback",
+            "resonance_session_override", "resonance_pack_install", "resonance_revision",
+        ):
+            self.assertIn(f"CREATE TABLE IF NOT EXISTS {table}", repository)
+        self.assertIn("if (oldVersion < 6) installResonance(db)", repository)
+        self.assertIn("MAX_CHARACTERS = 720", resonance)
+        self.assertIn("MAX_ESTIMATED_TOKENS = 180", resonance)
+        self.assertIn("Explicit", resonance)
+        self.assertIn("Session", resonance)
+        self.assertIn("undoLatestResonanceChange", repository)
+        self.assertIn('"/resonance"', view_model)
+        self.assertIn("ResonanceDeliveryCompiler.compile", view_model)
+        self.assertTrue(asset.is_file())
+        self.assertIn('"schema_version": 1', asset.read_text(encoding="utf-8"))
+
+    def test_resonance_schema_executes_on_stock_sqlite(self):
+        repository = (SOURCE / "MemoryMatrixRepository.kt").read_text(encoding="utf-8")
+        install_block = repository.split(
+            "private fun installResonance(db: SQLiteDatabase)", maxsplit=1
+        )[1].split("private fun mutateResonance(", maxsplit=1)[0]
+        table_statements = re.findall(
+            r'db\.execSQL\(\s*"""(.*?)"""\.trimIndent\(\),\s*\)',
+            install_block,
+            flags=re.DOTALL,
+        )
+        self.assertEqual(len(table_statements), 6)
+
+        connection = sqlite3.connect(":memory:")
+        try:
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.execute("CREATE TABLE sessions(id TEXT PRIMARY KEY)")
+            connection.execute("CREATE TABLE messages(id INTEGER PRIMARY KEY)")
+            for statement in table_statements:
+                connection.execute(textwrap.dedent(statement).strip())
+
+            installed = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            self.assertTrue(
+                {
+                    "resonance_profile",
+                    "resonance_trait",
+                    "resonance_feedback",
+                    "resonance_session_override",
+                    "resonance_pack_install",
+                    "resonance_revision",
+                }.issubset(installed)
+            )
+            self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
+        finally:
+            connection.close()
+
+    def test_evolution_forge_advances_only_from_typed_controller_evidence(self):
+        evolution = (SOURCE / "EvolutionForge.kt").read_text(encoding="utf-8")
+        protocol = (SOURCE / "ControllerProtocol.kt").read_text(encoding="utf-8")
+        repository = (SOURCE / "MemoryMatrixRepository.kt").read_text(encoding="utf-8")
+        view_model = (SOURCE / "SovereignViewModel.kt").read_text(encoding="utf-8")
+
+        self.assertIn('EvolutionForgeMissionKind = "evolution_forge"', evolution)
+        self.assertIn("fun applyModelProposal(", evolution)
+        self.assertIn("A model test proposal cannot advance", evolution)
+        self.assertIn("controller-owned mutation evidence", evolution)
+        self.assertIn("source_execution_id", evolution)
+        self.assertIn("last_execution_evidence_id", evolution)
+        self.assertIn("latestEvolutionTestEvidence", repository)
+        self.assertIn("hasPendingEvolutionTestExecution", repository)
+        self.assertIn("status IN ('completed','failed','cancelled')", repository)
+        self.assertIn("EvolutionForgeController.recordImplementation", view_model)
+        self.assertIn("normalized.path == recordedMission.rootPath", view_model)
+        self.assertIn("Guidance was saved for ${guided.id}", view_model)
+        self.assertIn("Evolution Forge can complete only from its verified controller stage", repository)
+        self.assertIn("mission?.planKind == EvolutionForgeMissionKind", view_model)
+        self.assertIn("At TEST, emit", protocol)
+        self.assertIn("A model test proposal never advances state", protocol)
+
+    def test_evolution_and_resonance_are_discoverable_in_the_existing_work_ui(self):
+        ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
+
+        self.assertIn('SlashCommand(\n        "/resonance"', ui)
+        self.assertIn("run|evolve <folder> :: <objective>", ui)
+        self.assertIn('"START EVOLUTION FORGE"', ui)
+        self.assertIn('"/mission evolve ${rootPath.trim()} :: ${objective.trim()}"', ui)
+        self.assertIn('"EVOLUTION STAGE · ${mission.planState.uppercase(Locale.ROOT)}"', ui)
+        self.assertIn("VERIFIED WRITES/TESTS · PATCH REVIEW", ui)
 
     def test_termux_execution_is_typed_approval_gated_and_result_bounded(self):
         manifest = (APP / "src/main/AndroidManifest.xml").read_text(encoding="utf-8")

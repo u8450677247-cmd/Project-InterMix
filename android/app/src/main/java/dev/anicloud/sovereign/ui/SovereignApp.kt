@@ -117,6 +117,7 @@ import dev.anicloud.sovereign.prototype.CockpitState
 import dev.anicloud.sovereign.prototype.ComposerMaxVisibleLines
 import dev.anicloud.sovereign.prototype.ContextPhysicalTokens
 import dev.anicloud.sovereign.prototype.Destination
+import dev.anicloud.sovereign.prototype.EvolutionForgeMissionKind
 import dev.anicloud.sovereign.prototype.FoundationLayout
 import dev.anicloud.sovereign.prototype.FoundationPreferenceStore
 import dev.anicloud.sovereign.prototype.InteractionProfile
@@ -192,6 +193,12 @@ private val SlashCommands = listOf(
         true,
     ),
     SlashCommand("/profile", "inspect interaction profile", "Show learned presentation traits"),
+    SlashCommand(
+        "/resonance",
+        "status, profile, mode, feedback, or trait",
+        "Inspect or tune the bounded delivery contract",
+        true,
+    ),
     SlashCommand("/why", "explain the last decision", "Show route and context-gate evidence"),
     SlashCommand("/adapt", "enter a trait or on/off", "Tune or pause reversible adaptation", true),
     SlashCommand("/undo-adaptation", "revert the latest revision", "Undo one profile change"),
@@ -205,8 +212,8 @@ private val SlashCommands = listOf(
     ),
     SlashCommand(
         "/mission",
-        "run <folder> :: <objective>, or story <folder> :: <premise>",
-        "Start scoped project work or the 120-chapter Story Forge",
+        "run|evolve <folder> :: <objective>, or story <folder> :: <premise>",
+        "Start scoped project work, Evolution Forge, or the 120-chapter Story Forge",
         true,
     ),
     SlashCommand("/version", "show build provenance", "Display the installed build and backend"),
@@ -2474,6 +2481,12 @@ private fun WorkSessionSurface(
                             selectedMode,
                         )
                     },
+                    onEvolutionStart = {
+                        actions.onSend(
+                            "/mission evolve ${rootPath.trim()} :: ${objective.trim()}",
+                            selectedMode,
+                        )
+                    },
                     onStoryStart = {
                         actions.onSend(
                             "/mission story ${rootPath.trim()} :: ${objective.trim()}",
@@ -2526,6 +2539,12 @@ private fun WorkSessionSurface(
                             selectedMode,
                         )
                     },
+                    onEvolutionStart = {
+                        actions.onSend(
+                            "/mission evolve ${rootPath.trim()} :: ${objective.trim()}",
+                            selectedMode,
+                        )
+                    },
                     onStoryStart = {
                         actions.onSend(
                             "/mission story ${rootPath.trim()} :: ${objective.trim()}",
@@ -2573,6 +2592,7 @@ private fun WorkSessionControlPanel(
     onMode: (AnswerMode) -> Unit,
     onLoadStoryBenchmark: () -> Unit,
     onStart: () -> Unit,
+    onEvolutionStart: () -> Unit,
     onStoryStart: () -> Unit,
     onGuide: () -> Unit,
     onCommand: (String) -> Unit,
@@ -2691,6 +2711,19 @@ private fun WorkSessionControlPanel(
                         )
                     }
                     OutlinedButton(
+                        onClick = onEvolutionStart,
+                        enabled = workspaceConnected && cockpit.canSend && rootPath.isNotBlank() &&
+                            objective.isNotBlank() && !reservedStoryRoot,
+                        border = BorderStroke(1.dp, CognitionViolet),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            if (cockpit.isGenerating) "REQUEST ACCEPTED…" else "START EVOLUTION FORGE",
+                            color = CognitionViolet,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    OutlinedButton(
                         onClick = onStoryStart,
                         enabled = workspaceConnected && cockpit.canSend && rootPath.isNotBlank() &&
                             objective.isNotBlank() && !reservedStoryRoot,
@@ -2773,6 +2806,15 @@ private fun WorkSessionControlPanel(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (mission.planKind == EvolutionForgeMissionKind) {
+                    Text(
+                        "EVOLUTION STAGE · ${mission.planState.uppercase(Locale.ROOT)}",
+                        color = CognitionViolet,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
                 LongForgePhaseRail(
                     completedActions = mission.completedActions,
                     maxActions = mission.maxActions,
@@ -2867,10 +2909,13 @@ private fun WorkSessionControlPanel(
             }
 
             Text(
-                if (mission?.planKind == StoryForgeMissionKind) {
-                    "STORY GRANT · 120 CONTROLLER COMMITS · ONE FILE · POST-SYNC RECOVERY MARKERS · EXACT AUTO-STOP"
-                } else {
-                    "GRANT · 120 ACTIONS · MATRIX OFFLOAD · RECURSION GUARD · 1 MiB WRITES · AGENT DELETE OFF · EXEC/NET NEED AGENTS APPROVAL"
+                when (mission?.planKind) {
+                    StoryForgeMissionKind ->
+                        "STORY GRANT · 120 CONTROLLER COMMITS · ONE FILE · POST-SYNC RECOVERY MARKERS · EXACT AUTO-STOP"
+                    EvolutionForgeMissionKind ->
+                        "EVOLUTION GRANT · DURABLE STAGES · VERIFIED WRITES/TESTS · PATCH REVIEW · EXEC/NET NEED AGENTS APPROVAL"
+                    else ->
+                        "GRANT · 120 ACTIONS · MATRIX OFFLOAD · RECURSION GUARD · 1 MiB WRITES · AGENT DELETE OFF · EXEC/NET NEED AGENTS APPROVAL"
                 },
                 color = ResonanceMint,
                 fontFamily = FontFamily.Monospace,
@@ -3175,6 +3220,22 @@ private fun AgentSurface(cockpit: CockpitState, actions: CockpitActions) {
     ) {
         item { PageHeading("Agents", "Checkpointed work that never hides its state") }
         item { AgentMemoryContext(cockpit.memoryMatrix) }
+        cockpit.activeMission?.takeIf { it.planKind == EvolutionForgeMissionKind }?.let { mission ->
+            item {
+                StatusCard(
+                    "EVOLUTION FORGE · ${mission.id}",
+                    mission.planState.ifBlank { mission.status.name },
+                    "Writes advance only from scoped workspace receipts; tests advance only from an " +
+                        "approved terminal execution result.",
+                    when (mission.status) {
+                        AgentMissionStatus.Running -> CognitionViolet
+                        AgentMissionStatus.Paused -> WaitingAmber
+                        AgentMissionStatus.Completed -> ResonanceMint
+                        AgentMissionStatus.Failed, AgentMissionStatus.Cancelled -> InterventionCoral
+                    },
+                )
+            }
+        }
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 StatusCard(
@@ -3325,6 +3386,14 @@ private fun PendingExecutionCard(
                 fontFamily = FontFamily.Monospace,
                 fontSize = 10.sp,
             )
+            if (pending.missionId.isNotBlank()) {
+                Text(
+                    "MISSION · ${pending.missionId}",
+                    color = CognitionViolet,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                )
+            }
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.46f),
                 shape = RoundedCornerShape(8.dp),

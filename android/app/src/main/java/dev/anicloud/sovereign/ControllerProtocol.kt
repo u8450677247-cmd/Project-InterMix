@@ -14,6 +14,8 @@ const val CalculationOpenMarker = "<INTERMIX_CALC>"
 const val CalculationCloseMarker = "</INTERMIX_CALC>"
 const val StoryOpenMarker = "<INTERMIX_STORY>"
 const val StoryCloseMarker = "</INTERMIX_STORY>"
+const val EvolutionOpenMarker = "<INTERMIX_EVOLUTION>"
+const val EvolutionCloseMarker = "</INTERMIX_EVOLUTION>"
 private const val StoryTitleOpenMarker = "<TITLE>"
 private const val StoryTitleCloseMarker = "</TITLE>"
 private const val StoryBodyOpenMarker = "<BODY>"
@@ -52,6 +54,7 @@ data class ControllerProtocolResult(
     val executionAction: ExecutionProposal? = null,
     val calculationAction: NumericCalculationProposal? = null,
     val storyChapter: StoryChapterProposal? = null,
+    val evolutionProposal: EvolutionModelProposal? = null,
     val memoryPayload: JSONObject? = null,
     val profilePayload: JSONObject? = null,
     /** True when protocol-looking output was withheld but did not parse as an executable payload. */
@@ -77,11 +80,12 @@ object ControllerProtocol {
         ExecutionActionOpenMarker,
         CalculationOpenMarker,
         StoryOpenMarker,
+        EvolutionOpenMarker,
         MemoryUpdateOpenMarker,
         ProfileUpdateOpenMarker,
     )
     private val protocolLikeStartPattern = Regex(
-        "<\\s*/?\\s*(?:INTERMIX(?:[_\\s-]*(?:ACTION|EXEC|CALC|STORY))?|" +
+        "<\\s*/?\\s*(?:INTERMIX(?:[_\\s-]*(?:ACTION|EXEC|CALC|STORY|EVOLUTION))?|" +
             "INTERACTION|MEMORY[_\\s-]*UPDATE|PROFILE[_\\s-]*UPDATE)" +
             "(?=\\s|>|\\{|\\[|$)",
         RegexOption.IGNORE_CASE,
@@ -92,6 +96,7 @@ object ControllerProtocol {
         "INTERMIXEXEC",
         "INTERMIXCALC",
         "INTERMIXSTORY",
+        "INTERMIXEVOLUTION",
         "MEMORYUPDATE",
         "PROFILEUPDATE",
     )
@@ -229,6 +234,26 @@ object ControllerProtocol {
         snapshots, checkpoints, and decides the final boundary.
     """.trimIndent()
 
+    /** Private typed proposal contract for one persisted Evolution Forge controller stage. */
+    fun evolutionForgePromptContract(): String = """
+        [PRIVATE EVOLUTION FORGE PROTOCOL]
+        The bounded controller state above is authoritative. At INSPECT, emit one list_files or
+        read_file INTERMIX_ACTION at a time until evidence is sufficient, then propose inspection.
+        At IMPLEMENT, emit one scoped INTERMIX_ACTION mutation at a time, limited to the accepted
+        patch file set. After Android returns all verified writes, propose implementation with the
+        exact workspace-relative files and total controller-reported written_bytes. At TEST, emit
+        exactly one INTERMIX_EXEC of kind test or build; Android pauses for explicit approval and
+        consumes the terminal result only on resume. At every non-tool stage, propose exactly one:
+        <INTERMIX_EVOLUTION>{"action":"inspection|select_patch|plan|implementation|test|measurement|adversarial|ui_review|review|checkpoint|complete|blocked","summary":"bounded evidence or intent"}</INTERMIX_EVOLUTION>
+        A select_patch proposal also includes a typed patch object. Implementation proposals list only
+        workspace-relative files and written_bytes. A model test proposal never advances state;
+        adversarial and ui_review proposals include passed for deterministic stage validation.
+        A review includes one of Keep, Refine, PartialRevert, or Replace and all mandatory review fields.
+        Never claim a write, command, test, measurement, checkpoint, or completion succeeded merely
+        because you described it. Never widen the mission root, replace the objective, grant authority,
+        emit credentials, or include a second private controller payload or tool action.
+    """.trimIndent()
+
     fun visibleStreamingText(raw: String): String {
         val completeMarker = firstProtocolMarkerIndex(raw)
         if (completeMarker != null) return raw.substring(0, completeMarker)
@@ -250,10 +275,11 @@ object ControllerProtocol {
         val calculationAction = extractJson(raw, CalculationOpenMarker, CalculationCloseMarker)
             ?.let(::parseCalculationAction)
         val storyChapter = extractStoryChapter(raw)
+        val evolutionProposal = runCatching { EvolutionForgeProtocol.parse(raw).proposal }.getOrNull()
         val memoryPayload = extractJson(raw, MemoryUpdateOpenMarker, MemoryUpdateCloseMarker)
         val profilePayload = extractJson(raw, ProfileUpdateOpenMarker, ProfileUpdateCloseMarker)
         val parsedPayload = workspaceAction != null || executionAction != null ||
-            calculationAction != null || storyChapter != null || memoryPayload != null ||
+            calculationAction != null || storyChapter != null || evolutionProposal != null || memoryPayload != null ||
             profilePayload != null
         return ControllerProtocolResult(
             visibleText = visible,
@@ -261,6 +287,7 @@ object ControllerProtocol {
             executionAction = executionAction,
             calculationAction = calculationAction,
             storyChapter = storyChapter,
+            evolutionProposal = evolutionProposal,
             memoryPayload = memoryPayload,
             profilePayload = profilePayload,
             malformedProtocolSuffix = firstMarker != null && !parsedPayload,

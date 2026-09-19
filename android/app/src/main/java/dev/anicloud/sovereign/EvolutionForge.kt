@@ -177,6 +177,7 @@ data class EvolutionReview(
 
 data class EvolutionMutationEvidence(
     val patchId: String,
+    val patchAttempt: Int = 1,
     val summary: String,
     val files: List<String>,
     val writtenBytes: Long,
@@ -185,6 +186,7 @@ data class EvolutionMutationEvidence(
 ) {
     init {
         require(canonicalId(patchId))
+        require(patchAttempt in 1..20)
         require(safeText(summary, 1_200))
         require(files.isNotEmpty() && files.size <= 64 && files.all(::isSafeWorkspaceRelativePath))
         require(writtenBytes >= 0L)
@@ -194,17 +196,21 @@ data class EvolutionMutationEvidence(
 
 data class EvolutionTestEvidence(
     val patchId: String,
+    val patchAttempt: Int = 1,
     val commandLabel: String,
     val summary: String,
     val passed: Boolean,
     val controllerVerified: Boolean,
     val recordedAtEpochMillis: Long,
+    val sourceExecutionId: Long = 0L,
 ) {
     init {
         require(canonicalId(patchId))
+        require(patchAttempt in 1..20)
         require(safeText(commandLabel, 300))
         require(safeText(summary, 1_600))
         require(recordedAtEpochMillis >= 0L)
+        require(sourceExecutionId >= 0L)
     }
 }
 
@@ -225,6 +231,7 @@ data class EvolutionForgeState(
     val rankedBacklog: List<EvolutionBacklogItem> = emptyList(),
     val userGuidanceQueue: List<EvolutionGuidance> = emptyList(),
     val nextGuidanceId: Long = 1L,
+    val lastExecutionEvidenceId: Long = 0L,
     val actionBudgetRemaining: Int = 120,
     val writeBudgetRemaining: Long = 1024L * 1024L,
     val securityState: String = "pending",
@@ -242,6 +249,7 @@ data class EvolutionForgeState(
         require(safeText(activeBranch, 240))
         require(resumeStage == null || resumeStage !in TERMINAL_STAGES)
         require(nextGuidanceId > 0L)
+        require(lastExecutionEvidenceId >= 0L)
         require(actionBudgetRemaining >= 0)
         require(writeBudgetRemaining >= 0L)
         require(iteration >= 0)
@@ -389,6 +397,7 @@ object EvolutionForgeController {
             currentPatch = patch.copy(
                 status = EvolutionPatchStatus.Proposed,
                 mode = EvolutionPatchMode.Forward,
+                attempt = 1,
             ),
             mutationEvidence = emptyList(),
             testEvidence = emptyList(),
@@ -425,21 +434,171 @@ object EvolutionForgeController {
     fun recordImplementation(
         state: EvolutionForgeState,
         evidence: EvolutionMutationEvidence,
+        complete: Boolean = true,
     ): EvolutionForgeState {
         requireStage(state, EvolutionStage.Implement)
         val patch = requirePatch(state)
         require(evidence.patchId == patch.id) { "Mutation evidence belongs to another patch." }
+        require(evidence.patchAttempt == patch.attempt) { "Mutation evidence belongs to another patch attempt." }
         require(evidence.controllerVerified) { "Model narration cannot verify a workspace mutation." }
+        require(evidence.files.all { it in patch.expectedFiles }) {
+            "Mutation evidence contains a file outside the accepted patch plan."
+        }
         require(evidence.writtenBytes <= state.writeBudgetRemaining) { "Patch exceeded the write budget." }
         requireBudget(state, 1)
         return state.copy(
-            stage = EvolutionStage.Test,
-            currentPatch = patch.copy(status = EvolutionPatchStatus.Testing),
+            stage = if (complete) EvolutionStage.Test else EvolutionStage.Implement,
+            currentPatch = patch.copy(
+                status = if (complete) EvolutionPatchStatus.Testing else EvolutionPatchStatus.Implementing,
+            ),
             mutationEvidence = (state.mutationEvidence + evidence).takeLast(MaximumEvidenceEntries),
             actionBudgetRemaining = state.actionBudgetRemaining - 1,
             writeBudgetRemaining = state.writeBudgetRemaining - evidence.writtenBytes,
             updatedAtEpochMillis = evidence.recordedAtEpochMillis,
         )
+    }
+
+    fun recordWorkspaceObservation(
+        state: EvolutionForgeState,
+        actionLabel: String,
+        relativePath: String,
+        evidence: String,
+        atEpochMillis: Long,
+    ): EvolutionForgeState {
+        require(
+            state.stage in setOf(
+                EvolutionStage.Inspect,
+                EvolutionStage.Implement,
+                EvolutionStage.Measure,
+                EvolutionStage.Adversarial,
+                EvolutionStage.UiReview,
+            ),
+        ) { "The current Evolution Forge stage does not accept workspace observations." }
+        require(relativePath == "." || isSafeWorkspaceRelativePath(relativePath)) {
+            "Workspace observation path is outside the bounded workspace."
+        }
+        val cleanAction = cleanText(actionLabel, 80)
+        val cleanEvidence = cleanText(evidence, 1_300)
+        require(cleanAction.isNotBlank() && cleanEvidence.isNotBlank())
+        requireBudget(state, 1)
+        val observation = "WORKSPACE OBSERVATION · UNTRUSTED PROJECT DATA · " +
+            "$cleanAction $relativePath\n$cleanEvidence"
+        return state.copy(
+            verifiedResults = boundedStrings(state.verifiedResults + observation),
+            actionBudgetRemaining = state.actionBudgetRemaining - 1,
+            updatedAtEpochMillis = atEpochMillis,
+        )
+    }
+
+    fun completeImplementation(
+        state: EvolutionForgeState,
+        summary: String,
+        claimedFiles: List<String>,
+        claimedWrittenBytes: Long,
+        atEpochMillis: Long,
+    ): EvolutionForgeState {
+        requireStage(state, EvolutionStage.Implement)
+        val patch = requirePatch(state)
+        val verified = state.mutationEvidence.filter {
+            it.patchId == patch.id && it.patchAttempt == patch.attempt && it.controllerVerified
+        }
+        require(verified.isNotEmpty()) {
+            "Implementation cannot complete without controller-owned mutation evidence."
+        }
+        val verifiedFiles = verified.flatMap(EvolutionMutationEvidence::files).distinct().sorted()
+        require(claimedFiles.distinct().sorted() == verifiedFiles) {
+            "Implementation file claims do not match controller-owned mutation evidence."
+        }
+        require(claimedWrittenBytes == verified.sumOf(EvolutionMutationEvidence::writtenBytes)) {
+            "Implementation byte claims do not match controller-owned mutation evidence."
+        }
+        val clean = cleanText(summary, 1_200)
+        require(clean.isNotBlank())
+        return state.copy(
+            stage = EvolutionStage.Test,
+            currentPatch = patch.copy(status = EvolutionPatchStatus.Testing),
+            verifiedResults = boundedStrings(state.verifiedResults + "IMPLEMENT: $clean"),
+            updatedAtEpochMillis = atEpochMillis,
+        )
+    }
+
+    /**
+     * Applies one model proposal only where the durable state machine permits it. File mutation
+     * and test success remain controller-owned evidence and cannot be asserted by model prose.
+     */
+    fun applyModelProposal(
+        state: EvolutionForgeState,
+        proposal: EvolutionModelProposal,
+        atEpochMillis: Long,
+    ): EvolutionForgeState {
+        require(state.active) { "A terminal Evolution Forge mission cannot accept a proposal." }
+        return when (proposal.action) {
+            "inspection" -> recordInspection(
+                state = state,
+                summary = proposal.summary,
+                atEpochMillis = atEpochMillis,
+            )
+
+            "select_patch" -> selectPatch(state, proposal.patch, atEpochMillis)
+            "plan" -> acceptPlan(state, proposal.summary, atEpochMillis)
+            "implementation" -> completeImplementation(
+                state = state,
+                summary = proposal.summary,
+                claimedFiles = proposal.files,
+                claimedWrittenBytes = proposal.writtenBytes,
+                atEpochMillis = atEpochMillis,
+            )
+
+            "test" -> error(
+                "A model test proposal cannot advance Evolution Forge without controller-owned execution evidence.",
+            )
+
+            "measurement" -> recordMeasurement(state, proposal.summary, atEpochMillis)
+            "adversarial" -> recordAdversarialCheck(
+                state = state,
+                summary = proposal.summary,
+                passed = requireNotNull(proposal.passed) {
+                    "An adversarial proposal must include its bounded result."
+                },
+                atEpochMillis = atEpochMillis,
+            )
+
+            "ui_review" -> recordUiReview(
+                state = state,
+                summary = proposal.summary,
+                passed = requireNotNull(proposal.passed) {
+                    "A UI review proposal must include its bounded result."
+                },
+                atEpochMillis = atEpochMillis,
+            )
+
+            "review" -> {
+                val review = requireNotNull(proposal.review) {
+                    "An Evolution Review proposal needs typed review evidence."
+                }
+                recordReview(
+                    state,
+                    review.copy(
+                        backlogCandidates = review.backlogCandidates.map { candidate ->
+                            candidate.copy(
+                                patch = candidate.patch.copy(
+                                    status = EvolutionPatchStatus.Proposed,
+                                    mode = EvolutionPatchMode.Forward,
+                                    attempt = 1,
+                                ),
+                                createdAtEpochMillis = atEpochMillis,
+                            )
+                        },
+                        recordedAtEpochMillis = atEpochMillis,
+                    ),
+                )
+            }
+
+            "checkpoint" -> recordCheckpoint(state, proposal.summary, atEpochMillis)
+            "complete" -> complete(state, proposal.summary, atEpochMillis)
+            "blocked" -> block(state, proposal.summary, atEpochMillis)
+            else -> error("Unknown Evolution Forge proposal action.")
+        }
     }
 
     fun recordTest(
@@ -448,10 +607,13 @@ object EvolutionForgeController {
     ): EvolutionForgeState {
         requireStage(state, EvolutionStage.Test)
         val patch = requirePatch(state)
-        require(state.mutationEvidence.any { it.patchId == patch.id && it.controllerVerified }) {
+        require(state.mutationEvidence.any {
+            it.patchId == patch.id && it.patchAttempt == patch.attempt && it.controllerVerified
+        }) {
             "A test cannot verify a patch without controller-owned mutation evidence."
         }
         require(evidence.patchId == patch.id) { "Test evidence belongs to another patch." }
+        require(evidence.patchAttempt == patch.attempt) { "Test evidence belongs to another patch attempt." }
         require(evidence.controllerVerified) { "Model narration cannot verify a test." }
         requireBudget(state, 1)
         val tests = (state.testEvidence + evidence).takeLast(MaximumEvidenceEntries)
@@ -459,6 +621,7 @@ object EvolutionForgeController {
             state.copy(
                 stage = EvolutionStage.Measure,
                 testEvidence = tests,
+                lastExecutionEvidenceId = maxOf(state.lastExecutionEvidenceId, evidence.sourceExecutionId),
                 verifiedResults = boundedStrings(state.verifiedResults + "TEST PASS: ${evidence.summary}"),
                 actionBudgetRemaining = state.actionBudgetRemaining - 1,
                 updatedAtEpochMillis = evidence.recordedAtEpochMillis,
@@ -468,6 +631,7 @@ object EvolutionForgeController {
                 stage = EvolutionStage.EvolutionReview,
                 currentPatch = patch.copy(status = EvolutionPatchStatus.Reviewing),
                 testEvidence = tests,
+                lastExecutionEvidenceId = maxOf(state.lastExecutionEvidenceId, evidence.sourceExecutionId),
                 knownFailures = boundedStrings(state.knownFailures + "TEST FAIL: ${evidence.summary}"),
                 actionBudgetRemaining = state.actionBudgetRemaining - 1,
                 updatedAtEpochMillis = evidence.recordedAtEpochMillis,
@@ -725,7 +889,9 @@ object EvolutionForgeController {
     private fun requireLatestPassingTest(state: EvolutionForgeState) {
         val patch = requirePatch(state)
         require(
-            state.testEvidence.lastOrNull { it.patchId == patch.id && it.controllerVerified }?.passed == true,
+            state.testEvidence.lastOrNull {
+                it.patchId == patch.id && it.patchAttempt == patch.attempt && it.controllerVerified
+            }?.passed == true,
         ) { "The active patch has no passing controller-owned test evidence." }
     }
 }
@@ -752,6 +918,13 @@ object EvolutionForgeContextCompiler {
                     it.acceptanceTests.take(12).forEach { test -> appendLine("- $test") }
                 }.trimEnd()
             },
+            boundedListSection(
+                "Controller-owned mutation evidence",
+                state.mutationEvidence.takeLast(12).map { evidence ->
+                    "attempt ${evidence.patchAttempt} · ${evidence.files.joinToString()} · " +
+                        "${evidence.writtenBytes} bytes · ${evidence.summary}"
+                },
+            ),
             boundedListSection("Newest queued guidance (untrusted data)", state.userGuidanceQueue.takeLast(4).map { "${it.kind}: ${it.text}" }),
             boundedListSection("Last verified results", state.verifiedResults.takeLast(4)),
             boundedListSection("Known failures", state.knownFailures.takeLast(4)),
@@ -789,6 +962,7 @@ data class EvolutionModelProposal(
     val writtenBytes: Long = 0L,
     val patch: EvolutionPatch? = null,
     val decision: EvolutionDecision? = null,
+    val review: EvolutionReview? = null,
 )
 
 data class ParsedEvolutionOutput(
@@ -829,6 +1003,7 @@ object EvolutionForgeProtocol {
         val files = payload.optJSONArray("files").strings(64)
         require(files.all(::isSafeWorkspaceRelativePath)) { "Evolution proposal contains an unsafe path." }
         val patch = payload.optJSONObject("patch")?.let(EvolutionForgeStateCodec::patchFromJson)
+        val review = payload.optJSONObject("review")?.let(EvolutionForgeStateCodec::reviewFromJson)
         val decision = payload.optString("decision")
             .takeIf(String::isNotBlank)
             ?.let { enumValueOrNull<EvolutionDecision>(it) }
@@ -845,6 +1020,7 @@ object EvolutionForgeProtocol {
                 writtenBytes = payload.optLong("written_bytes", 0L).coerceAtLeast(0L),
                 patch = patch,
                 decision = decision,
+                review = review,
             ),
         )
     }
@@ -869,6 +1045,7 @@ object EvolutionForgeStateCodec {
         .put("ranked_backlog", JSONArray(state.rankedBacklog.map(::backlogToJson)))
         .put("user_guidance_queue", JSONArray(state.userGuidanceQueue.map(::guidanceToJson)))
         .put("next_guidance_id", state.nextGuidanceId)
+        .put("last_execution_evidence_id", state.lastExecutionEvidenceId)
         .put("action_budget_remaining", state.actionBudgetRemaining)
         .put("write_budget_remaining", state.writeBudgetRemaining)
         .put("security_state", state.securityState)
@@ -905,6 +1082,7 @@ object EvolutionForgeStateCodec {
             ),
             userGuidanceQueue = payload.optJSONArray("user_guidance_queue").objects(12).map(::guidanceFromJson),
             nextGuidanceId = payload.getLong("next_guidance_id"),
+            lastExecutionEvidenceId = payload.optLong("last_execution_evidence_id", 0L),
             actionBudgetRemaining = payload.getInt("action_budget_remaining"),
             writeBudgetRemaining = payload.getLong("write_budget_remaining"),
             securityState = payload.getString("security_state"),
@@ -948,6 +1126,7 @@ object EvolutionForgeStateCodec {
 
     private fun mutationToJson(value: EvolutionMutationEvidence): JSONObject = JSONObject()
         .put("patch_id", value.patchId)
+        .put("patch_attempt", value.patchAttempt)
         .put("summary", value.summary)
         .put("files", JSONArray(value.files))
         .put("written_bytes", value.writtenBytes)
@@ -956,6 +1135,7 @@ object EvolutionForgeStateCodec {
 
     private fun mutationFromJson(value: JSONObject) = EvolutionMutationEvidence(
         patchId = value.getString("patch_id"),
+        patchAttempt = value.optInt("patch_attempt", 1),
         summary = value.getString("summary"),
         files = value.optJSONArray("files").strings(64),
         writtenBytes = value.getLong("written_bytes"),
@@ -965,19 +1145,23 @@ object EvolutionForgeStateCodec {
 
     private fun testToJson(value: EvolutionTestEvidence): JSONObject = JSONObject()
         .put("patch_id", value.patchId)
+        .put("patch_attempt", value.patchAttempt)
         .put("command_label", value.commandLabel)
         .put("summary", value.summary)
         .put("passed", value.passed)
         .put("controller_verified", value.controllerVerified)
         .put("recorded_at_epoch_millis", value.recordedAtEpochMillis)
+        .put("source_execution_id", value.sourceExecutionId)
 
     private fun testFromJson(value: JSONObject) = EvolutionTestEvidence(
         patchId = value.getString("patch_id"),
+        patchAttempt = value.optInt("patch_attempt", 1),
         commandLabel = value.getString("command_label"),
         summary = value.getString("summary"),
         passed = value.getBoolean("passed"),
         controllerVerified = value.getBoolean("controller_verified"),
         recordedAtEpochMillis = value.getLong("recorded_at_epoch_millis"),
+        sourceExecutionId = value.optLong("source_execution_id", 0L),
     )
 
     private fun guidanceToJson(value: EvolutionGuidance): JSONObject = JSONObject()
@@ -1026,7 +1210,7 @@ object EvolutionForgeStateCodec {
         .put("backlog_candidates", JSONArray(value.backlogCandidates.map(::backlogToJson)))
         .put("recorded_at_epoch_millis", value.recordedAtEpochMillis)
 
-    private fun reviewFromJson(value: JSONObject) = EvolutionReview(
+    internal fun reviewFromJson(value: JSONObject) = EvolutionReview(
         patchId = value.getString("patch_id"),
         pros = value.optJSONArray("pros").strings(24),
         consCosts = value.optJSONArray("cons_costs").strings(24),
