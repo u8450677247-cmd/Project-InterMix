@@ -31,6 +31,9 @@ HEALTH_STATES = (
     "RECOVERY_REQUIRED",
 )
 
+BATTERY_THERMAL_LIMIT_C = 43.0
+DEVICE_THERMAL_LIMIT_C = 80.0
+
 
 class HealthReporter:
     def __init__(
@@ -58,12 +61,18 @@ class HealthReporter:
                 states.append("STORAGE_PRESSURE")
         if resource.free_ram_mib is not None and resource.free_ram_mib < 384:
             states.append("MEMORY_PRESSURE")
-        hottest = max(
-            value
-            for value in (resource.battery_temperature_c, resource.thermal_temperature_c, -273.0)
-            if value is not None
-        )
-        if hottest >= 43.0:
+        thermal_limit_sources: list[str] = []
+        if (
+            resource.battery_temperature_c is not None
+            and resource.battery_temperature_c >= BATTERY_THERMAL_LIMIT_C
+        ):
+            thermal_limit_sources.append("battery")
+        if (
+            resource.thermal_temperature_c is not None
+            and resource.thermal_temperature_c >= DEVICE_THERMAL_LIMIT_C
+        ):
+            thermal_limit_sources.append("device")
+        if thermal_limit_sources:
             states.append("THERMAL_LIMIT")
         if network.nas_reachable is False:
             states.append("NO_NAS")
@@ -149,5 +158,10 @@ class HealthReporter:
             "failed_job_count": failed_jobs,
             "effective_cortex_reachable": effective_cortex,
             "resources": resource.as_mapping(),
+            "thermal_policy": {
+                "battery_limit_c": BATTERY_THERMAL_LIMIT_C,
+                "device_limit_c": DEVICE_THERMAL_LIMIT_C,
+                "triggered_by": thermal_limit_sources,
+            },
             "network": network.as_mapping(),
         }

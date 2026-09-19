@@ -213,10 +213,18 @@ service does not invent reachability.
 
 Jobs can require minimum free RAM, a maximum observed temperature, and charging.
 A requirement with an unknown or unsafe sensor value remains pending. The
-current default pressure signals are below 384 MiB free RAM, at least 43 °C at
-the hottest available sensor, and below ten percent free storage. These are
-conservative controller thresholds, not a substitute for initial on-device
-thermal characterization with the battery installed.
+current default pressure signals are below 384 MiB free RAM, a battery at or
+above 43 °C, a filtered physical device sensor at or above 80 °C, and below ten
+percent free storage. Battery and silicon limits are deliberately separate:
+Android kernels may publish state-of-charge (`soc`/`socd`), battery-current
+(`ibat`), and battery-voltage (`vbat`/`vph`) control channels through the
+thermal-zone ABI even though their values are not temperatures. The sentinel
+rejects those channels before unit normalization. When the normal power-supply
+battery surface is unreadable, a named `battery`/`bms` temperature zone is used
+as a narrow fallback. Health reports the selected battery and device sensor
+provenance. These are conservative controller backpressure thresholds, not
+hardware maximums or a substitute for initial on-device thermal
+characterization with the battery installed.
 
 The portable sentinel uses read-only Linux/Android kernel surfaces. The native
 Android skeleton uses `ConnectivityManager` for transport, validated Internet,

@@ -121,6 +121,12 @@ may still change.
 
 ### Fixed
 
+- LIBRARIAN-01 no longer treats Android battery-state, current, or voltage
+  thermal-zone control values (`soc`/`socd`, `ibat`, `vbat`, or `vph`) as
+  degrees Celsius. Health now reports battery/device sensor provenance, can use
+  a named battery thermal zone when the power-supply surface is unreadable, and
+  applies separate 43 °C battery and 80 °C device backpressure limits while
+  preserving fail-closed per-job temperature gates.
 - Phone Chat now gives the transcript the available viewport, fits all three answer modes without
   horizontal scrolling, collapses diagnostics while the keyboard is open, keeps the input/send
   row visible through IME resize, and temporarily hides bottom navigation during text entry.

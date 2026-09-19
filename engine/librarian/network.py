@@ -55,6 +55,10 @@ class ResourceSnapshot:
     battery_temperature_c: float | None
     charging: bool | None
     thermal_temperature_c: float | None
+    battery_temperature_sensor_type: str | None = None
+    battery_temperature_sensor_zone: str | None = None
+    thermal_sensor_type: str | None = None
+    thermal_sensor_zone: str | None = None
 
     def as_mapping(self) -> dict[str, object]:
         return asdict(self)
@@ -62,6 +66,13 @@ class ResourceSnapshot:
 
 class ResourceProvider(Protocol):
     def snapshot(self) -> ResourceSnapshot: ...
+
+
+@dataclass(frozen=True)
+class ThermalReading:
+    temperature_c: float
+    sensor_type: str
+    zone: str
 
 
 class LocalResourceProvider:
@@ -113,13 +124,69 @@ class LocalResourceProvider:
         return percentage, temperature, charging
 
     @staticmethod
-    def _thermal() -> float | None:
-        values = [
-            value
-            for path in Path("/sys/class/thermal").glob("thermal_zone*/temp")
-            if (value := LocalResourceProvider._temperature(path)) is not None
+    def _is_temperature_zone(sensor_type: str) -> bool:
+        """Reject Android control channels that share the thermal-zone ABI.
+
+        Qualcomm kernels expose battery state-of-charge, current and voltage
+        control inputs beside real temperature sensors. Their raw values look
+        temperature-like after unit normalization (for example, ``vbat=3737``
+        became 37.37 C), so provenance must be checked before conversion.
+        """
+
+        normalized = sensor_type.strip().casefold().replace("_", "-")
+        tokens = {token for token in normalized.split("-") if token}
+        if normalized in {"soc", "socd"}:
+            return False
+        return tokens.isdisjoint({"ibat", "vbat", "vph", "bcl", "voltage", "current"})
+
+    @staticmethod
+    def _is_battery_temperature_zone(sensor_type: str) -> bool:
+        normalized = sensor_type.strip().casefold().replace("_", "-")
+        tokens = {token for token in normalized.split("-") if token}
+        return normalized in {"battery", "bms"} or bool(
+            tokens.intersection({"battery", "batt"})
+            and tokens.intersection({"temp", "therm", "thermal"})
+        )
+
+    @classmethod
+    def _thermal_readings(cls, root: Path | None = None) -> list[ThermalReading]:
+        root = root or Path("/sys/class/thermal")
+        readings: list[ThermalReading] = []
+        for path in root.glob("thermal_zone*/temp"):
+            try:
+                sensor_type = (path.parent / "type").read_text(encoding="utf-8").strip()
+            except OSError:
+                sensor_type = "unknown"
+            if not cls._is_temperature_zone(sensor_type):
+                continue
+            temperature = cls._temperature(path)
+            if temperature is not None:
+                readings.append(
+                    ThermalReading(
+                        temperature_c=temperature,
+                        sensor_type=sensor_type or "unknown",
+                        zone=path.parent.name,
+                    )
+                )
+        return readings
+
+    @classmethod
+    def _thermal(cls, root: Path | None = None) -> ThermalReading | None:
+        readings = [
+            reading
+            for reading in cls._thermal_readings(root)
+            if not cls._is_battery_temperature_zone(reading.sensor_type)
         ]
-        return max(values) if values else None
+        return max(readings, key=lambda reading: reading.temperature_c) if readings else None
+
+    @classmethod
+    def _battery_thermal(cls, root: Path | None = None) -> ThermalReading | None:
+        readings = [
+            reading
+            for reading in cls._thermal_readings(root)
+            if cls._is_battery_temperature_zone(reading.sensor_type)
+        ]
+        return max(readings, key=lambda reading: reading.temperature_c) if readings else None
 
     def snapshot(self) -> ResourceSnapshot:
         free_ram, total_ram = self._memory()
@@ -130,6 +197,31 @@ class LocalResourceProvider:
         except OSError:
             free_storage = total_storage = None
         battery, battery_temp, charging = self._battery()
+        thermal_readings = self._thermal_readings()
+        battery_thermal = max(
+            (
+                reading
+                for reading in thermal_readings
+                if self._is_battery_temperature_zone(reading.sensor_type)
+            ),
+            key=lambda reading: reading.temperature_c,
+            default=None,
+        )
+        thermal = max(
+            (
+                reading
+                for reading in thermal_readings
+                if not self._is_battery_temperature_zone(reading.sensor_type)
+            ),
+            key=lambda reading: reading.temperature_c,
+            default=None,
+        )
+        battery_sensor_type = "power_supply" if battery_temp is not None else None
+        battery_sensor_zone = "battery/temp" if battery_temp is not None else None
+        if battery_temp is None and battery_thermal is not None:
+            battery_temp = battery_thermal.temperature_c
+            battery_sensor_type = battery_thermal.sensor_type
+            battery_sensor_zone = battery_thermal.zone
         return ResourceSnapshot(
             free_ram_mib=free_ram,
             total_ram_mib=total_ram,
@@ -138,5 +230,9 @@ class LocalResourceProvider:
             battery_pct=battery,
             battery_temperature_c=battery_temp,
             charging=charging,
-            thermal_temperature_c=self._thermal(),
+            thermal_temperature_c=thermal.temperature_c if thermal else None,
+            battery_temperature_sensor_type=battery_sensor_type,
+            battery_temperature_sensor_zone=battery_sensor_zone,
+            thermal_sensor_type=thermal.sensor_type if thermal else None,
+            thermal_sensor_zone=thermal.zone if thermal else None,
         )
