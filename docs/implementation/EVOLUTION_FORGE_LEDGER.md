@@ -90,3 +90,78 @@ Decision:
 Next highest-value action:
 
 - Add bounded, additive Resonance persistence and canonical asset parity tests without touching Matrix truth or provider authority.
+
+## Patch E-CORE-01 — Evolution Forge deterministic controller
+
+Intent:
+
+- Restore a pure controller-owned patch state machine, typed patch/review/backlog/guidance state, bounded context reconstruction, private proposal parsing, and exact process-death serialization before Android integration.
+
+Acceptance evidence:
+
+- Kotlin 2.3.10 compilation with `-Werror`: PASS.
+- Focused JUnit suite: 12/12 PASS in 0.131 seconds.
+- First test run: 11/12; a saturated context could truncate the final authority reminder.
+- Lowest-risk correction: move the fixed controller-authority invariant ahead of variable evidence sections.
+- Second test run: 12/12 PASS; no second implementation failure occurred.
+- `git diff --check`: PASS.
+- Synthetic checkpoint: 24,780 UTF-8 bytes.
+- Saturated compiled mission context: 4,062 characters against a 6,000-character hard limit.
+- 10,000 synthetic checkpoint decodes: 11,522.055 ms; 1,152.205 microseconds average on this host.
+
+Pros:
+
+- Persisted stage, not narration, owns mission progress.
+- A controller-verified mutation is required before test evidence, and a controller-verified passing test is required before `KEEP`.
+- Successful tests advance only from the persisted `TEST` stage.
+- Ranked safety work overrides an arbitrary model suggestion at `SELECT_NEXT`.
+- New patch selection clears patch-local evidence while retaining mission reviews, findings, budgets, and completed patch history.
+- Guidance IDs stay monotonic after the bounded queue evicts old entries.
+- Failed patches support `REFINE`, `PARTIAL REVERT`, or `REPLACE` without losing review history.
+
+Cons / costs:
+
+- Android persistence and native Work UI are not wired in this slice.
+- JSON decode is comfortably bounded but slower than the earlier prototype measurement; optimization is deferred until integration profiling shows it matters.
+- Strict ASCII workspace-relative evidence paths intentionally reject unusual filenames at this controller boundary.
+
+Regression check:
+
+- Existing Android foundation source-contract suite remains 42/42 PASS.
+- No existing mission, workspace, Matrix, or UI implementation was changed.
+
+Security / recovery:
+
+- Traversal, absolute paths, drive-qualified paths, control characters, duplicate private proposals, unknown actions, and incomplete reviews are rejected.
+- Process-death JSON round-trip preserves the exact typed state, including a paused mission's resume stage.
+- Context reconstruction includes only bounded current state and newest guidance; it does not accumulate a transcript.
+
+RAM / thermal / storage / latency:
+
+- No worker, service, database, or model allocation is introduced.
+- Synthetic checkpoint size and decode latency are recorded above; no device thermal claim is made.
+
+UI / design-language:
+
+- NO VISIBLE UI CHANGE.
+
+Improvement opportunities:
+
+- Persist the typed state inside the existing mission checkpoint and expose its stage without weakening Long Forge controls.
+- Add canonical source-contract assertions before native UI wiring.
+
+Optimization path:
+
+- Profile JSON decode after real process-death integration; cache only if resume latency is user-visible.
+
+Innovation opportunity:
+
+- The same typed patch protocol can later drive GitHub/cloud Work while preserving the Android controller's evidence rules.
+
+Decision:
+
+**KEEP**
+
+Next highest-value action:
+
+- Add additive Resonance persistence and embed Evolution Forge state in the existing durable mission checkpoint.
