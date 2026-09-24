@@ -13,14 +13,13 @@ Usage: tools/install_librarian_service.sh [options]
   --token-file PATH      Mode-600 bearer-token file
   --snapshot-dir PATH    Local verified snapshot directory
   --archive-root PATH    Mounted DS215j archive root (optional)
-  --trusted-overlay      Permit a non-loopback bind on an encrypted overlay
   --enable               Start now and across supervisor restarts
   --dry-run              Print resolved paths and make no changes
   -h, --help             Show this help
 
-The service is installed disabled unless --enable is explicit. A non-loopback
-bind is rejected unless --trusted-overlay is also explicit. Plain LAN exposure
-is not a supported deployment.
+The service is installed disabled unless --enable is explicit. HTTP binds only
+to loopback. Use a separately configured authenticated TLS or encrypted-overlay
+proxy for remote clients; do not expose the bearer token over ordinary LAN.
 EOF
 }
 
@@ -36,7 +35,6 @@ token_file="${INTERMIX_LIBRARIAN_TOKEN_FILE:-$HOME/.config/intermix/librarian.to
 project_dir="${INTERMIX_PROJECT_DIR:-$HOME/project-intermix}"
 snapshot_dir="${INTERMIX_LIBRARIAN_SNAPSHOT_DIR:-$project_dir/archive/librarian-snapshots}"
 archive_root=""
-trusted_overlay="0"
 enable_service="0"
 dry_run="0"
 
@@ -48,7 +46,7 @@ while [ "$#" -gt 0 ]; do
         --token-file) [ "$#" -ge 2 ] || die "--token-file requires a value"; token_file="$2"; shift 2 ;;
         --snapshot-dir) [ "$#" -ge 2 ] || die "--snapshot-dir requires a value"; snapshot_dir="$2"; shift 2 ;;
         --archive-root) [ "$#" -ge 2 ] || die "--archive-root requires a value"; archive_root="$2"; shift 2 ;;
-        --trusted-overlay) trusted_overlay="1"; shift ;;
+        --trusted-overlay) die "--trusted-overlay was removed; bind to loopback behind an authenticated encrypted proxy" ;;
         --enable) enable_service="1"; shift ;;
         --dry-run) dry_run="1"; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -63,8 +61,8 @@ esac
 [ -n "$node_id" ] || die "--node-id cannot be empty"
 
 case "$host" in
-    127.0.0.1|localhost|::1|'[::1]') ;;
-    *) [ "$trusted_overlay" = "1" ] || die "non-loopback binds require --trusted-overlay" ;;
+    127.0.0.1) ;;
+    *) die "Librarian HTTP must bind to loopback" ;;
 esac
 
 prefix="${PREFIX:-}"
@@ -73,6 +71,16 @@ command -v python >/dev/null 2>&1 || die "python is required"
 command -v intermix-librarian >/dev/null 2>&1 || die "intermix-librarian is not installed"
 command -v sv >/dev/null 2>&1 || die "Termux services are required (install the termux-services package)"
 command -v svlogd >/dev/null 2>&1 || die "svlogd is required from the termux-services package"
+
+# The model-free pilot records its node ID at install time. Never silently
+# register the default Redmi identity against an XCover authority database.
+if [ -f "$project_dir/node-id" ]; then
+    installed_node_id="$(cat "$project_dir/node-id")"
+    if [ "$node_id" = "librarian-01" ]; then
+        node_id="$installed_node_id"
+    fi
+    [ "$node_id" = "$installed_node_id" ] || die "--node-id does not match the installed Librarian identity"
+fi
 
 service_dir="$prefix/var/service/intermix-librarian"
 config_file="${INTERMIX_CONFIG_FILE:-$HOME/.config/intermix/config.json}"
@@ -127,7 +135,6 @@ export INTERMIX_LIBRARIAN_NODE_ID="$node_id"
 export INTERMIX_LIBRARIAN_TOKEN_FILE="$token_file"
 export INTERMIX_LIBRARIAN_SNAPSHOT_DIR="$snapshot_dir"
 export INTERMIX_LIBRARIAN_ARCHIVE_ROOT="$archive_root"
-export INTERMIX_LIBRARIAN_TRUSTED_OVERLAY="$trusted_overlay"
 export INTERMIX_CONFIG_FILE="$config_file"
 
 python <<'PY'
@@ -150,8 +157,6 @@ command = [
 archive = os.environ.get("INTERMIX_LIBRARIAN_ARCHIVE_ROOT", "")
 if archive:
     command.extend(["--archive-root", archive])
-if os.environ.get("INTERMIX_LIBRARIAN_TRUSTED_OVERLAY") == "1":
-    command.append("--trusted-overlay")
 
 run = "\n".join(
     (

@@ -4,9 +4,10 @@ Compatibility is evidence-based and dated. Similar hardware, the same Android ve
 
 ## Current matrix
 
-| Device / platform | Intermix status | Evidence as of 2026-08-25 | Next required evidence |
+| Device / platform | Intermix status | Evidence (dated where available) | Next required evidence |
 |---|---|---|---|
 | Pixel 10 Pro, Tensor G5, Android 17 | **Reference verified for Termux; native NPU candidate** | Owner-tested 8K E4B GPU/OpenCL inference plus native memory/workspace/glass dogfood; exact G5 E2B and LiteRT 2.2.0 dispatcher are integrated behind a fail-closed check | Native NPU initialization, first-token, warm-turn, STOP, RAM, thermal, and restart report |
+| Two Galaxy XCover 5, Exynos 850, 4 GB RAM | **Librarian-only pilot, unverified** | Samsung hardware and firmware documentation; a [model-free service staging path](LIBRARIAN_XCOVER5_PILOT.md) exists but no XCover Intermix device flight | Record actual patch level on both phones; local SQLite health/snapshot/restore, battery/thermal, reboot and secured transport before service activation |
 | Galaxy S26 Ultra | **Runtime candidate** | Google's Gemma 4 guide publishes Android E2B/E4B CPU and GPU benchmarks on this device | Intermix clean install, DeX geometry, OpenCL/GPU behavior, memory pressure, restart recall |
 | Pixel 11 family | **Candidate, unverified** | No Project Intermix test report | Exact model/backend probe and complete test protocol; do not infer from Pixel 10 behavior |
 | Other Pixel desktop-mode devices | **Community experimental** | Shared OS concepts only | Device report, model smoke test, cold/warm latency, compact/desktop captures |
