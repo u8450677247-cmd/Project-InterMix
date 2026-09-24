@@ -815,16 +815,16 @@ class ClientServiceAndLegacyTests(LibrarianTestCase):
             server.server_close()
             thread.join(timeout=3)
 
-    def test_non_loopback_service_requires_authentication(self):
-        with self.assertRaises(ValidationError):
-            build_server(LibrarianApplication(self.store), host="0.0.0.0", port=0)
-        with self.assertRaises(ValidationError):
-            build_server(
-                LibrarianApplication(self.store),
-                host="0.0.0.0",
-                port=0,
-                bearer_token="t" * 48,
-            )
+    def test_non_loopback_service_is_always_rejected_even_with_token(self):
+        for host in ("0.0.0.0", "::", "localhost", "192.168.1.10", "100.64.0.10"):
+            with self.subTest(host=host):
+                with self.assertRaisesRegex(ValidationError, "must bind to loopback"):
+                    build_server(
+                        LibrarianApplication(self.store),
+                        host=host,
+                        port=0,
+                        bearer_token="t" * 48,
+                    )
 
     def test_termux_bridge_closes_the_event_memory_context_loop(self):
         token = "t" * 48

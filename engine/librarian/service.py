@@ -293,17 +293,13 @@ def build_server(
     host: str = "127.0.0.1",
     port: int = 8765,
     bearer_token: str = "",
-    trusted_overlay: bool = False,
     allowed_node_ids: Collection[str] | None = None,
 ) -> ThreadingHTTPServer:
-    if host not in {"127.0.0.1", "::1", "localhost"}:
-        if not bearer_token:
-            raise ValidationError("a bearer token is required for a non-loopback listener")
-        if not trusted_overlay:
-            raise ValidationError(
-                "non-loopback HTTP requires an explicitly trusted encrypted overlay; "
-                "otherwise keep Librarian on loopback behind a TLS proxy"
-            )
+    if host != "127.0.0.1":
+        raise ValidationError(
+            "Librarian HTTP must bind to loopback; terminate authenticated TLS "
+            "or an encrypted overlay proxy separately"
+        )
     if bearer_token and len(bearer_token.encode("utf-8")) < 32:
         raise ValidationError("bearer token must contain at least 32 UTF-8 bytes")
     if isinstance(allowed_node_ids, (str, bytes)):

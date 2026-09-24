@@ -169,11 +169,6 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         help="Registered remote node allowed to use this token (repeatable; default: cortex-primary)",
     )
-    serve.add_argument(
-        "--trusted-overlay",
-        action="store_true",
-        help="Allow non-loopback HTTP only when the bound interface is inside an encrypted overlay",
-    )
     serve.add_argument("--snapshot-dir", default=str(CONFIG.archive_dir / "librarian-snapshots"))
     serve.add_argument("--archive-root")
 
@@ -288,7 +283,6 @@ def main(argv: list[str] | None = None) -> int:
             host=args.host,
             port=args.port,
             bearer_token=_token(args.token_file),
-            trusted_overlay=args.trusted_overlay,
             allowed_node_ids=args.client_node_id or ["cortex-primary"],
         )
         stop_workers = threading.Event()

@@ -1,16 +1,18 @@
 # LIBRARIAN-01 distributed continuity
 
 LIBRARIAN-01 is the ordinary-service implementation of Project Intermix's
-distributed continuity design. It keeps the durable authority on a Redmi Note 9
-Pro (`miatoll`), lets a Pixel 10 Pro act as the replaceable reasoning cortex, and
-uses a Synology DS215j only for verified snapshots, event packs, and releases.
+distributed continuity design. The original hardware plan placed the durable
+authority on a Redmi Note 9 Pro (`miatoll`), the reasoning cortex on a Pixel 10
+Pro, and verified snapshots, event packs, and releases on a Synology DS215j.
+For the two-device Galaxy XCover 5 candidate, see
+[the model-free Librarian pilot](LIBRARIAN_XCOVER5_PILOT.md).
 
 The implementation is software-validated as of 2026-09-19. It is not yet an
 on-device compatibility claim. Flashing, bootloader changes, partition writes,
 release signing, key rotation, and physical deployment remain explicit human
 operations.
 
-## Frozen topology
+## Original Redmi topology
 
 ```mermaid
 flowchart LR
@@ -94,7 +96,7 @@ intermix-librarian init \
 Token creation is exclusive and mode 600. The command refuses to overwrite an
 existing token or read one with group/other permissions.
 
-## Install the supervised Redmi service
+## Install the supervised Librarian service
 
 The runit helper resolves the installed launcher, writes mode-700 run scripts,
 rotates bounded logs, and installs the service in the down state unless
@@ -107,31 +109,21 @@ tools/install_librarian_service.sh
 tools/install_librarian_service.sh --enable
 ```
 
-The safe default is `127.0.0.1:8765`. For a remote Pixel, choose one of these
-transport boundaries:
-
-- keep Librarian on loopback and terminate authenticated HTTPS in a reviewed
-  reverse proxy; or
-- bind only the Redmi's encrypted-overlay address and pass
-  `--trusted-overlay`. The Cortex client must separately opt into HTTP on that
-  overlay, preventing an accidental plain-LAN configuration.
+The only supported listener is loopback (`127.0.0.1:8765`). For a remote Pixel,
+keep Librarian on loopback and put a separately reviewed authenticated HTTPS or
+encrypted-overlay proxy in front of it. The old `--trusted-overlay` assertion
+did not verify interface encryption and has been removed. Reinstall existing
+runit scripts before enabling service again; old scripts using this flag fail
+closed.
 
 Bearer authentication is required for every request whenever a token is
 configured. The supervised service also binds that token to `cortex-primary` by
 default; repeat `--client-node-id` only when another registered client genuinely
 needs access. A token authenticates; it does not encrypt traffic.
 
-Example encrypted-overlay installation:
-
-```bash
-tools/install_librarian_service.sh \
-  --host 100.64.0.10 \
-  --trusted-overlay \
-  --enable
-```
-
-Do not use `0.0.0.0` on ordinary Wi-Fi, port-forward the service, or publish it
-through the DS215j.
+Do not bind on ordinary Wi-Fi, use a wildcard listener, port-forward the
+service, or publish it through the DS215j. The proxy is a separate deployment
+component and is not installed by this helper.
 
 ## Connect the Pixel cortex
 
@@ -150,16 +142,9 @@ export INTERMIX_LIBRARIAN_NODE_ID="cortex-primary"
 intermix
 ```
 
-For plain HTTP carried inside a separately verified encrypted overlay, add the
-explicit second interlock:
-
-```bash
-export INTERMIX_LIBRARIAN_URL="http://100.64.0.10:8765"
-export INTERMIX_LIBRARIAN_INSECURE_LAN=1
-```
-
-The variable name is intentionally cautionary: use it only when the enclosing
-transport already supplies encryption and peer authentication.
+The Cortex client retains an explicit insecure-LAN escape hatch for legacy
+local testing. Do not set it for the XCover 5 pilot: configure an HTTPS URL
+through the reviewed proxy before exchanging real continuity data.
 
 ## Snapshot and DS215j archive flow
 
