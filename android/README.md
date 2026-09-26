@@ -84,12 +84,14 @@ while preserving neutral long-form reading surfaces.
 - actual Android `MemAvailable` and categorical thermal-pressure signals; and
 - thermal-aware visual motion and model initialization.
 
-The app still has no online grounding, Android provider vault, Kokoro voice,
+The app still has no online grounding/provider client, Kokoro voice,
 in-process code sandbox, live terminal streaming, or fully headless model-inference service. Its
 execution lane is an explicit external Termux boundary, not unrestricted shell
 access. WorkManager can durably reconcile state and recover a stranded granted
 Termux dispatch after process loss; model inference resumes when the live native
-controller is available. E2B has a
+controller is available. The API-key window does persist write-only AES-GCM
+ciphertext behind a non-exportable Android Keystore key, but those credentials
+cannot drive requests until reviewed outbound adapters land. E2B has a
 fingerprint-locked Tensor G5 import and NPU route, but remains device-evidence
 gated rather than a general fallback. The dispatcher is extracted into Android's
 native-library directory, and E4B is released before the final NPU memory gate.
