@@ -99,7 +99,8 @@ object MissionManifestCompiler {
 
     private val markerPattern = Regex(
         "^\\s*(?:#{1,6}\\s*)?(?:[-*]\\s*)?(?:(\\d{1,3})[.)]|" +
-            "(?:TASK|JOB|ITEM|TARGET)\\s*[-#:]*\\s*(\\d{1,3}))\\s+(.+?)\\s*$",
+            "(?:TASK|JOB|ITEM|TARGET)\\s*[-#:]*\\s*(\\d{1,3})\\s*(?:[.)_:#-]\\s*)?)" +
+            "\\s+(.+?)\\s*$",
         RegexOption.IGNORE_CASE,
     )
 
@@ -114,6 +115,10 @@ object MissionManifestCompiler {
             Marker(lineIndex, ordinal, match.groupValues[3].trim())
         }
         val markers = longestContiguousManifest(candidates)
+        require(markers.size <= MaximumMissionTasks) {
+            "The objective declares ${markers.size} tasks; the bounded manifest supports at most " +
+                "$MaximumMissionTasks and will not silently discard later work."
+        }
         val tasks = if (markers.size >= 2) {
             markers.mapIndexed { index, marker ->
                 val end = markers.getOrNull(index + 1)?.lineIndex ?: lines.size
@@ -158,7 +163,7 @@ object MissionManifestCompiler {
             }
             if (run.size > best.size) best = run
         }
-        return best.take(MaximumMissionTasks)
+        return best
     }
 
     private fun firstUsefulLabel(lines: List<String>): String = lines
@@ -273,7 +278,9 @@ fun resolveManifestArtifactPath(
     require(Regex("^[a-z][a-z0-9_-]{0,63}$").matches(type)) {
         "Artifact type must be a stable lowercase semantic token."
     }
-    val fileName = type.replace('-', '_') + ".md"
+    // Keep every accepted semantic token one-to-one on disk: replacing '-' with '_' would make
+    // distinct types such as `cover-letter` and `cover_letter` collide at the same path.
+    val fileName = "$type.md"
     return normalizeWorkspacePath("${normalizeWorkspacePath(rootPath)}/${task.workspaceDirectory}/$fileName")
 }
 
@@ -444,6 +451,11 @@ object AgentMissionCheckpointCodec {
         }
         val maxActions = payload.optInt("max_actions", DefaultMissionLogicalStepBudget)
             .coerceIn(1, DefaultMissionLogicalStepBudget)
+        if (planKind == WorkspaceMissionKind) {
+            require((manifest?.expectedTaskCount ?: 0) <= maxActions) {
+                "Recovered manifest task count exceeds its logical-step grant."
+            }
+        }
         val legacyCompletedActions = payload.optInt("completed_actions", 0).coerceAtLeast(0)
         val completedActions = if (payload.has("logical_agent_steps")) {
             payload.optInt("logical_agent_steps", 0).coerceAtLeast(0)
@@ -564,7 +576,12 @@ object MissionProgressReducer {
         val updatedManifest = current.missionManifest?.let { manifest ->
             val artifactId = result.artifactId
                 ?.takeIf { succeeded }
-                ?.takeIf { proposal.kind != WorkspaceActionKind.ListFiles }
+                ?.takeIf {
+                    proposal.kind !in setOf(
+                        WorkspaceActionKind.ListFiles,
+                        WorkspaceActionKind.CreateDirectory,
+                    )
+                }
                 ?.takeIf(::isValidWorkspaceArtifactId)
             if (artifactId == null || manifest.currentTaskId.isBlank()) {
                 manifest

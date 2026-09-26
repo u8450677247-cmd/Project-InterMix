@@ -549,6 +549,24 @@ class MemoryMatrixRepository(private val context: Context) :
         } else {
             ""
         }
+        val missionManifest = if (planKind == WorkspaceMissionKind) {
+            MissionManifestCompiler.compile(checkpointId, boundedObjective).let { compiled ->
+                compiled.copy(
+                    tasks = compiled.tasks.mapIndexed { index, task ->
+                        task.copy(
+                            status = if (index == 0) MissionTaskStatus.InProgress else MissionTaskStatus.Pending,
+                        )
+                    },
+                )
+            }.also { manifest ->
+                require(manifest.expectedTaskCount <= boundedActions) {
+                    "The ${manifest.expectedTaskCount}-task manifest cannot fit inside the " +
+                        "$boundedActions logical-step grant."
+                }
+            }
+        } else {
+            null
+        }
         val checkpoint = AgentMissionCheckpoint(
             id = checkpointId,
             rootPath = normalizedRoot,
@@ -560,19 +578,7 @@ class MemoryMatrixRepository(private val context: Context) :
             planKind = planKind,
             planState = if (planKind == EvolutionForgeMissionKind) EvolutionStage.Inspect.name else "",
             evolutionState = evolutionState,
-            missionManifest = if (planKind == WorkspaceMissionKind) {
-                MissionManifestCompiler.compile(checkpointId, boundedObjective).let { compiled ->
-                    compiled.copy(
-                        tasks = compiled.tasks.mapIndexed { index, task ->
-                            task.copy(
-                                status = if (index == 0) MissionTaskStatus.InProgress else MissionTaskStatus.Pending,
-                            )
-                        },
-                    )
-                }
-            } else {
-                null
-            },
+            missionManifest = missionManifest,
             updatedAt = now(),
         )
         persistAgentMission(checkpoint)

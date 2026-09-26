@@ -184,6 +184,10 @@ class MissionReliabilityTest {
         )
         assertTrue(generated.startsWith("Bewerbungen/001_mcdonald-s-kuchenhilfe-bei-grundinger/"))
         assertTrue(generated.endsWith("cover_letter.md"))
+        assertFalse(
+            resolveManifestArtifactPath(manifest, "Bewerbungen", "TASK-001", "cover-letter") ==
+                resolveManifestArtifactPath(manifest, "Bewerbungen", "TASK-001", "cover_letter"),
+        )
     }
 
     @Test
@@ -350,6 +354,63 @@ class MissionReliabilityTest {
         assertEquals(7, migrated.toolOperations)
         assertEquals(2, migrated.missionManifest?.expectedTaskCount)
         assertEquals("TASK-001", migrated.missionManifest?.currentTaskId)
+    }
+
+    @Test
+    fun directoryAndListingEvidenceCannotMasqueradeAsACompletedDeliverable() {
+        var current = mission(twoTaskObjective())
+        current = MissionProgressReducer.recordToolOperation(
+            current,
+            WorkspaceActionProposal(WorkspaceActionKind.CreateDirectory, "mission/001_alpha"),
+            WorkspaceActionResult("directory verified", artifactId = artifact(1)),
+            succeeded = true,
+            updatedAt = "directory",
+        )
+        current = MissionProgressReducer.recordToolOperation(
+            current,
+            WorkspaceActionProposal(WorkspaceActionKind.ListFiles, "mission/001_alpha"),
+            WorkspaceActionResult("listing verified", artifactId = artifact(1)),
+            succeeded = true,
+            updatedAt = "listing",
+        )
+
+        assertTrue(current.missionManifest?.currentTask?.artifactIds.orEmpty().isEmpty())
+        assertThrows(IllegalArgumentException::class.java) {
+            MissionProgressReducer.recordCheckpoint(
+                current,
+                MissionCheckpointProposal(
+                    MissionCheckpointKind.TaskComplete,
+                    "TASK-001",
+                    "An empty folder is not a reviewable deliverable",
+                ),
+                "invalid-directory-checkpoint",
+            )
+        }
+    }
+
+    @Test
+    fun manifestLimitRejectsRatherThanSilentlyDroppingTaskOneHundredTwentyOne() {
+        val oversized = (1..MaximumMissionTasks + 1).joinToString("\n") { ordinal ->
+            "$ordinal. Required task $ordinal"
+        }
+
+        val failure = assertThrows(IllegalArgumentException::class.java) {
+            MissionManifestCompiler.compile("LF-OVERSIZED", oversized)
+        }
+
+        assertTrue(failure.message.orEmpty().contains("will not silently discard"))
+    }
+
+    @Test
+    fun commonJobMarkerPunctuationCompilesIntoExactTasks() {
+        val manifest = MissionManifestCompiler.compile(
+            "LF-JOBS",
+            "JOB-01: Küchenhilfe\nPreserve German.\nJOB-02: Gründinger\nPreserve the source.",
+        )
+
+        assertEquals(2, manifest.expectedTaskCount)
+        assertEquals("Küchenhilfe", manifest.tasks.first().displayLabel)
+        assertEquals("Gründinger", manifest.tasks.last().displayLabel)
     }
 
     private fun mission(objective: String): AgentMissionCheckpoint {
