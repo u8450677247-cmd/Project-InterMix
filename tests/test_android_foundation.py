@@ -172,7 +172,7 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("maxNumTokens = ContextPhysicalTokens", runtime)
         self.assertIn("ContextOrchestrator.outputLimit(prompt, mode)", runtime)
         self.assertIn("sendMessageAsync", runtime)
-        self.assertIn("callback = object : MessageCallback", runtime)
+        self.assertIn("val callback = object : MessageCallback", runtime)
         self.assertIn("override fun onDone()", runtime)
         self.assertIn("close(null)", runtime)
         self.assertIn("awaitClose {}", runtime)
@@ -569,6 +569,7 @@ class AndroidFoundationTests(unittest.TestCase):
     def test_model_tools_are_controller_owned_and_writes_wait_for_approval(self):
         protocol = (SOURCE / "ControllerProtocol.kt").read_text(encoding="utf-8")
         runtime = (SOURCE / "LiteRtModelRuntime.kt").read_text(encoding="utf-8")
+        transport = (SOURCE / "ToolTransport.kt").read_text(encoding="utf-8")
         view_model = (SOURCE / "SovereignViewModel.kt").read_text(encoding="utf-8")
         workspace = (SOURCE / "WorkspaceRepository.kt").read_text(encoding="utf-8")
         ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
@@ -588,6 +589,13 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn('ListFiles("list_files", false)', protocol)
         self.assertIn('WriteFile("write_file", true)', protocol)
         self.assertIn("automaticToolCalling = false", runtime)
+        self.assertIn("tools = if (enableNativeTools)", runtime)
+        self.assertIn("Content.ToolResponse", runtime)
+        self.assertIn("class AniCloudToolSet : ToolSet", transport)
+        self.assertIn("object NativeLiteRtToolTransport", transport)
+        self.assertIn("object TaggedTextToolTransport", transport)
+        self.assertIn("ToolTransportRouter.decode", view_model)
+        self.assertIn("nativeWorkspaceMissionPromptContract", protocol)
         self.assertIn("queueWorkspaceAction", view_model)
         self.assertIn("executeReadOnly", view_model)
         self.assertIn("executeApproved", view_model)
@@ -615,7 +623,10 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn('put("action_trail"', manifest)
         self.assertIn("AgentMissionCheckpointCodec.encode", repository)
         self.assertIn("MaxMissionControllerCycles = 1_920", view_model)
-        self.assertIn("if (inferenceCycle > 0) runtime.resetConversation()", view_model)
+        self.assertIn(
+            "if (inferenceCycle > 0 && nativeToolResponseName == null) runtime.resetConversation()",
+            view_model,
+        )
         self.assertIn("collectContextBoundResponse", view_model)
         self.assertIn("MaxMissionNoActionRetries = 4", view_model)
         self.assertIn("scopeWorkspaceMissionPath", view_model)

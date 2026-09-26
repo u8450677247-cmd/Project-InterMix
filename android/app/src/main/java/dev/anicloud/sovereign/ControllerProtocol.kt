@@ -81,6 +81,8 @@ data class ControllerProtocolResult(
     val evolutionProposal: EvolutionModelProposal? = null,
     val memoryPayload: JSONObject? = null,
     val profilePayload: JSONObject? = null,
+    val controllerFailure: ControllerFailure? = null,
+    val transport: ToolTransportKind = ToolTransportKind.TaggedText,
     /** True when protocol-looking output was withheld but did not parse as an executable payload. */
     val malformedProtocolSuffix: Boolean = false,
 )
@@ -273,6 +275,21 @@ object ControllerProtocol {
         consequential ambiguity, security/integrity boundaries, or bounded recovery exhaustion.
     """.trimIndent()
 
+    fun nativeWorkspaceMissionPromptContract(): String = """
+        [SCOPED NATIVE WORKSPACE TOOLS]
+        Use exactly one registered semantic tool per response and wait for Android's tool response.
+        Prefer artifact_create(task_id, artifact_type, display_name, complete content) for a new
+        manifest deliverable; Android owns its storage name. Reuse exact controller artifact IDs for
+        existing resources. Use create semantics only for missing targets and artifact_update only for
+        a verified existing artifact. A workspace_transaction contains 2..8 operation JSON strings
+        serving one coherent step; it is never an unrestricted script. Reads and writes are tool
+        operations, not logical progress. After controller-verified evidence reaches a meaningful
+        boundary, call mission_checkpoint exactly once. Use task_complete only when the current task
+        has reviewable verified output; Android alone advances task counts and final completion.
+        Never delete, traverse upward, widen authority, forge a result, or mix INTERMIX text envelopes
+        with native calls. Request execution only for separately authorized bounded developer work.
+    """.trimIndent()
+
     /** Private prose-only contract for one checkpointed Story Forge segment. */
     fun storyPromptContract(): String = """
         [PRIVATE STORY FORGE PROTOCOL]
@@ -358,6 +375,168 @@ object ControllerProtocol {
             profilePayload = profilePayload,
             malformedProtocolSuffix = firstMarker != null && !parsedPayload,
         )
+    }
+
+    /** Maps a native provider tool call into the same semantic proposals used by tagged fallback. */
+    fun parseSemanticToolCall(
+        call: RuntimeToolCall,
+        visibleText: String = "",
+    ): ControllerProtocolResult {
+        val name = call.name.trim().lowercase(Locale.ROOT)
+        val parsed = runCatching {
+            require(validNativeToolArguments(name, call.arguments))
+            val payload = JSONObject(call.arguments)
+            when (name) {
+                "workspace_list" -> ControllerProtocolResult(
+                    visibleText = visibleText,
+                    workspaceAction = parseWorkspaceAction(payload.put("kind", "list_files")),
+                    transport = ToolTransportKind.NativeLiteRt,
+                )
+                "workspace_read" -> ControllerProtocolResult(
+                    visibleText = visibleText,
+                    workspaceAction = parseWorkspaceAction(payload.put("kind", "read_file")),
+                    transport = ToolTransportKind.NativeLiteRt,
+                )
+                "artifact_read" -> ControllerProtocolResult(
+                    visibleText = visibleText,
+                    workspaceAction = parseWorkspaceAction(
+                        payload.put("kind", "read_file").put("path", ""),
+                    ),
+                    transport = ToolTransportKind.NativeLiteRt,
+                )
+                "artifact_create" -> ControllerProtocolResult(
+                    visibleText = visibleText,
+                    workspaceAction = parseWorkspaceAction(
+                        payload.put("kind", "create_file").put("path", ""),
+                    ),
+                    transport = ToolTransportKind.NativeLiteRt,
+                )
+                "artifact_update" -> ControllerProtocolResult(
+                    visibleText = visibleText,
+                    workspaceAction = parseWorkspaceAction(
+                        payload.put("kind", "write_file").put("path", ""),
+                    ),
+                    transport = ToolTransportKind.NativeLiteRt,
+                )
+                "workspace_transaction" -> ControllerProtocolResult(
+                    visibleText = visibleText,
+                    workspaceTransaction = parseWorkspaceTransaction(normalizeNativeTransaction(payload)),
+                    transport = ToolTransportKind.NativeLiteRt,
+                )
+                "mission_checkpoint" -> ControllerProtocolResult(
+                    visibleText = visibleText,
+                    missionCheckpoint = parseMissionCheckpoint(payload),
+                    transport = ToolTransportKind.NativeLiteRt,
+                )
+                "request_execution" -> ControllerProtocolResult(
+                    visibleText = visibleText,
+                    executionAction = parseExecutionAction(payload),
+                    transport = ToolTransportKind.NativeLiteRt,
+                )
+                "numeric_calculate" -> ControllerProtocolResult(
+                    visibleText = visibleText,
+                    calculationAction = parseCalculationAction(payload),
+                    transport = ToolTransportKind.NativeLiteRt,
+                )
+                else -> null
+            }
+        }.getOrNull()
+        val hasProposal = parsed?.let {
+            it.workspaceAction != null || it.workspaceTransaction != null ||
+                it.missionCheckpoint != null || it.executionAction != null ||
+                it.calculationAction != null
+        } == true
+        if (hasProposal) return requireNotNull(parsed)
+        return ControllerProtocolResult(
+            visibleText = visibleText,
+            controllerFailure = ControllerFailure(
+                code = ControllerErrorCode.TOOL_SCHEMA_INVALID,
+                detail = "Native tool call $name failed schema validation.",
+                evidence = "argument keys=${call.arguments.keys.sorted().joinToString()}",
+                rejectedProposal = name,
+            ),
+            transport = ToolTransportKind.NativeLiteRt,
+        )
+    }
+
+    private fun validNativeToolArguments(name: String, arguments: Map<String, Any?>): Boolean {
+        val required: Set<String>
+        val optional: Set<String>
+        when (name) {
+            "workspace_list", "workspace_read" -> {
+                required = emptySet()
+                optional = setOf("path", "artifact_id")
+            }
+            "artifact_read" -> {
+                required = setOf("artifact_id")
+                optional = emptySet()
+            }
+            "artifact_create" -> {
+                required = setOf("task_id", "artifact_type", "content")
+                optional = setOf("display_name")
+            }
+            "artifact_update" -> {
+                required = setOf("artifact_id", "content")
+                optional = setOf("reason")
+            }
+            "workspace_transaction" -> {
+                required = setOf("operations")
+                optional = setOf("reason", "checkpoint_json")
+            }
+            "mission_checkpoint" -> {
+                required = setOf("kind", "task_id", "summary")
+                optional = setOf("artifact_ids")
+            }
+            "request_execution" -> {
+                required = setOf("kind", "command")
+                optional = setOf(
+                    "workdir",
+                    "network_required",
+                    "dependencies",
+                    "reason",
+                    "timeout_seconds",
+                )
+            }
+            "numeric_calculate" -> {
+                required = setOf("expression")
+                optional = setOf("reason")
+            }
+            else -> return false
+        }
+        if (!arguments.keys.containsAll(required) || !((required + optional).containsAll(arguments.keys))) {
+            return false
+        }
+        return arguments.all { (key, value) ->
+            when (key) {
+                "network_required" -> value is Boolean
+                "timeout_seconds" -> value is Number
+                "operations", "artifact_ids", "dependencies" -> value is Collection<*> &&
+                    value.all { it is String }
+                "checkpoint_json" -> value == null || value is String
+                else -> value is String
+            }
+        }
+    }
+
+    private fun normalizeNativeTransaction(payload: JSONObject): JSONObject {
+        val operations = payload.opt("operations")
+        if (operations is String) {
+            payload.put("operations", JSONArray(operations))
+        } else if (operations is JSONArray) {
+            val normalized = JSONArray()
+            for (index in 0 until operations.length()) {
+                val operation = operations.opt(index)
+                normalized.put(
+                    if (operation is String) JSONObject(operation) else operation,
+                )
+            }
+            payload.put("operations", normalized)
+        }
+        val checkpoint = payload.optString("checkpoint_json").trim()
+        if (checkpoint.isNotBlank() && !payload.has("checkpoint")) {
+            payload.put("checkpoint", JSONObject(checkpoint))
+        }
+        return payload
     }
 
     private fun firstProtocolMarkerIndex(raw: String): Int? = buildList {
