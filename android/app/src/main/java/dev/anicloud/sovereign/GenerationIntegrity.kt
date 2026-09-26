@@ -155,6 +155,8 @@ data class AgentMissionCheckpoint(
     val guidance: List<String> = emptyList(),
     val actionTrail: List<String> = emptyList(),
     val recoveryTrail: List<String> = emptyList(),
+    val lastControllerErrorCode: ControllerErrorCode? = null,
+    val lastRecoveryDisposition: MissionRecoveryDisposition? = null,
     val lastVerifiedCheckpoint: String = "",
     val lastAction: String = "",
     val lastResult: String = "",

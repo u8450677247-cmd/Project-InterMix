@@ -56,10 +56,41 @@ data class WorkspaceTrashReceipt(
 data class WorkspaceActionResult(
     val detail: String,
     val toolContent: String = "",
+    val snapshotName: String? = null,
     val beforeSha256: String? = null,
     val afterSha256: String? = null,
     val artifactId: String? = null,
 )
+
+data class WorkspaceCompensationResult(
+    val compensated: Boolean,
+    val detail: String,
+)
+
+enum class WorkspaceCompensationPolicy {
+    NoSideEffect,
+    RestoreSnapshot,
+    RecordUncompensated,
+}
+
+fun workspaceCompensationPolicy(
+    proposal: WorkspaceActionProposal,
+    result: WorkspaceActionResult,
+): WorkspaceCompensationPolicy = when (proposal.kind) {
+    WorkspaceActionKind.ListFiles,
+    WorkspaceActionKind.ReadFile,
+    -> WorkspaceCompensationPolicy.NoSideEffect
+    WorkspaceActionKind.WriteFile -> if (
+        result.snapshotName != null && result.beforeSha256 != null && result.afterSha256 != null
+    ) {
+        WorkspaceCompensationPolicy.RestoreSnapshot
+    } else {
+        WorkspaceCompensationPolicy.RecordUncompensated
+    }
+    WorkspaceActionKind.CreateFile,
+    WorkspaceActionKind.CreateDirectory,
+    -> WorkspaceCompensationPolicy.RecordUncompensated
+}
 
 data class WorkspaceActionReconciliation(
     val proposal: WorkspaceActionProposal,
@@ -744,6 +775,36 @@ class WorkspaceRepository(
         }
     }
 
+    /**
+     * Best-effort semantic rollback for a previously verified transaction operation. Reads have no
+     * side effect. A replacement can be restored only while the exact post-write hash is still
+     * present. Creations are deliberately retained and reported unresolved because silently deleting
+     * user-visible provider entries would widen controller authority.
+     */
+    suspend fun compensateMissionAction(
+        proposal: WorkspaceActionProposal,
+        result: WorkspaceActionResult,
+        rawMissionRootPath: String,
+    ): WorkspaceCompensationResult = withContext(Dispatchers.IO) {
+        val missionRootPath = normalizeWorkspacePath(rawMissionRootPath)
+        val path = normalizeWorkspacePath(proposal.path, allowRoot = proposal.kind == WorkspaceActionKind.ListFiles)
+        require(path == missionRootPath || path.startsWith("$missionRootPath/")) {
+            "Transaction compensation cannot leave its authorized mission root."
+        }
+        when (workspaceCompensationPolicy(proposal, result)) {
+            WorkspaceCompensationPolicy.NoSideEffect -> WorkspaceCompensationResult(
+                compensated = true,
+                detail = "No compensation was needed for read-only operation ${proposal.kind.wireName} $path.",
+            )
+            WorkspaceCompensationPolicy.RestoreSnapshot -> restoreMissionSnapshot(path, result)
+            WorkspaceCompensationPolicy.RecordUncompensated -> WorkspaceCompensationResult(
+                compensated = false,
+                detail = "The verified ${proposal.kind.wireName} side effect at $path remains for review; " +
+                    "automatic deletion is outside controller authority.",
+            )
+        }
+    }
+
     private fun executeApprovedNow(
         root: Uri,
         proposal: WorkspaceActionProposal,
@@ -826,6 +887,7 @@ class WorkspaceRepository(
             detail = "Wrote and verified $path (${bytes.size} bytes); " +
                 "pre-write snapshot ${snapshot.snapshotName} retained.",
             toolContent = identity?.let { "Artifact ID: ${it.artifactId}" }.orEmpty(),
+            snapshotName = snapshot.snapshotName,
             beforeSha256 = snapshot.beforeSha256,
             afterSha256 = snapshot.afterSha256,
             artifactId = identity?.artifactId,
@@ -1200,6 +1262,59 @@ class WorkspaceRepository(
             snapshotName = snapshot.name,
             beforeSha256 = sha256(previous),
             afterSha256 = sha256(next),
+        )
+    }
+
+    private fun restoreMissionSnapshot(
+        path: String,
+        result: WorkspaceActionResult,
+    ): WorkspaceCompensationResult {
+        val snapshotName = result.snapshotName
+            ?: return WorkspaceCompensationResult(false, "No pre-write snapshot was recorded for $path.")
+        val beforeSha256 = result.beforeSha256
+            ?: return WorkspaceCompensationResult(false, "No pre-write hash was recorded for $path.")
+        val afterSha256 = result.afterSha256
+            ?: return WorkspaceCompensationResult(false, "No post-write hash was recorded for $path.")
+        require(Regex("^[a-f0-9]{16}-[0-9]+\\.snapshot$").matches(snapshotName)) {
+            "Snapshot identity is not controller-generated."
+        }
+        val root = storedRoot()
+            ?: return WorkspaceCompensationResult(false, "Workspace authority is unavailable for rollback.")
+        val entry = resolveEntry(root, path)
+            ?: return WorkspaceCompensationResult(false, "The written target moved before rollback: $path.")
+        if (entry.isDirectory) {
+            return WorkspaceCompensationResult(false, "The written target changed type before rollback: $path.")
+        }
+        val current = readBytes(Uri.parse(entry.uri))
+        if (sha256(current) != afterSha256) {
+            return WorkspaceCompensationResult(
+                false,
+                "Rollback stopped because $path changed after the transaction write.",
+            )
+        }
+        val snapshotDirectory = File(context.filesDir, "workspace_snapshots")
+        val snapshot = File(snapshotDirectory, snapshotName)
+        val canonicalDirectory = snapshotDirectory.canonicalFile
+        val canonicalSnapshot = snapshot.canonicalFile
+        require(canonicalSnapshot.parentFile == canonicalDirectory) {
+            "Snapshot identity escaped controller storage."
+        }
+        if (!canonicalSnapshot.isFile || canonicalSnapshot.length() > MaxEditableBytes) {
+            return WorkspaceCompensationResult(false, "The bounded pre-write snapshot is unavailable.")
+        }
+        val previous = canonicalSnapshot.readBytes()
+        if (sha256(previous) != beforeSha256) {
+            return WorkspaceCompensationResult(false, "The pre-write snapshot failed integrity verification.")
+        }
+        writeBytes(Uri.parse(entry.uri), previous)
+        val restored = readBytes(Uri.parse(entry.uri))
+        if (!restored.contentEquals(previous)) {
+            return WorkspaceCompensationResult(false, "The document provider did not verify rollback for $path.")
+        }
+        registerArtifact(root, path, entry, beforeSha256)
+        return WorkspaceCompensationResult(
+            true,
+            "Restored $path to verified pre-write SHA-256 $beforeSha256.",
         )
     }
 

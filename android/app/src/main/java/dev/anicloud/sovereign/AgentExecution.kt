@@ -333,6 +333,30 @@ object AgentExecutionController {
         )
     }
 
+    fun recordCompensation(
+        ledger: AgentExecutionLedger,
+        identity: AgentOperationIdentity,
+        compensated: Boolean,
+        detail: String,
+        updatedAt: String,
+    ): AgentExecutionLedger {
+        require(ledger.receipts.any {
+            it.identity == identity && it.state == AgentOperationState.Succeeded
+        }) { "Only a verified successful operation can receive compensation evidence." }
+        val receipt = AgentOperationReceipt(
+            identity = identity,
+            state = if (compensated) {
+                AgentOperationState.Compensated
+            } else {
+                AgentOperationState.Uncompensated
+            },
+            evidenceSha256 = evidenceSha256(detail),
+            detail = detail.take(2_000),
+            updatedAt = updatedAt,
+        )
+        return ledger.copy(receipts = boundedReceipts(ledger.receipts + receipt))
+    }
+
     fun afterCheckpoint(
         ledger: AgentExecutionLedger,
         nextTaskId: String,

@@ -52,7 +52,17 @@ private class MissionTransactionFailure(
     val failedProposal: WorkspaceActionProposal,
     val completedResults: List<Pair<WorkspaceActionProposal, WorkspaceActionResult>>,
     cause: Throwable,
-) : RuntimeException(cause.message, cause)
+    val compensationResults: List<WorkspaceCompensationResult> = emptyList(),
+) : RuntimeException(cause.message, cause), ControllerFailureCarrier {
+    override val controllerFailure: ControllerFailure = ControllerFailure.fromThrowable(
+        cause,
+        rejectedProposal = "${failedProposal.kind.wireName} ${failedProposal.path}",
+    ).let { failure ->
+        if (compensationResults.isEmpty()) failure else failure.copy(
+            evidence = compensationResults.joinToString(" ") { it.detail }.take(4_000),
+        )
+    }
+}
 
 private const val FirstTokenTimeoutMillis = 180_000L
 private const val InterChunkTimeoutMillis = 60_000L
@@ -425,10 +435,17 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                             parsed.profilePayload,
                         ).count { it != null }
                         if (privatePayloadCount > 1) {
-                            val failure = IllegalArgumentException(
-                                "Malformed private action envelope contained $privatePayloadCount controller payloads.",
+                            val failure = controllerFailure(
+                                code = ControllerErrorCode.TOOL_SCHEMA_INVALID,
+                                detail = "Malformed private action envelope contained " +
+                                    "$privatePayloadCount controller payloads.",
+                                rejectedProposal = "multiple private controller payloads",
                             )
-                            val (recovered, decision) = recordMissionRecovery(activeManifestMission, failure)
+                            val (recovered, decision) = recordMissionRecovery(
+                                activeManifestMission,
+                                failure,
+                                "multiple private controller payloads",
+                            )
                             mission = recovered
                             controllerCycle++
                             commitMessage(
@@ -805,7 +822,11 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                         if (checkpointResult.isFailure) {
                             val failure = checkpointResult.exceptionOrNull()
                                 ?: error("Unknown logical-checkpoint failure")
-                            val (recovered, decision) = recordMissionRecovery(activeMission, failure)
+                            val (recovered, decision) = recordMissionRecovery(
+                                activeMission,
+                                failure,
+                                "${checkpointProposal.kind.wireName} ${checkpointProposal.taskId}",
+                            )
                             mission = recovered
                             commitMessage(
                                 ChatSpeaker.System,
@@ -881,7 +902,13 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                             val latest = withContext(Dispatchers.IO) {
                                 memoryMatrix.activeAgentMission()
                             } ?: activeMission
-                            val (recovered, decision) = recordMissionRecovery(latest, failure)
+                            val transactionLabel = "transaction: " +
+                                transaction.reason.ifBlank { "bounded workspace bundle" }
+                            val (recovered, decision) = recordMissionRecovery(
+                                latest,
+                                failure,
+                                transactionLabel,
+                            )
                             mission = recovered
                             val completedCount = (failure as? MissionTransactionFailure)
                                 ?.completedResults
@@ -1021,10 +1048,16 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                                 parsed.malformedProtocolSuffix
                         }
                         if (malformedMission != null) {
-                            val failure = IllegalArgumentException(
-                                "Malformed private action envelope; regenerate one valid typed payload.",
+                            val failure = controllerFailure(
+                                code = ControllerErrorCode.TOOL_SCHEMA_INVALID,
+                                detail = "Malformed private action envelope; regenerate one valid typed payload.",
+                                rejectedProposal = "malformed private action envelope",
                             )
-                            val (recovered, decision) = recordMissionRecovery(malformedMission, failure)
+                            val (recovered, decision) = recordMissionRecovery(
+                                malformedMission,
+                                failure,
+                                "malformed private action envelope",
+                            )
                             mission = recovered
                             controllerCycle++
                             commitMessage(
@@ -1151,7 +1184,13 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                                 )
                             }
                         }
-                        val (recovered, decision) = recordMissionRecovery(failedCheckpoint, failure)
+                        val rejectedOperation = "${proposed.kind.wireName} " +
+                            proposed.path.ifBlank { proposed.artifactType }
+                        val (recovered, decision) = recordMissionRecovery(
+                            failedCheckpoint,
+                            failure,
+                            rejectedOperation,
+                        )
                         mission = recovered
                         controllerCycle++
                         commitMessage(
@@ -1204,7 +1243,11 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                                 succeeded = false,
                             )
                         }
-                        val (recovered, decision) = recordMissionRecovery(failedCheckpoint, failure)
+                        val (recovered, decision) = recordMissionRecovery(
+                            failedCheckpoint,
+                            failure,
+                            "${normalized.kind.wireName} ${normalized.path}",
+                        )
                         mission = recovered
                         controllerCycle++
                         if (decision.automatic && controllerCycle < controllerLimit) {
@@ -1367,7 +1410,11 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                             break
                         }
                         if (mission?.planKind == WorkspaceMissionKind) {
-                            val (recovered, decision) = recordMissionRecovery(mission!!, failure)
+                            val (recovered, decision) = recordMissionRecovery(
+                                mission!!,
+                                failure,
+                                "${normalized.kind.wireName} ${normalized.path}",
+                            )
                             mission = recovered
                             if (decision.automatic && controllerCycle < controllerLimit) {
                                 request = missionRecoveryPrompt(
@@ -3124,7 +3171,18 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                         identity = operationIdentity,
                     )
                 }
-                throw MissionTransactionFailure(proposal, completed.toList(), failure)
+                val compensated = compensateMissionTransaction(
+                    mission = mission,
+                    completed = completed.toList(),
+                    operationIdentities = transactionLease.operations,
+                )
+                mission = compensated.first
+                throw MissionTransactionFailure(
+                    failedProposal = proposal,
+                    completedResults = completed.toList(),
+                    cause = failure,
+                    compensationResults = compensated.second,
+                )
             }
             val verified = result.getOrThrow()
             mission = withContext(Dispatchers.IO) {
@@ -3151,22 +3209,69 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                     memoryMatrix.recordAgentMissionCheckpoint(checkpoint)
                 }
             }.getOrElse { failure ->
+                val compensated = compensateMissionTransaction(
+                    mission = mission,
+                    completed = completed.toList(),
+                    operationIdentities = transactionLease.operations,
+                )
+                mission = compensated.first
                 throw MissionTransactionFailure(
                     failedProposal = completed.last().first,
                     completedResults = completed.toList(),
                     cause = failure,
+                    compensationResults = compensated.second,
                 )
             }
         }
         return MissionTransactionOutcome(mission, completed)
     }
 
+    private suspend fun compensateMissionTransaction(
+        mission: AgentMissionCheckpoint,
+        completed: List<Pair<WorkspaceActionProposal, WorkspaceActionResult>>,
+        operationIdentities: List<AgentOperationIdentity>,
+    ): Pair<AgentMissionCheckpoint, List<WorkspaceCompensationResult>> {
+        var checkpoint = mission
+        val compensation = mutableListOf<WorkspaceCompensationResult>()
+        completed.indices.reversed().forEach { index ->
+            val (proposal, result) = completed[index]
+            val outcome = runCatching {
+                workspaceRepository.compensateMissionAction(
+                    proposal = proposal,
+                    result = result,
+                    rawMissionRootPath = mission.rootPath,
+                )
+            }.getOrElse { failure ->
+                WorkspaceCompensationResult(
+                    compensated = false,
+                    detail = "Compensation failed for ${proposal.kind.wireName} ${proposal.path}: " +
+                        safeFailure(failure),
+                )
+            }
+            checkpoint = withContext(Dispatchers.IO) {
+                memoryMatrix.recordProjectEvent(
+                    action = if (outcome.compensated) "transaction_compensated" else "transaction_uncompensated",
+                    path = proposal.path,
+                    result = WorkspaceActionResult(outcome.detail),
+                )
+                memoryMatrix.recordAgentMissionCompensation(
+                    identity = operationIdentities[index],
+                    compensated = outcome.compensated,
+                    detail = outcome.detail,
+                )
+            }
+            compensation += outcome
+        }
+        return checkpoint to compensation
+    }
+
     private suspend fun recordMissionRecovery(
         mission: AgentMissionCheckpoint,
         failure: Throwable,
+        rejectedOperation: String = "",
     ): Pair<AgentMissionCheckpoint, MissionRecoveryDecision> {
         val decision = MissionRecoveryRouter.classify(
-            rawDetail = safeFailure(failure),
+            failure = ControllerFailure.fromThrowable(failure, rejectedOperation),
             priorSignatures = mission.recoveryTrail,
         )
         val checkpoint = withContext(Dispatchers.IO) {
@@ -3189,7 +3294,8 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         )
         appendLine("Last verified checkpoint: ${mission.lastVerifiedCheckpoint.ifBlank { "none" }}")
         appendLine("Rejected operation: ${rejectedOperation.take(500)}")
-        appendLine("Deterministic error: ${decision.detail}")
+        appendLine("Structured error: ${decision.errorCode.name}")
+        appendLine("Exact evidence: ${decision.detail}")
         appendLine("Recovery attempt: ${decision.attempt}/$MaximumMissionRecoveryAttempts")
         appendLine("Preserve the intended task. Do not repeat the rejected operation unchanged.")
         appendLine("Choose the smallest compatible correction and continue with one typed payload.")

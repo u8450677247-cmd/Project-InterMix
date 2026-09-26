@@ -384,6 +384,8 @@ object AgentMissionCheckpointCodec {
         .put("guidance", JSONArray(mission.guidance))
         .put("action_trail", JSONArray(mission.actionTrail))
         .put("recovery_trail", JSONArray(mission.recoveryTrail))
+        .put("last_controller_error_code", mission.lastControllerErrorCode?.name ?: "")
+        .put("last_recovery_disposition", mission.lastRecoveryDisposition?.name ?: "")
         .put("last_verified_checkpoint", mission.lastVerifiedCheckpoint)
         .put("last_action", mission.lastAction)
         .put("last_result", mission.lastResult)
@@ -552,6 +554,12 @@ object AgentMissionCheckpointCodec {
             guidance = payload.stringList("guidance", 12, 2_000),
             actionTrail = payload.stringList("action_trail", 240, 800),
             recoveryTrail = payload.stringList("recovery_trail", 24, 32),
+            lastControllerErrorCode = payload.optString("last_controller_error_code")
+                .takeIf(String::isNotBlank)
+                ?.let { runCatching { ControllerErrorCode.valueOf(it) }.getOrNull() },
+            lastRecoveryDisposition = payload.optString("last_recovery_disposition")
+                .takeIf(String::isNotBlank)
+                ?.let { runCatching { MissionRecoveryDisposition.valueOf(it) }.getOrNull() },
             lastVerifiedCheckpoint = payload.optString("last_verified_checkpoint").take(2_000),
             lastAction = payload.optString("last_action").take(700),
             lastResult = payload.optString("last_result").take(2_000),
@@ -707,6 +715,8 @@ object MissionProgressReducer {
             status = if (decision.automatic) current.status else AgentMissionStatus.Paused,
             recoveries = current.recoveries + if (decision.automatic) 1 else 0,
             recoveryTrail = (current.recoveryTrail + decision.signature).takeLast(24),
+            lastControllerErrorCode = decision.errorCode,
+            lastRecoveryDisposition = decision.disposition,
             missionManifest = manifest,
             lastResult = "Recovery ${decision.disposition.name}: ${decision.detail}".take(2_000),
             updatedAt = updatedAt,
@@ -796,14 +806,16 @@ object MissionProgressReducer {
 
 enum class MissionRecoveryDisposition {
     DeterministicRepair,
-    ModelRetry,
-    HumanAuthority,
-    SecurityBoundary,
+    RetryTransient,
+    ModelRepair,
+    HumanRequired,
+    SecurityStop,
     Exhausted,
 }
 
 data class MissionRecoveryDecision(
     val disposition: MissionRecoveryDisposition,
+    val errorCode: ControllerErrorCode,
     val signature: String,
     val attempt: Int,
     val detail: String,
@@ -811,48 +823,63 @@ data class MissionRecoveryDecision(
     val automatic: Boolean
         get() = disposition in setOf(
             MissionRecoveryDisposition.DeterministicRepair,
-            MissionRecoveryDisposition.ModelRetry,
+            MissionRecoveryDisposition.RetryTransient,
+            MissionRecoveryDisposition.ModelRepair,
         )
 }
 
-/** Pure bounded routing: ordinary controller disagreement retries; authority and integrity do not. */
+/** Pure bounded routing: controller codes choose policy; text classification remains legacy input only. */
 object MissionRecoveryRouter {
-    private val securityTerms = listOf(
-        "parent traversal", "outside the authorized", "outside its authorized", "absolute path",
-        "symlink", "credential", "privilege", "corrupt", "integrity",
-    )
-    private val authorityTerms = listOf(
-        "permission", "access denied", "requires approval", "authority expansion", "not authorized",
-    )
-    private val deterministicTerms = listOf(
-        "already exists", "target was absent", "missing parent", "write_file to create_file",
-        "stale artifact", "malformed", "unicode", "not a directory",
-    )
-
     fun classify(rawDetail: String, priorSignatures: List<String>): MissionRecoveryDecision {
-        val detail = rawDetail.replace(Regex("\\s+"), " ").trim().take(500)
-        val folded = detail.lowercase(Locale.ROOT)
-        val signature = MessageDigest.getInstance("SHA-256")
-            .digest(folded.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it.toInt() and 0xff) }
-            .take(16)
-        val sameFailureCount = priorSignatures.count { it == signature }
+        return classify(
+            failure = ControllerFailure.classifyLegacyDetail(rawDetail),
+            priorSignatures = priorSignatures,
+        )
+    }
+
+    fun classify(
+        failure: ControllerFailure,
+        priorSignatures: List<String>,
+    ): MissionRecoveryDecision {
+        val signature = failure.signature
+        val sameFailureCount = priorSignatures.count(signature::equals)
         val distinctAttempts = (priorSignatures + signature).distinct().size
         val disposition = when {
-            "exhausted" in folded || "budget" in folded && "exceed" in folded ->
-                MissionRecoveryDisposition.Exhausted
-            securityTerms.any(folded::contains) -> MissionRecoveryDisposition.SecurityBoundary
-            authorityTerms.any(folded::contains) -> MissionRecoveryDisposition.HumanAuthority
             sameFailureCount >= 1 || distinctAttempts > MaximumMissionRecoveryAttempts ->
                 MissionRecoveryDisposition.Exhausted
-            deterministicTerms.any(folded::contains) -> MissionRecoveryDisposition.DeterministicRepair
-            else -> MissionRecoveryDisposition.ModelRetry
+            failure.code in setOf(
+                ControllerErrorCode.MISSING_TARGET,
+                ControllerErrorCode.ALREADY_EXISTS,
+                ControllerErrorCode.MISSING_PARENT,
+                ControllerErrorCode.STALE_ARTIFACT,
+                ControllerErrorCode.CONTEXT_CAPACITY,
+            ) -> MissionRecoveryDisposition.DeterministicRepair
+            failure.code in setOf(
+                ControllerErrorCode.PROVIDER_TRANSIENT,
+                ControllerErrorCode.MODEL_RUNTIME_FAILURE,
+            ) -> MissionRecoveryDisposition.RetryTransient
+            failure.code in setOf(
+                ControllerErrorCode.PATH_INVALID,
+                ControllerErrorCode.TOOL_SCHEMA_INVALID,
+                ControllerErrorCode.EXECUTION_FAILED,
+                ControllerErrorCode.BUILD_FAILED,
+                ControllerErrorCode.TEST_FAILED,
+            ) -> MissionRecoveryDisposition.ModelRepair
+            failure.code in setOf(
+                ControllerErrorCode.AUTHORITY_REQUIRED,
+                ControllerErrorCode.SEMANTIC_AMBIGUITY,
+            ) -> MissionRecoveryDisposition.HumanRequired
+            failure.code in setOf(
+                ControllerErrorCode.OUTSIDE_AUTHORITY,
+                ControllerErrorCode.SECURITY_VIOLATION,
+            ) -> MissionRecoveryDisposition.SecurityStop
         }
         return MissionRecoveryDecision(
             disposition = disposition,
+            errorCode = failure.code,
             signature = signature,
             attempt = priorSignatures.size + 1,
-            detail = detail,
+            detail = failure.detail.take(500),
         )
     }
 }

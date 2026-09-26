@@ -181,6 +181,84 @@ class AgentExecutionTest {
         assertEquals(AgentOperationState.Failed, restored.executionLedger?.receipts?.last()?.state)
     }
 
+    @Test
+    fun transactionCompensationAndUnresolvedSideEffectsAreDurableEvidence() {
+        var ledger = AgentExecutionController.initial("LF-COMPENSATE", "TASK-001")
+        ledger = AgentExecutionController.beginRun(ledger, "TASK-001", logicalStepsCompleted = 0)
+        ledger = AgentExecutionController.admitRunResult(
+            ledger,
+            requireNotNull(ledger.currentRunIdentity),
+        ).ledger
+        val lease = AgentExecutionController.beginTransaction(
+            ledger,
+            operationCount = 2,
+            explicitBundle = true,
+            updatedAt = "pending",
+        )
+        ledger = AgentExecutionController.admitOperationResult(
+            lease.ledger,
+            lease.operations[0],
+            succeeded = true,
+            evidence = "write verified",
+            updatedAt = "write",
+        ).ledger
+        ledger = AgentExecutionController.admitOperationResult(
+            ledger,
+            lease.operations[1],
+            succeeded = true,
+            evidence = "create verified",
+            updatedAt = "create",
+        ).ledger
+        ledger = AgentExecutionController.recordCompensation(
+            ledger,
+            lease.operations[0],
+            compensated = true,
+            detail = "restored verified snapshot",
+            updatedAt = "rollback",
+        )
+        ledger = AgentExecutionController.recordCompensation(
+            ledger,
+            lease.operations[1],
+            compensated = false,
+            detail = "created file retained because deletion is unavailable",
+            updatedAt = "unresolved",
+        )
+
+        assertEquals(AgentOperationState.Compensated, ledger.receipts.takeLast(2).first().state)
+        assertEquals(AgentOperationState.Uncompensated, ledger.receipts.last().state)
+    }
+
+    @Test
+    fun workspaceCompensationPolicyRestoresOnlyVerifiedReplacements() {
+        val write = WorkspaceActionProposal(
+            WorkspaceActionKind.WriteFile,
+            "mission/existing.md",
+            content = "replacement",
+        )
+        val verifiedSnapshot = WorkspaceActionResult(
+            detail = "written",
+            snapshotName = "0123456789abcdef-1.snapshot",
+            beforeSha256 = "0".repeat(64),
+            afterSha256 = "1".repeat(64),
+        )
+
+        assertEquals(
+            WorkspaceCompensationPolicy.RestoreSnapshot,
+            workspaceCompensationPolicy(write, verifiedSnapshot),
+        )
+        assertEquals(
+            WorkspaceCompensationPolicy.RecordUncompensated,
+            workspaceCompensationPolicy(
+                WorkspaceActionProposal(
+                    WorkspaceActionKind.CreateFile,
+                    "mission/new.md",
+                    content = "new",
+                ),
+                WorkspaceActionResult("created"),
+            ),
+        )
+    }
+
     private fun artifact(index: Int): String =
         "WA-${index.toString(16).uppercase().padStart(32, '0')}"
 }

@@ -793,6 +793,33 @@ class MemoryMatrixRepository(private val context: Context) :
     }
 
     @Synchronized
+    fun recordAgentMissionCompensation(
+        identity: AgentOperationIdentity,
+        compensated: Boolean,
+        detail: String,
+    ): AgentMissionCheckpoint {
+        val current = activeAgentMission() ?: error("No long-form mission is active.")
+        val ledger = requireNotNull(current.executionLedger) {
+            "The active mission has no execution ledger."
+        }
+        val timestamp = now()
+        val next = current.copy(
+            executionLedger = AgentExecutionController.recordCompensation(
+                ledger = ledger,
+                identity = identity,
+                compensated = compensated,
+                detail = detail,
+                updatedAt = timestamp,
+            ),
+            lastResult = detail.take(2_000),
+            updatedAt = timestamp,
+        )
+        persistAgentMission(next)
+        updateActiveSessionTask(next)
+        return next
+    }
+
+    @Synchronized
     fun recordAgentMissionRecovery(decision: MissionRecoveryDecision): AgentMissionCheckpoint {
         val current = activeAgentMission() ?: error("No long-form mission is active.")
         val next = MissionProgressReducer.recordRecovery(current, decision, now())
