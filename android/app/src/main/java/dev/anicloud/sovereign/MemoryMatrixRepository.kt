@@ -15,7 +15,7 @@ import java.util.Locale
 import java.util.UUID
 
 private const val MatrixDatabaseName = "sovereign_memory_v1.db"
-private const val MatrixSchemaVersion = 8
+private const val MatrixSchemaVersion = 9
 private const val LegacyHistoryName = "conversation_history_v1.json"
 private const val MaxStoredMessageCharacters = 32 * 1024
 private const val RecentConversationCharacterBudget = 4_096
@@ -187,6 +187,9 @@ class MemoryMatrixRepository(private val context: Context) :
             "artifact_nodes",
             "artifact_versions",
             "artifact_edges",
+            "execution_actions",
+            "execution_grants",
+            "agent_run_schedule",
             "resonance_profile",
             "resonance_trait",
         )
@@ -316,6 +319,7 @@ class MemoryMatrixRepository(private val context: Context) :
         installResonance(db)
         installWorkspaceArtifactRegistry(db)
         installArtifactGraph(db)
+        installAutonomyRuntime(db)
         installFts(db)
         ensureSession(db)
     }
@@ -328,6 +332,15 @@ class MemoryMatrixRepository(private val context: Context) :
         if (oldVersion < 6) installResonance(db)
         if (oldVersion < 7) installWorkspaceArtifactRegistry(db)
         if (oldVersion < 8) installArtifactGraph(db)
+        if (oldVersion < 9) {
+            if (oldVersion >= 3) {
+                db.execSQL(
+                    "ALTER TABLE execution_actions " +
+                        "ADD COLUMN grant_id TEXT NOT NULL DEFAULT ''",
+                )
+            }
+            installAutonomyRuntime(db)
+        }
     }
 
     @Synchronized
@@ -2023,15 +2036,175 @@ class MemoryMatrixRepository(private val context: Context) :
     }
 
     @Synchronized
+    fun issueExecutionGrant(
+        grant: ExecutionGrant,
+        nowEpochMillis: Long = Instant.now().toEpochMilli(),
+    ): ExecutionGrant {
+        val mission = activeAgentMission() ?: error("No long-form mission is active.")
+        require(mission.active && mission.id == grant.missionId) {
+            "Execution grants must belong to the active mission."
+        }
+        require(mission.rootPath == grant.workspaceRoot) {
+            "Execution grants cannot widen or replace the mission workspace root."
+        }
+        require(grant.status == ExecutionGrantStatus.Active) { "A new execution grant must be active." }
+        require(grant.issuedAtEpochMillis <= nowEpochMillis) { "Execution grants cannot start in the future." }
+        require(grant.effectiveStatus(nowEpochMillis) == ExecutionGrantStatus.Active) {
+            "Execution grant must have remaining time and budget."
+        }
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val priorGrants = db.rawQuery(
+                "SELECT id,payload_json FROM execution_grants WHERE mission_id=? AND status=?",
+                arrayOf(grant.missionId, ExecutionGrantStatus.Active.name),
+            ).use { cursor ->
+                buildList {
+                    while (cursor.moveToNext()) {
+                        runCatching {
+                            ExecutionGrantCodec.decode(JSONObject(cursor.getString(1)))
+                        }.getOrNull()?.let(::add)
+                    }
+                }
+            }
+            priorGrants.forEach { previous ->
+                persistExecutionGrant(db, previous.copy(status = ExecutionGrantStatus.Revoked))
+            }
+            persistExecutionGrant(db, grant)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return grant
+    }
+
+    @Synchronized
+    fun latestExecutionGrant(
+        missionId: String,
+        nowEpochMillis: Long = Instant.now().toEpochMilli(),
+    ): ExecutionGrant? {
+        val db = writableDatabase
+        val stored = db.rawQuery(
+            "SELECT payload_json FROM execution_grants WHERE mission_id=? " +
+                "ORDER BY issued_at_epoch_millis DESC LIMIT 1",
+            arrayOf(missionId),
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) null else runCatching {
+                ExecutionGrantCodec.decode(JSONObject(cursor.getString(0)))
+            }.getOrNull()
+        } ?: return null
+        val effective = stored.copy(status = stored.effectiveStatus(nowEpochMillis))
+        if (effective.status != stored.status) persistExecutionGrant(db, effective)
+        return effective
+    }
+
+    @Synchronized
+    fun activeExecutionGrant(
+        missionId: String,
+        nowEpochMillis: Long = Instant.now().toEpochMilli(),
+    ): ExecutionGrant? = latestExecutionGrant(missionId, nowEpochMillis)
+        ?.takeIf { it.status == ExecutionGrantStatus.Active }
+
+    @Synchronized
+    fun revokeExecutionGrant(missionId: String): ExecutionGrant? {
+        val grant = latestExecutionGrant(missionId) ?: return null
+        if (grant.status != ExecutionGrantStatus.Active) return grant
+        return grant.copy(status = ExecutionGrantStatus.Revoked).also {
+            persistExecutionGrant(writableDatabase, it)
+        }
+    }
+
+    @Synchronized
     fun queueExecutionAction(
         rawProposal: ExecutionProposal,
         missionId: String = "",
+        grantId: String = "",
     ): Long {
         val proposal = validateExecutionProposal(rawProposal)
-        val now = now()
+        return insertExecutionAction(
+            db = writableDatabase,
+            proposal = proposal,
+            missionId = missionId,
+            grantId = grantId,
+            timestamp = now(),
+        )
+    }
+
+    @Synchronized
+    fun queueGrantedExecutionAction(
+        rawProposal: ExecutionProposal,
+        missionId: String,
+        nowEpochMillis: Long = Instant.now().toEpochMilli(),
+    ): GrantedExecutionQueueResult {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val grant = db.rawQuery(
+                "SELECT payload_json FROM execution_grants WHERE mission_id=? AND status=? " +
+                    "ORDER BY issued_at_epoch_millis DESC LIMIT 1",
+                arrayOf(missionId, ExecutionGrantStatus.Active.name),
+            ).use { cursor ->
+                if (!cursor.moveToFirst()) null else runCatching {
+                    ExecutionGrantCodec.decode(JSONObject(cursor.getString(0)))
+                }.getOrNull()
+            }
+            if (grant == null) {
+                db.setTransactionSuccessful()
+                return GrantedExecutionQueueResult.Rejected(
+                    ControllerFailure(
+                        code = ControllerErrorCode.AUTHORITY_REQUIRED,
+                        detail = "No active execution grant exists for mission $missionId.",
+                        rejectedProposal = rawProposal.command.take(1_000),
+                    ),
+                )
+            }
+            val admission = ExecutionGrantPolicy.admit(
+                grant = grant,
+                rawProposal = rawProposal,
+                missionId = missionId,
+                nowEpochMillis = nowEpochMillis,
+            )
+            val result = when (admission) {
+                is ExecutionGrantAdmission.Rejected -> {
+                    val status = grant.effectiveStatus(nowEpochMillis)
+                    if (status != grant.status) persistExecutionGrant(db, grant.copy(status = status))
+                    GrantedExecutionQueueResult.Rejected(admission.failure)
+                }
+                is ExecutionGrantAdmission.Granted -> {
+                    val timestamp = now()
+                    val actionId = insertExecutionAction(
+                        db = db,
+                        proposal = admission.proposal,
+                        missionId = missionId,
+                        grantId = admission.grant.id,
+                        timestamp = timestamp,
+                    )
+                    persistExecutionGrant(db, admission.grant, timestamp)
+                    GrantedExecutionQueueResult.Queued(
+                        actionId = actionId,
+                        grant = admission.grant,
+                        proposal = admission.proposal,
+                    )
+                }
+            }
+            db.setTransactionSuccessful()
+            return result
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    private fun insertExecutionAction(
+        db: SQLiteDatabase,
+        proposal: ExecutionProposal,
+        missionId: String,
+        grantId: String,
+        timestamp: String,
+    ): Long {
         val values = ContentValues().apply {
-            put("session_id", activeSessionId(writableDatabase))
+            put("session_id", activeSessionId(db))
             put("mission_id", missionId.take(40))
+            put("grant_id", grantId)
             put("kind", proposal.kind.wireName)
             put("command", proposal.command)
             put("workdir", proposal.workdir)
@@ -2040,17 +2213,41 @@ class MemoryMatrixRepository(private val context: Context) :
             put("reason", proposal.reason)
             put("timeout_seconds", proposal.timeoutSeconds)
             put("status", "pending")
-            put("created_at", now)
-            put("updated_at", now)
+            put("created_at", timestamp)
+            put("updated_at", timestamp)
         }
-        return writableDatabase.insertOrThrow("execution_actions", null, values)
+        return db.insertOrThrow("execution_actions", null, values)
+    }
+
+    private fun persistExecutionGrant(
+        db: SQLiteDatabase,
+        grant: ExecutionGrant,
+        timestamp: String = now(),
+    ) {
+        val values = ContentValues().apply {
+            put("id", grant.id)
+            put("mission_id", grant.missionId)
+            put("payload_json", ExecutionGrantCodec.encode(grant).toString())
+            put("status", grant.status.name)
+            put("issued_at_epoch_millis", grant.issuedAtEpochMillis)
+            put("expires_at_epoch_millis", grant.expiresAtEpochMillis)
+            put("updated_at", timestamp)
+        }
+        check(
+            db.insertWithOnConflict(
+                "execution_grants",
+                null,
+                values,
+                SQLiteDatabase.CONFLICT_REPLACE,
+            ) != -1L,
+        ) { "Execution grant persistence failed." }
     }
 
     @Synchronized
     fun pendingExecutionActions(limit: Int = 20): List<PendingExecutionAction> = readableDatabase.rawQuery(
         """
         SELECT id,session_id,mission_id,kind,command,workdir,network_required,
-               dependencies_json,reason,timeout_seconds,status,created_at
+               dependencies_json,reason,timeout_seconds,status,created_at,grant_id
         FROM execution_actions
         WHERE status IN ('pending','running','cancel_requested')
         ORDER BY id ASC LIMIT ?
@@ -2080,6 +2277,7 @@ class MemoryMatrixRepository(private val context: Context) :
                         timeoutSeconds = cursor.getInt(9),
                         status = cursor.getString(10),
                         createdAt = cursor.getString(11),
+                        grantId = cursor.getString(12),
                     ),
                 )
             }
@@ -2090,7 +2288,7 @@ class MemoryMatrixRepository(private val context: Context) :
     fun executionAction(id: Long): PendingExecutionAction? = readableDatabase.rawQuery(
         """
         SELECT id,session_id,mission_id,kind,command,workdir,network_required,
-               dependencies_json,reason,timeout_seconds,status,created_at
+               dependencies_json,reason,timeout_seconds,status,created_at,grant_id
         FROM execution_actions WHERE id=? LIMIT 1
         """.trimIndent(),
         arrayOf(id.toString()),
@@ -2116,6 +2314,7 @@ class MemoryMatrixRepository(private val context: Context) :
             timeoutSeconds = cursor.getInt(9),
             status = cursor.getString(10),
             createdAt = cursor.getString(11),
+            grantId = cursor.getString(12),
         )
     }
 
@@ -2200,7 +2399,8 @@ class MemoryMatrixRepository(private val context: Context) :
         try {
             val row = db.rawQuery(
                 "SELECT session_id,mission_id,kind,command,workdir,network_required," +
-                    "dependencies_json,timeout_seconds,status FROM execution_actions WHERE id=? LIMIT 1",
+                    "dependencies_json,timeout_seconds,status,grant_id " +
+                    "FROM execution_actions WHERE id=? LIMIT 1",
                 arrayOf(id.toString()),
             ).use { cursor ->
                 if (!cursor.moveToFirst()) null else arrayOf(
@@ -2213,6 +2413,7 @@ class MemoryMatrixRepository(private val context: Context) :
                     cursor.getString(6),
                     cursor.getString(7),
                     cursor.getString(8),
+                    cursor.getString(9),
                 )
             } ?: return false
             if (row[8] !in setOf("running", "cancel_requested")) return false
@@ -2246,6 +2447,17 @@ class MemoryMatrixRepository(private val context: Context) :
                 put("updated_at", now)
             }
             db.update("execution_actions", values, "id=?", arrayOf(id.toString()))
+            if (row[9].isNotBlank()) {
+                val boundedStdoutLength = stdoutOriginalLength.coerceIn(0L, Long.MAX_VALUE / 2L)
+                val boundedStderrLength = stderrOriginalLength.coerceIn(0L, Long.MAX_VALUE / 2L)
+                recordExecutionGrantOutput(
+                    db = db,
+                    grantId = row[9],
+                    outputBytes = boundedStdoutLength + boundedStderrLength,
+                    nowEpochMillis = Instant.now().toEpochMilli(),
+                    timestamp = now,
+                )
+            }
             val report = buildString {
                 appendLine("# Termux execution #$id")
                 appendLine()
@@ -2304,6 +2516,28 @@ class MemoryMatrixRepository(private val context: Context) :
         .replace(Regex("\\u001B(?:\\[[0-?]*[ -/]*[@-~]|\\][^\\u0007]*(?:\\u0007|\\u001B\\\\))"), "")
         .replace("```", "``\u200B`")
         .filter { it == '\n' || it == '\t' || (it.code >= 0x20 && it.code !in 0x7F..0x9F) }
+
+    private fun recordExecutionGrantOutput(
+        db: SQLiteDatabase,
+        grantId: String,
+        outputBytes: Long,
+        nowEpochMillis: Long,
+        timestamp: String,
+    ) {
+        val grant = db.rawQuery(
+            "SELECT payload_json FROM execution_grants WHERE id=? LIMIT 1",
+            arrayOf(grantId),
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) null else runCatching {
+                ExecutionGrantCodec.decode(JSONObject(cursor.getString(0)))
+            }.getOrNull()
+        } ?: return
+        persistExecutionGrant(
+            db = db,
+            grant = ExecutionGrantPolicy.recordOutput(grant, outputBytes, nowEpochMillis),
+            timestamp = timestamp,
+        )
+    }
 
     @Synchronized
     fun recordProjectEvent(action: String, path: String, result: WorkspaceActionResult) {
@@ -3920,6 +4154,7 @@ class MemoryMatrixRepository(private val context: Context) :
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
                 mission_id TEXT NOT NULL DEFAULT '',
+                grant_id TEXT NOT NULL DEFAULT '',
                 kind TEXT NOT NULL,
                 command TEXT NOT NULL,
                 workdir TEXT NOT NULL DEFAULT '.',
@@ -3943,6 +4178,41 @@ class MemoryMatrixRepository(private val context: Context) :
         db.execSQL(
             "CREATE INDEX IF NOT EXISTS idx_execution_actions_status " +
                 "ON execution_actions(status, id DESC)",
+        )
+    }
+
+    private fun installAutonomyRuntime(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS execution_grants (
+                id TEXT PRIMARY KEY,
+                mission_id TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                issued_at_epoch_millis INTEGER NOT NULL,
+                expires_at_epoch_millis INTEGER NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS idx_execution_grants_mission " +
+                "ON execution_grants(mission_id, status, issued_at_epoch_millis DESC)",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS agent_run_schedule (
+                mission_id TEXT PRIMARY KEY,
+                state_json TEXT NOT NULL,
+                state TEXT NOT NULL,
+                next_run_at_epoch_millis INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS idx_agent_run_schedule_due " +
+                "ON agent_run_schedule(state, next_run_at_epoch_millis)",
         )
     }
 

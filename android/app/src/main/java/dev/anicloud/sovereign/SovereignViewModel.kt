@@ -262,7 +262,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         _state.update {
             it.copy(
                 detail = if (enabled) {
-                    "Developer plugin · Termux enabled; setup and per-command approval still apply."
+                    "Developer plugin · Termux enabled; ungranted commands still require exact approval."
                 } else {
                     "Developer plugin · Termux disabled; native chat, Matrix, and Workspace remain available."
                 },
@@ -2415,14 +2415,71 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                 "Evolution Forge Test accepts only an explicit test or build action."
             }
         }
+        val activeGrant = mission?.let {
+            withContext(Dispatchers.IO) { memoryMatrix.activeExecutionGrant(it.id) }
+        }
+        val bridge = termuxBridge.status()
+        val anotherExecutionRunning = _state.value.pendingExecutions.any {
+            it.status in setOf("running", "cancel_requested")
+        }
+        if (mission != null && activeGrant != null && bridge.ready && !anotherExecutionRunning) {
+            val admitted = withContext(Dispatchers.IO) {
+                memoryMatrix.queueGrantedExecutionAction(proposal, mission.id)
+            }
+            if (admitted is GrantedExecutionQueueResult.Queued) {
+                val action = withContext(Dispatchers.IO) {
+                    requireNotNull(memoryMatrix.executionAction(admitted.actionId))
+                }
+                val paused = withContext(Dispatchers.IO) {
+                    memoryMatrix.setAgentMissionStatus(
+                        AgentMissionStatus.Paused,
+                        "Termux execution #${action.id} dispatched under bounded grant " +
+                            "${admitted.grant.id}; awaiting its terminal result.",
+                    )
+                }
+                val claimed = withContext(Dispatchers.IO) {
+                    memoryMatrix.setExecutionActionStatus(action.id, "pending", "running")
+                }
+                val dispatch: Result<Unit> = if (claimed) {
+                    runCatching { termuxBridge.execute(action) }
+                } else {
+                    Result.failure(IllegalStateException("Execution claim was no longer pending."))
+                }
+                val response = dispatch.fold(
+                    onSuccess = {
+                        "Started ${proposal.kind.label.lowercase()} as Termux execution #${action.id} " +
+                            "under ${admitted.grant.id}. The mission will continue automatically " +
+                            "after bounded terminal evidence returns."
+                    },
+                    onFailure = { failure ->
+                        val detail = "Granted Termux execution #${action.id} could not start: " +
+                            safeFailure(failure)
+                        withContext(Dispatchers.IO) {
+                            val expected = if (claimed) "running" else "pending"
+                            memoryMatrix.setExecutionActionStatus(action.id, expected, "failed", detail)
+                        }
+                        pendingExecutionRecoveryId = action.id
+                        detail
+                    },
+                )
+                refreshRuntimeState()
+                return ControllerCycleOutcome(mission = paused, completedResponse = response)
+            }
+            if (admitted is GrantedExecutionQueueResult.Rejected) {
+                _state.update {
+                    it.copy(
+                        detail = "Execution grant declined this proposal: " +
+                            "${admitted.failure.code.name.lowercase()}",
+                    )
+                }
+            }
+        }
         val actionId = withContext(Dispatchers.IO) {
             memoryMatrix.queueExecutionAction(proposal, mission?.id.orEmpty())
         }
-        val response = visibleText.ifBlank {
-            "Prepared ${proposal.kind.label.lowercase()} as execution #$actionId. " +
-                "Review its exact command, working directory, network need, and dependencies in Agents; " +
-                "nothing has run."
-        }
+        val response = "Prepared ${proposal.kind.label.lowercase()} as execution #$actionId. " +
+            "Review its exact command, working directory, network need, and dependencies in Agents; " +
+            "nothing has run." + if (visibleText.isBlank()) "" else " Model commentary was not treated as authority."
         val updatedMission = if (mission == null) null else withContext(Dispatchers.IO) {
             memoryMatrix.setAgentMissionStatus(
                 AgentMissionStatus.Paused,
@@ -3764,7 +3821,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                     "/resonance, " +
                     "/calc <arithmetic expression>, " +
                     "/sessions list|new|open <reference>, " +
-                    "/exec status|workdir|on|off|run|test|build|deps, " +
+                    "/exec status|workdir|on|off|grant|inspect|run|test|build|lint|deps, " +
                     "/files [path], /read <path>, /mission run <folder> :: <objective>, " +
                     "/mission evolve <folder> :: <objective>, " +
                     "/mission story <folder> :: <premise>, " +
@@ -3802,6 +3859,42 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             refreshRuntimeState()
             return "Termux execution bridge disabled. Pending plans remain preserved."
         }
+        if (
+            arguments.equals("grant", ignoreCase = true) ||
+            arguments.equals("grant issue", ignoreCase = true)
+        ) {
+            val mission = withContext(Dispatchers.IO) {
+                memoryMatrix.activeAgentMission()?.takeIf(AgentMissionCheckpoint::active)
+            } ?: error("Start or resume a bounded mission before issuing an execution grant.")
+            val issued = withContext(Dispatchers.IO) {
+                val nowEpochMillis = System.currentTimeMillis()
+                memoryMatrix.issueExecutionGrant(
+                    defaultMissionExecutionGrant(mission.id, mission.rootPath, nowEpochMillis),
+                    nowEpochMillis,
+                )
+            }
+            refreshRuntimeState()
+            return "Issued bounded execution grant `${issued.id}` for ${mission.id}: " +
+                "${issued.maxExecutions} offline inspect/build/test/lint commands, " +
+                "${issued.maxWallTimeSeconds}s reserved wall time, and " +
+                "${issued.maxOutputBytes / (1024 * 1024)} MiB output. It expires in 8 hours."
+        }
+        if (arguments.equals("grant status", ignoreCase = true)) {
+            val mission = withContext(Dispatchers.IO) { memoryMatrix.activeAgentMission() }
+                ?: error("No mission checkpoint is available.")
+            val grant = withContext(Dispatchers.IO) { memoryMatrix.latestExecutionGrant(mission.id) }
+                ?: return "No execution grant has been issued for ${mission.id}."
+            return executionGrantReport(grant)
+        }
+        if (arguments.equals("grant revoke", ignoreCase = true)) {
+            val mission = withContext(Dispatchers.IO) { memoryMatrix.activeAgentMission() }
+                ?: error("No mission checkpoint is available.")
+            val revoked = withContext(Dispatchers.IO) { memoryMatrix.revokeExecutionGrant(mission.id) }
+                ?: return "No execution grant exists for ${mission.id}."
+            refreshRuntimeState()
+            return "Execution grant `${revoked.id}` is ${revoked.status.name.lowercase()}. " +
+                "Queued or running commands keep their independently auditable state."
+        }
         if (arguments.startsWith("workdir ", ignoreCase = true)) {
             require(_state.value.pendingExecutions.none {
                 it.status in setOf("pending", "running", "cancel_requested")
@@ -3817,8 +3910,9 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             "run" -> ExecutionKind.Run
             "test" -> ExecutionKind.Test
             "build" -> ExecutionKind.Build
+            "lint" -> ExecutionKind.Lint
             "deps" -> ExecutionKind.InstallDependencies
-            else -> error("Choose status, workdir, on, off, inspect, run, test, build, or deps.")
+            else -> error("Choose status, workdir, on, off, grant, inspect, run, test, build, lint, or deps.")
         }
         require(body.isNotBlank()) { "The execution plan needs an exact command." }
         val dependencies = if (kind == ExecutionKind.InstallDependencies) {
@@ -3859,6 +3953,8 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
 
     private fun executionBridgeReport(): String {
         val bridge = termuxBridge.status()
+        val mission = runCatching { memoryMatrix.activeAgentMission() }.getOrNull()
+        val grant = mission?.let { runCatching { memoryMatrix.latestExecutionGrant(it.id) }.getOrNull() }
         return buildString {
             appendLine("# Developer plugin · Termux")
             appendLine()
@@ -3867,6 +3963,11 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             appendLine("- **Android permission:** ${if (bridge.permissionGranted) "granted" else "not granted"}")
             appendLine("- **Bridge switch:** ${if (bridge.enabled) "enabled" else "disabled"}")
             appendLine("- **Project root:** ${bridge.workdir.ifBlank { "not configured" }}")
+            appendLine(
+                "- **Mission grant:** " +
+                    (grant?.let { "${it.status.name} · ${it.id} · ${it.consumedExecutions}/${it.maxExecutions} runs" }
+                        ?: "none"),
+            )
             appendLine()
             appendLine("Optional setup remains user-controlled:")
             appendLine("1. Enable the developer plugin here or with `/exec on`.")
@@ -3874,9 +3975,25 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             appendLine("3. Grant **Run commands in Termux environment** only after enabling the plugin.")
             appendLine("4. Use `/exec workdir \$HOME/your-project` or `/exec workdir ~/your-project`.")
             appendLine()
-            append("Every run and dependency change still requires an exact Agents preview and approval.")
+            append(
+                "Commands outside an active bounded grant and every dependency or network change " +
+                    "still require an exact Agents preview and approval.",
+            )
         }.trim()
     }
+
+    private fun executionGrantReport(grant: ExecutionGrant): String = buildString {
+        appendLine("# Mission execution grant")
+        appendLine()
+        appendLine("- **ID:** `${grant.id}`")
+        appendLine("- **Mission:** `${grant.missionId}`")
+        appendLine("- **Status:** ${grant.status.name}")
+        appendLine("- **Executions:** ${grant.consumedExecutions}/${grant.maxExecutions}")
+        appendLine("- **Reserved wall time:** ${grant.reservedWallTimeSeconds}/${grant.maxWallTimeSeconds}s")
+        appendLine("- **Observed output:** ${grant.consumedOutputBytes}/${grant.maxOutputBytes} bytes")
+        appendLine("- **Network/dependencies/destructive:** denied/denied/denied")
+        append("Use `/exec grant revoke` to close this authority boundary immediately.")
+    }.trim()
 
     private suspend fun handleResonanceCommand(trimmed: String, sourceMessageId: Long): String {
         val arguments = trimmed.substringAfter(' ', "").trim()

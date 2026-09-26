@@ -38,6 +38,7 @@ enum class ExecutionKind(val wireName: String, val label: String) {
     Run("run", "RUN SCRIPT"),
     Test("test", "RUN TESTS"),
     Build("build", "BUILD PROJECT"),
+    Lint("lint", "LINT PROJECT"),
     InstallDependencies("install_dependencies", "INSTALL DEPENDENCIES"),
     ;
 
@@ -71,6 +72,7 @@ data class PendingExecutionAction(
     val timeoutSeconds: Int,
     val status: String,
     val createdAt: String,
+    val grantId: String = "",
 )
 
 data class TermuxBridgeStatus(
@@ -157,6 +159,11 @@ class TermuxExecutionBridge(private val context: Context) {
             ),
         )
         val workdir = resolveExecutionWorkdir(bridge.workdir, proposal.workdir)
+        val dispatchedCommand = if (action.grantId.isBlank()) {
+            proposal.command
+        } else {
+            offlineGrantedCommand(proposal.command)
+        }
         val resultIntent = Intent(context, TermuxExecutionResultService::class.java)
             .putExtra(ResultJobId, action.id)
         val flags = PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_UPDATE_CURRENT or
@@ -179,7 +186,7 @@ class TermuxExecutionBridge(private val context: Context) {
                         "-lc",
                         executionWrapper(action.id, proposal.timeoutSeconds),
                         "anicloud-exec",
-                        proposal.command,
+                        dispatchedCommand,
                     ),
                 )
                 putExtra(TermuxCommandWorkdir, workdir)
@@ -226,6 +233,11 @@ class TermuxExecutionBridge(private val context: Context) {
         cleanup
         exit "${'$'}status"
     """.trimIndent()
+
+    private fun offlineGrantedCommand(command: String): String =
+        "env CI=true PIP_NO_INDEX=1 CARGO_NET_OFFLINE=true GOPROXY=off " +
+            "npm_config_offline=true http_proxy=http://127.0.0.1:9 " +
+            "https_proxy=http://127.0.0.1:9 ALL_PROXY=socks5://127.0.0.1:9 $command"
 }
 
 @Suppress("DEPRECATION")

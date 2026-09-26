@@ -236,11 +236,12 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("LegacyHistoryName.migrated", repository)
         self.assertIn("memoryMatrix.loadMessages()", view_model)
         self.assertIn("memoryMatrix.recallContext", view_model)
-        self.assertIn("MatrixSchemaVersion = 8", repository)
+        self.assertIn("MatrixSchemaVersion = 9", repository)
         self.assertIn("CREATE TABLE IF NOT EXISTS context_windows", repository)
         self.assertIn("CREATE TABLE IF NOT EXISTS workspace_artifacts", repository)
         self.assertIn("if (oldVersion < 7) installWorkspaceArtifactRegistry(db)", repository)
         self.assertIn("if (oldVersion < 8) installArtifactGraph(db)", repository)
+        self.assertIn("if (oldVersion < 9)", repository)
         self.assertIn("undoLatestProfileChange", repository)
 
     def test_resonance_is_durable_scoped_bounded_and_user_controllable(self):
@@ -368,6 +369,79 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("NETWORK · REQUIRED AND INCLUDED IN THIS APPROVAL", ui)
         self.assertIn("DEVELOPER PLUGIN · TERMUX", ui)
         self.assertIn("cockpit.termuxBridge.enabled &&", ui)
+
+    def test_execution_grants_are_durable_atomic_and_deny_network_expansion(self):
+        grant = (SOURCE / "ExecutionGrant.kt").read_text(encoding="utf-8")
+        bridge = (SOURCE / "TermuxExecutionBridge.kt").read_text(encoding="utf-8")
+        repository = (SOURCE / "MemoryMatrixRepository.kt").read_text(
+            encoding="utf-8"
+        )
+        view_model = (SOURCE / "SovereignViewModel.kt").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("data class ExecutionGrant", grant)
+        self.assertIn("object ExecutionGrantPolicy", grant)
+        self.assertIn("networkAllowed: Boolean = false", grant)
+        self.assertIn("destructiveCommandsAllowed: Boolean = false", grant)
+        self.assertIn("fun queueGrantedExecutionAction", repository)
+        self.assertIn("db.beginTransaction()", repository)
+        self.assertIn('put("grant_id", grantId)', repository)
+        self.assertIn("recordExecutionGrantOutput", repository)
+        self.assertIn("offlineGrantedCommand", bridge)
+        self.assertIn("memoryMatrix.queueGrantedExecutionAction", view_model)
+        self.assertIn('arguments.equals("grant revoke"', view_model)
+
+    def test_autonomy_runtime_schema_executes_on_stock_sqlite(self):
+        repository = (SOURCE / "MemoryMatrixRepository.kt").read_text(encoding="utf-8")
+        install_block = repository.split(
+            "private fun installAutonomyRuntime(db: SQLiteDatabase)", maxsplit=1
+        )[1].split("private fun installNumericMatrix(", maxsplit=1)[0]
+        table_statements = re.findall(
+            r'db\.execSQL\(\s*"""(.*?)"""\.trimIndent\(\),\s*\)',
+            install_block,
+            flags=re.DOTALL,
+        )
+        self.assertEqual(len(table_statements), 2)
+
+        connection = sqlite3.connect(":memory:")
+        try:
+            for statement in table_statements:
+                connection.execute(textwrap.dedent(statement).strip())
+            installed = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            self.assertTrue(
+                {"execution_grants", "agent_run_schedule"}.issubset(installed)
+            )
+        finally:
+            connection.close()
+
+    def test_cognition_routes_only_compatible_declared_capabilities(self):
+        provider = (SOURCE / "CognitionProvider.kt").read_text(encoding="utf-8")
+        routing = (SOURCE / "AdaptiveRuntimePolicy.kt").read_text(encoding="utf-8")
+
+        for capability in (
+            "toolCalling",
+            "vision",
+            "contextCapacity",
+            "structuredGeneration",
+            "codingStrength",
+            "reasoningStrength",
+            "locality",
+            "privacyClass",
+            "marginalCostMicros",
+            "expectedLatencyMillis",
+            "networkRequired",
+            "availableBackends",
+            "thermalCost",
+        ):
+            self.assertIn(capability, provider)
+        self.assertIn("object CognitionRoutingPolicy", provider)
+        self.assertIn("CognitionRoutingPolicy.select", routing)
 
     def test_work_session_is_one_scoped_grant_with_controller_owned_path_recovery(self):
         protocol = (SOURCE / "ControllerProtocol.kt").read_text(encoding="utf-8")
