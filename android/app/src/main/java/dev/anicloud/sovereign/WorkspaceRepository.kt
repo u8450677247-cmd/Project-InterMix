@@ -378,6 +378,59 @@ class WorkspaceRepository(
         )
     }
 
+    /** Renames one reviewed direct child and verifies the provider's exact resulting identity. */
+    suspend fun renameUserEntry(
+        root: Uri,
+        parent: Uri,
+        entry: WorkspaceEntry,
+        rawName: String,
+    ): WorkspaceEntry = withContext(Dispatchers.IO) {
+        val name = normalizeWorkspaceLeafName(rawName)
+        require(!entry.displayName.equals(".anicloud-trash", ignoreCase = true)) {
+            "The recoverable trash folder is protected."
+        }
+        require(!name.equals(".anicloud-trash", ignoreCase = true)) {
+            "The recoverable trash name is reserved."
+        }
+        require(name != entry.displayName) { "Enter a different name before renaming." }
+        val siblings = listChildrenNow(root, parent)
+        val reviewedMatches = siblings.filter { it.uri == entry.uri }
+        require(reviewedMatches.size == 1) {
+            "The reviewed entry is no longer in the open folder. Refresh before renaming."
+        }
+        val reviewed = reviewedMatches.single()
+        require(
+            reviewed.displayName == entry.displayName && reviewed.isDirectory == entry.isDirectory,
+        ) { "The reviewed entry changed before rename. Refresh and review it again." }
+        require(
+            siblings.none {
+                it.uri != entry.uri && it.displayName.equals(name, ignoreCase = true)
+            },
+        ) { "An entry named $name already exists in this folder." }
+
+        val renamedUri = DocumentsContract.renameDocument(
+            context.contentResolver,
+            Uri.parse(entry.uri),
+            name,
+        ) ?: error("The document provider refused to rename ${entry.displayName}.")
+        val exactMatches = listChildrenNow(root, parent).filter { it.displayName == name }
+        check(exactMatches.size == 1) {
+            "The document provider did not expose exactly one entry named $name after renaming."
+        }
+        val renamed = exactMatches.single()
+        val listedUri = Uri.parse(renamed.uri)
+        check(
+            listedUri.authority == renamedUri.authority &&
+                documentIdFor(listedUri) == documentIdFor(renamedUri),
+        ) {
+            "The document provider returned a different document identity after renaming."
+        }
+        check(renamed.isDirectory == entry.isDirectory) {
+            "The document provider changed the entry type while renaming."
+        }
+        renamed
+    }
+
     /** Creates or safely reopens the one-file Story Forge benchmark workspace. */
     suspend fun prepareStoryForge(
         rawRootPath: String,
@@ -1092,7 +1145,7 @@ class WorkspaceRepository(
     private fun readTextNow(entry: WorkspaceEntry): String {
         require(!entry.isDirectory) { "Choose a text file, not a directory." }
         entry.byteSize?.let { require(it <= MaxEditableBytes) { "Files above 2 MiB are not enabled." } }
-        require(isEditableText(entry)) { "This file type is not enabled for text access." }
+        require(isEditableWorkspaceText(entry)) { "This file type is not enabled for text access." }
         val bytes = context.contentResolver.openInputStream(Uri.parse(entry.uri))?.use(::readBoundedBytes)
             ?: error("Android could not open this file.")
         require(bytes.size <= MaxEditableBytes) { "Files above 2 MiB are not enabled." }
@@ -1100,7 +1153,9 @@ class WorkspaceRepository(
     }
 
     private fun writeTextNow(entry: WorkspaceEntry, text: String): WorkspaceSnapshot {
-        require(!entry.isDirectory && isEditableText(entry)) { "Only reviewed text files can be written." }
+        require(!entry.isDirectory && isEditableWorkspaceText(entry)) {
+            "Only reviewed text files can be written."
+        }
         val uri = Uri.parse(entry.uri)
         val previous = context.contentResolver.openInputStream(uri)?.use(::readBoundedBytes)
             ?: error("Could not read the pre-write version.")
@@ -1191,17 +1246,6 @@ class WorkspaceRepository(
             .ifBlank { "Sovereign Workspace" }
     }.getOrDefault("Sovereign Workspace")
 
-    private fun isEditableText(entry: WorkspaceEntry): Boolean {
-        if (entry.mimeType.startsWith("text/")) return true
-        if (entry.mimeType in setOf("application/json", "application/xml", "application/javascript")) return true
-        val extension = entry.displayName.substringAfterLast('.', "").lowercase()
-        return extension in setOf(
-            "c", "cc", "cpp", "css", "go", "gradle", "h", "hpp", "html", "java", "js",
-            "json", "kt", "kts", "lua", "md", "py", "rs", "sh", "sql", "toml", "ts",
-            "tsx", "txt", "xml", "yaml", "yml",
-        )
-    }
-
     private fun splitParent(path: String): Pair<String, String> {
         val name = path.substringAfterLast('/')
         require(name.isNotBlank()) { "A file or directory name is required." }
@@ -1223,6 +1267,19 @@ class WorkspaceRepository(
         .joinToString("") { "%02x".format(it.toInt() and 0xff) }
 
     private fun displayPath(path: String): String = if (path.isBlank()) "." else path
+}
+
+/** Shared by provider I/O and UI transitions so renamed binary files never remain editable. */
+fun isEditableWorkspaceText(entry: WorkspaceEntry): Boolean {
+    if (entry.isDirectory) return false
+    if (entry.mimeType.startsWith("text/")) return true
+    if (entry.mimeType in setOf("application/json", "application/xml", "application/javascript")) return true
+    val extension = entry.displayName.substringAfterLast('.', "").lowercase()
+    return extension in setOf(
+        "c", "cc", "cpp", "css", "go", "gradle", "h", "hpp", "html", "java", "js",
+        "json", "kt", "kts", "lua", "md", "py", "rs", "sh", "sql", "toml", "ts",
+        "tsx", "txt", "xml", "yaml", "yml",
+    )
 }
 
 /** Pure validation shared by the visible editor and the agent controller. */

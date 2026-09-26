@@ -783,6 +783,18 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("creationOpen", view_model)
         self.assertIn('Text("NEW FILE")', ui)
         self.assertIn('"CREATE TEXT FILE"', ui)
+        self.assertIn("fun renameUserEntry", repository)
+        self.assertIn("DocumentsContract.renameDocument", repository)
+        self.assertIn("reviewedMatches.size == 1", repository)
+        self.assertIn("The reviewed entry changed before rename", repository)
+        self.assertIn("exactMatches.size == 1", repository)
+        self.assertIn("listedUri.authority == renamedUri.authority", repository)
+        self.assertIn("different document identity after renaming", repository)
+        self.assertIn("fun requestRename", view_model)
+        self.assertIn("fun confirmRename", view_model)
+        self.assertIn("isEditableWorkspaceText(renamed)", view_model)
+        self.assertIn("renamed type is not enabled for text editing", view_model)
+        self.assertIn('Text("RENAME"', ui)
 
     def test_workspace_write_grants_are_visible_nonempty_and_byte_verified(self):
         protocol = (SOURCE / "ControllerProtocol.kt").read_text(encoding="utf-8")

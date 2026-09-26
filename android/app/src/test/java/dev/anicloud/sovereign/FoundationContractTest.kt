@@ -255,7 +255,26 @@ class FoundationContractTest {
                 assertThrows(IllegalArgumentException::class.java) {
                     normalizeWorkspaceLeafName(invalid)
                 }
-            }
+        }
+    }
+
+    @Test
+    fun renameTypeChangesCannotLeaveBinaryEntriesInTheTextEditor() {
+        val text = WorkspaceEntry(
+            uri = "content://workspace/document/notes",
+            displayName = "notes.md",
+            mimeType = "text/markdown",
+            byteSize = 12L,
+            isDirectory = false,
+        )
+        assertTrue(isEditableWorkspaceText(text))
+        assertTrue(
+            isEditableWorkspaceText(
+                text.copy(displayName = "build.gradle", mimeType = "application/octet-stream"),
+            ),
+        )
+        assertFalse(isEditableWorkspaceText(text.copy(displayName = "image.png", mimeType = "image/png")))
+        assertFalse(isEditableWorkspaceText(text.copy(isDirectory = true)))
     }
 
     @Test

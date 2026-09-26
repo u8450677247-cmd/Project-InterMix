@@ -29,6 +29,8 @@ data class WorkspaceState(
     val newFolderName: String = "",
     val newFileOpen: Boolean = false,
     val newFileName: String = "",
+    val pendingRename: WorkspaceEntry? = null,
+    val renameName: String = "",
     val pendingTrash: WorkspaceEntry? = null,
     val lastTrash: WorkspaceTrashReceipt? = null,
     val busy: Boolean = false,
@@ -96,6 +98,10 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
             _state.update { it.copy(detail = "Create or cancel the pending workspace entry before navigating.") }
             return
         }
+        if (_state.value.pendingRename != null) {
+            _state.update { it.copy(detail = "Confirm or cancel the reviewed rename before navigating.") }
+            return
+        }
         if (_state.value.pendingTrash != null) {
             _state.update { it.copy(detail = "Confirm or cancel the reviewed trash request before navigating.") }
             return
@@ -146,6 +152,7 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
         val state = _state.value
         if (state.rootUri == null || state.currentUri == null || state.busy) return
         if (state.creationOpen) return
+        if (state.pendingRename != null) return
         if (state.pendingTrash != null || state.lastTrash != null) {
             _state.update {
                 it.copy(detail = "Finish the current trash review before creating a folder.")
@@ -206,6 +213,7 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
         val state = _state.value
         if (state.rootUri == null || state.currentUri == null || state.busy) return
         if (state.creationOpen) return
+        if (state.pendingRename != null) return
         if (state.pendingTrash != null || state.lastTrash != null) {
             _state.update {
                 it.copy(detail = "Finish the current trash review before creating a file.")
@@ -265,9 +273,90 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    fun requestRename(entry: WorkspaceEntry) {
+        val state = _state.value
+        if (state.rootUri == null || state.currentUri == null) return
+        if (state.busy || state.creationOpen || state.pendingRename != null) return
+        if (state.pendingTrash != null || state.lastTrash != null) {
+            _state.update { it.copy(detail = "Finish the current trash review before renaming an entry.") }
+            return
+        }
+        if (state.isDirty) {
+            _state.update { it.copy(detail = "Save or revert the current draft before renaming an entry.") }
+            return
+        }
+        if (entry.displayName.equals(".anicloud-trash", ignoreCase = true)) {
+            _state.update { it.copy(detail = "Recoverable project trash cannot be renamed.") }
+            return
+        }
+        _state.update {
+            it.copy(
+                pendingRename = entry,
+                renameName = entry.displayName,
+                detail = "Review the exact new name; nothing changes until RENAME is confirmed.",
+            )
+        }
+    }
+
+    fun updateRenameName(name: String) {
+        _state.update { it.copy(renameName = name.take(160)) }
+    }
+
+    fun cancelRename() {
+        _state.update {
+            it.copy(
+                pendingRename = null,
+                renameName = "",
+                detail = "Rename cancelled; no workspace entries changed.",
+            )
+        }
+    }
+
+    fun confirmRename() {
+        val state = _state.value
+        val root = state.rootUri?.let(Uri::parse) ?: return
+        val parent = state.currentUri?.let(Uri::parse) ?: return
+        val pending = state.pendingRename ?: return
+        if (state.busy || state.isDirty) return
+        viewModelScope.launch {
+            _state.update { it.copy(busy = true, detail = "Renaming and verifying ${pending.displayName}…") }
+            runCatching {
+                repository.renameUserEntry(root, parent, pending, state.renameName)
+            }.onSuccess { renamed ->
+                _state.update {
+                    val renamedSelection = it.selected?.uri == pending.uri
+                    val keepEditorOpen = renamedSelection && isEditableWorkspaceText(renamed)
+                    it.copy(
+                        selected = when {
+                            keepEditorOpen -> renamed
+                            renamedSelection -> null
+                            else -> it.selected
+                        },
+                        editorText = if (renamedSelection && !keepEditorOpen) "" else it.editorText,
+                        savedText = if (renamedSelection && !keepEditorOpen) "" else it.savedText,
+                        pendingRename = null,
+                        renameName = "",
+                        busy = false,
+                        detail = buildString {
+                            append("Renamed ${pending.displayName} to ${renamed.displayName} and verified the provider.")
+                            if (renamedSelection && !keepEditorOpen) {
+                                append(" The editor closed because the renamed type is not enabled for text editing.")
+                            }
+                        },
+                    )
+                }
+                refresh()
+            }.onFailure(::showFailure)
+        }
+    }
+
     fun returnToRoot() {
         if (_state.value.creationOpen) {
             _state.update { it.copy(detail = "Create or cancel the pending workspace entry before navigating.") }
+            return
+        }
+        if (_state.value.pendingRename != null) {
+            _state.update { it.copy(detail = "Confirm or cancel the reviewed rename before navigating.") }
             return
         }
         if (_state.value.pendingTrash != null) {
@@ -300,6 +389,10 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
         }
         if (state.newFileOpen) {
             cancelNewFile()
+            return
+        }
+        if (state.pendingRename != null) {
+            cancelRename()
             return
         }
         if (state.pendingTrash != null) {
@@ -340,6 +433,10 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
         if (state.busy) return
         if (state.creationOpen) {
             _state.update { it.copy(detail = "Create or cancel the pending workspace entry before reviewing trash.") }
+            return
+        }
+        if (state.pendingRename != null) {
+            _state.update { it.copy(detail = "Confirm or cancel the reviewed rename before reviewing trash.") }
             return
         }
         if (state.lastTrash != null) {

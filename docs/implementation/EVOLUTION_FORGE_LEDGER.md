@@ -464,12 +464,13 @@ Test:
 
 - `python -m unittest tests.test_android_foundation`: 48/48 PASS.
 - `python -m unittest discover -s tests -p 'test_android*.py' -v`: 56/56 PASS.
-- Added JVM contract cases for exact case/spelling preservation and rejection of blank, dot, traversal,
-  separator, and control-character leaf names; execution is pending branch CI.
+- JVM contract cases passed for exact case/spelling preservation and rejection of blank, dot, traversal,
+  separator, and control-character leaf names.
 - `python -m unittest discover -s tests -v`: 180 PASS; 5 environment-dependent Textual tests skipped.
 - `python -m compileall -q tests tools engine`: PASS.
 - `git diff --check`: PASS.
-- Focused Android/JUnit compilation and debug APK assembly: PENDING BRANCH CI.
+- GitHub Actions `android-foundation` run `36229771329`: PASS. Android/JUnit, Compose compilation,
+  debug APK assembly, provenance staging, and artifact retention all completed successfully.
 
 Regression check:
 
@@ -496,9 +497,84 @@ Patch Evolution Review:
   folder/file confirmation behavior consistent on phone and desktop.
 - Security/privacy impact: no new authority; creation stays inside the currently displayed SAF folder.
 
-Result: **LOCAL CONTRACTS PASS; ANDROID CI REQUIRED**
+Result: **KEEP; BRANCH CI PASS; DEVICE VERIFICATION REQUIRED**
 
 Next candidate:
 
-- Publish FILE-01 and consume its Android gate, then assess exact user-driven rename as the next bounded
-  file-management gap before moving to import or OLED work.
+- Add exact user-driven rename as the next bounded file-management gap; do not combine it with move or
+  overwrite behavior.
+
+## Patch FILE-02 — Reviewed exact workspace rename
+
+Objective:
+
+- Rename a reviewed file or folder in place from Workspace Lens while preventing path injection,
+  collision overwrite, provider identity ambiguity, and stale editable state.
+
+Verified before state:
+
+- Workspace Lens could now create folders and text files, edit/save text, and use recoverable trash, but
+  exposed no rename operation.
+- Android already granted the exact project tree; rename needs no new manifest or runtime permission.
+- FILE-01 passed Android/JUnit and debug APK assembly in Actions run `36229771329`.
+
+Change:
+
+- Add a per-entry `RENAME` review action with current name/path, editable exact leaf name, explicit
+  confirmation, cancellation, and Android-back cancellation.
+- Reuse the shared leaf validator, reserve `.anicloud-trash` case-insensitively, require a different
+  name, and reject any case-insensitive sibling collision before mutation.
+- Re-list the exact parent immediately before rename to prove the reviewed URI is still one unambiguous
+  direct child with the same exact name and file/directory type the user reviewed.
+- Call `DocumentsContract.renameDocument` once, then re-list the parent and require exactly one exact-name
+  result whose provider authority and document id match the returned URI and whose file/directory type is
+  unchanged.
+- Keep browser navigation, creation, rename, and trash reviews mutually exclusive; dirty editor content
+  must be saved or reverted first.
+- If the renamed selected file remains an enabled text/code type, preserve its clean editor buffer under
+  the new identity. If the new type is not editable text, close the editor visibly instead of leaving a
+  misleading writable surface.
+- Do not expose rename as a model/controller tool and do not add move, overwrite, or retry behavior.
+
+Test:
+
+- `python -m unittest tests.test_android_foundation`: 48/48 PASS.
+- Added JVM coverage for keeping recognized text/code types editable and rejecting directory/binary
+  entries after a rename; execution is pending branch CI.
+- `python -m unittest discover -s tests -p 'test_android*.py' -v`: 56/56 PASS.
+- `python -m unittest discover -s tests -v`: 180 PASS; 5 environment-dependent Textual tests skipped.
+- `python -m compileall -q tests tools engine`: PASS.
+- `git diff --check`: PASS.
+- Android/JUnit compilation, unit tests, debug APK assembly, and artifact staging: pending branch CI.
+
+Regression check:
+
+- No file bytes are written by rename and no target entry is deleted or replaced.
+- Existing creation, dirty-draft, snapshot-save, trash/undo, mission, shell, network, release, updater,
+  and SQLite behavior remains unchanged.
+- Scope remains the currently open parent URI beneath the persisted SAF tree.
+
+Known limitation:
+
+- Provider-specific case-only rename, returned-URI stability, and refresh timing require device testing.
+- If a provider changes document identity during rename, an older controller handle is allowed to retire
+  on exact lookup rather than being guessed onto the new URI; a fresh list registers the renamed entry.
+- Move across folders, arbitrary import, workspace search, and permanent deletion remain separate work.
+
+Patch Evolution Review:
+
+- Pros: closes a core file-management gap with explicit intent, collision safety, exact identity checks,
+  and no content mutation.
+- Cons: strict post-rename verification can report failure after a provider performed the rename but did
+  not expose the result synchronously; the UI then requires refresh and review rather than guessing.
+- Resource impact: two bounded direct-child listings plus one provider rename; no background work.
+- UX impact: phone/desktop share the same visible confirmation card, and binary extension changes cannot
+  strand a stale text editor.
+- Security/privacy impact: no new authority or external data flow; names remain single local leaves.
+
+Result: **LOCAL GATES PASS; ANDROID CI REQUIRED**
+
+Next candidate:
+
+- Publish FILE-02 and consume its Android gate, then inspect the smallest import foundation that can keep
+  explicit selection, bounded bytes, exact destination naming, and durable provenance.

@@ -2176,12 +2176,13 @@ private fun WorkspaceSurface(
         uri?.let(workspaceViewModel::attachRoot)
     }
     BackHandler(
-        enabled = !workSessionOpen && (state.creationOpen || state.canNavigateUp) &&
+        enabled = !workSessionOpen && (state.creationOpen || state.pendingRename != null || state.canNavigateUp) &&
             !state.busy && state.pendingTrash == null,
     ) {
         when {
             state.newFolderOpen -> workspaceViewModel.cancelNewFolder()
             state.newFileOpen -> workspaceViewModel.cancelNewFile()
+            state.pendingRename != null -> workspaceViewModel.cancelRename()
             else -> workspaceViewModel.navigateUp()
         }
     }
@@ -2217,12 +2218,14 @@ private fun WorkspaceSurface(
             OutlinedButton(
                 onClick = workspaceViewModel::requestNewFolder,
                 enabled = state.rootUri != null && !workSessionOpen && !state.busy &&
-                    !state.creationOpen && state.pendingTrash == null && state.lastTrash == null,
+                    !state.creationOpen && state.pendingRename == null &&
+                    state.pendingTrash == null && state.lastTrash == null,
             ) { Text("NEW FOLDER") }
             OutlinedButton(
                 onClick = workspaceViewModel::requestNewFile,
                 enabled = state.rootUri != null && !workSessionOpen && !state.busy &&
-                    !state.creationOpen && state.pendingTrash == null && state.lastTrash == null,
+                    !state.creationOpen && state.pendingRename == null &&
+                    state.pendingTrash == null && state.lastTrash == null,
             ) { Text("NEW FILE") }
             FluorescentChip(
                 selected = !workSessionOpen,
@@ -2337,6 +2340,52 @@ private fun WorkspaceSurface(
             }
         }
 
+        state.pendingRename?.let { pending ->
+            OutlinedCard(
+                border = BorderStroke(1.dp, SoftViolet.copy(alpha = 0.76f)),
+                colors = CardDefaults.outlinedCardColors(containerColor = Color.Transparent),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("RENAME ENTRY", color = SoftViolet, fontWeight = FontWeight.Bold)
+                    Text(
+                        "Current: ${pending.displayName} · Location: " +
+                            state.breadcrumb.ifBlank { state.rootLabel },
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    OutlinedTextField(
+                        value = state.renameName,
+                        onValueChange = workspaceViewModel::updateRenameName,
+                        label = { Text("EXACT NEW NAME") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = workspaceViewModel::confirmRename,
+                            enabled = state.renameName.trim().isNotBlank() &&
+                                state.renameName.trim() != pending.displayName && !state.busy,
+                        ) { Text("RENAME", fontWeight = FontWeight.Bold) }
+                        OutlinedButton(
+                            onClick = workspaceViewModel::cancelRename,
+                            enabled = !state.busy,
+                        ) { Text("CANCEL") }
+                    }
+                    Text(
+                        "Renames only this reviewed entry. Existing names are never overwritten, and " +
+                            "the document provider’s exact result is verified before success is shown.",
+                        color = ResonanceMint,
+                        fontSize = 10.sp,
+                    )
+                }
+            }
+        }
+
         state.pendingTrash?.let { pending ->
             OutlinedCard(
                 border = BorderStroke(1.dp, InterventionCoral.copy(alpha = 0.72f)),
@@ -2425,6 +2474,7 @@ private fun WorkspaceSurface(
                         WorkspaceBrowser(
                             state,
                             workspaceViewModel::open,
+                            workspaceViewModel::requestRename,
                             workspaceViewModel::requestTrash,
                             Modifier.width(300.dp),
                         )
@@ -2438,6 +2488,7 @@ private fun WorkspaceSurface(
                         WorkspaceBrowser(
                             state,
                             workspaceViewModel::open,
+                            workspaceViewModel::requestRename,
                             workspaceViewModel::requestTrash,
                             Modifier.weight(if (state.selected == null) 0.58f else 0.30f),
                         )
@@ -3151,6 +3202,7 @@ private fun answerModeRouteHint(mode: AnswerMode, cockpit: CockpitState): String
 private fun WorkspaceBrowser(
     state: WorkspaceState,
     onOpen: (WorkspaceEntry) -> Unit,
+    onRename: (WorkspaceEntry) -> Unit,
     onTrash: (WorkspaceEntry) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -3169,7 +3221,8 @@ private fun WorkspaceBrowser(
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                         TextButton(
                             onClick = { onOpen(entry) },
-                            enabled = !state.busy && !state.creationOpen && state.pendingTrash == null,
+                            enabled = !state.busy && !state.creationOpen &&
+                                state.pendingRename == null && state.pendingTrash == null,
                             modifier = Modifier.weight(1f),
                         ) {
                             Text(
@@ -3180,11 +3233,23 @@ private fun WorkspaceBrowser(
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         }
-                        if (state.currentLabel != ".anicloud-trash" && entry.displayName != ".anicloud-trash") {
+                        if (
+                            !state.currentLabel.equals(".anicloud-trash", ignoreCase = true) &&
+                            !entry.displayName.equals(".anicloud-trash", ignoreCase = true)
+                        ) {
+                            TextButton(
+                                onClick = { onRename(entry) },
+                                enabled = !state.busy && !state.creationOpen &&
+                                    state.pendingRename == null && state.pendingTrash == null &&
+                                    state.lastTrash == null,
+                            ) {
+                                Text("RENAME", color = SoftViolet, fontSize = 9.sp)
+                            }
                             TextButton(
                                 onClick = { onTrash(entry) },
                                 enabled = !state.busy && !state.creationOpen &&
-                                    state.pendingTrash == null && state.lastTrash == null,
+                                    state.pendingRename == null && state.pendingTrash == null &&
+                                    state.lastTrash == null,
                             ) {
                                 Text("TRASH", color = InterventionCoral, fontSize = 9.sp)
                             }
