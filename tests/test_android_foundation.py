@@ -379,6 +379,7 @@ class AndroidFoundationTests(unittest.TestCase):
         view_model = (SOURCE / "SovereignViewModel.kt").read_text(
             encoding="utf-8"
         )
+        ui = (SOURCE / "ui/SovereignApp.kt").read_text(encoding="utf-8")
 
         self.assertIn("data class ExecutionGrant", grant)
         self.assertIn("object ExecutionGrantPolicy", grant)
@@ -391,6 +392,7 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("offlineGrantedCommand", bridge)
         self.assertIn("memoryMatrix.queueGrantedExecutionAction", view_model)
         self.assertIn('arguments.equals("grant revoke"', view_model)
+        self.assertIn("BOUNDED GRANT · ${pending.grantId} · AUTO-ADMITTED", ui)
 
     def test_autonomy_runtime_schema_executes_on_stock_sqlite(self):
         repository = (SOURCE / "MemoryMatrixRepository.kt").read_text(encoding="utf-8")

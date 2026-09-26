@@ -3396,8 +3396,8 @@ private fun AgentSurface(cockpit: CockpitState, actions: CockpitActions) {
                 StatusCard(
                     "EXECUTION QUEUE",
                     "No pending commands",
-                    "Sovereign Core may prepare run, test, build, or dependency plans. " +
-                        "Every exact command waits here for approval.",
+                    "Sovereign Core may prepare run, test, build, lint, or dependency plans. " +
+                        "Commands outside an active bounded grant wait here for approval.",
                     ResonanceMint,
                 )
             }
@@ -3452,7 +3452,8 @@ private fun AgentSurface(cockpit: CockpitState, actions: CockpitActions) {
                     "Runs in bounded, restartable cycles",
                     "Relevant Matrix context guides planning without granting authority",
                     "Writes create versioned snapshots",
-                    "Scripts and dependency changes require exact command approval",
+                    "Only fixed offline grant commands may auto-dispatch",
+                    "Other scripts and every dependency change require exact approval",
                     "Dependency plans declare packages and network use",
                     "Deletion remains unavailable in this build",
                     "External actions require batch preview and approval",
@@ -3472,7 +3473,12 @@ private fun PendingExecutionCard(
     actions: CockpitActions,
 ) {
     val running = pending.status in setOf("running", "cancel_requested")
-    val accent = if (running) HorizonCyan else WaitingAmber
+    val granted = pending.grantId.isNotBlank()
+    val accent = when {
+        running -> HorizonCyan
+        granted -> ResonanceMint
+        else -> WaitingAmber
+    }
     val resolvedWorkdir = when {
         bridgeRoot.isBlank() -> pending.workdir
         pending.workdir == "." -> bridgeRoot
@@ -3513,6 +3519,15 @@ private fun PendingExecutionCard(
                     fontSize = 10.sp,
                 )
             }
+            if (granted) {
+                Text(
+                    "BOUNDED GRANT · ${pending.grantId} · AUTO-ADMITTED",
+                    color = ResonanceMint,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.46f),
                 shape = RoundedCornerShape(8.dp),
@@ -3536,6 +3551,8 @@ private fun PendingExecutionCard(
             Text(
                 if (pending.networkRequired) {
                     "NETWORK · REQUIRED AND INCLUDED IN THIS APPROVAL"
+                } else if (granted) {
+                    "NETWORK · DENIED BY EXECUTION GRANT POLICY"
                 } else {
                     "NETWORK · NOT DECLARED"
                 },
@@ -3560,7 +3577,7 @@ private fun PendingExecutionCard(
                         Button(
                             onClick = { actions.onApproveExecutionAction(pending.id) },
                             enabled = bridgeReady && !anotherActionBusy,
-                        ) { Text("APPROVE & RUN") }
+                        ) { Text(if (granted) "RUN GRANTED" else "APPROVE & RUN") }
                         OutlinedButton(
                             onClick = { actions.onDenyExecutionAction(pending.id) },
                             enabled = !anotherActionBusy,
