@@ -236,10 +236,11 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("LegacyHistoryName.migrated", repository)
         self.assertIn("memoryMatrix.loadMessages()", view_model)
         self.assertIn("memoryMatrix.recallContext", view_model)
-        self.assertIn("MatrixSchemaVersion = 7", repository)
+        self.assertIn("MatrixSchemaVersion = 8", repository)
         self.assertIn("CREATE TABLE IF NOT EXISTS context_windows", repository)
         self.assertIn("CREATE TABLE IF NOT EXISTS workspace_artifacts", repository)
         self.assertIn("if (oldVersion < 7) installWorkspaceArtifactRegistry(db)", repository)
+        self.assertIn("if (oldVersion < 8) installArtifactGraph(db)", repository)
         self.assertIn("undoLatestProfileChange", repository)
 
     def test_resonance_is_durable_scoped_bounded_and_user_controllable(self):
@@ -424,7 +425,7 @@ class AndroidFoundationTests(unittest.TestCase):
         repository = (SOURCE / "MemoryMatrixRepository.kt").read_text(encoding="utf-8")
         install_block = repository.split(
             "private fun installWorkspaceArtifactRegistry(db: SQLiteDatabase)", maxsplit=1
-        )[1].split("private fun installFts(", maxsplit=1)[0]
+        )[1].split("private fun installArtifactGraph(", maxsplit=1)[0]
         table_statements = re.findall(
             r'db\.execSQL\(\s*"""(.*?)"""\.trimIndent\(\),\s*\)',
             install_block,
@@ -455,6 +456,65 @@ class AndroidFoundationTests(unittest.TestCase):
                     "INSERT INTO workspace_artifacts VALUES(?,?,?,?,?,?,?,?,?,?)",
                     ("WA-FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",) + row[1:],
                 )
+        finally:
+            connection.close()
+
+    def test_artifact_graph_schema_backfills_stable_workspace_identity(self):
+        repository = (SOURCE / "MemoryMatrixRepository.kt").read_text(encoding="utf-8")
+        workspace_block = repository.split(
+            "private fun installWorkspaceArtifactRegistry(db: SQLiteDatabase)", maxsplit=1
+        )[1].split("private fun installArtifactGraph(", maxsplit=1)[0]
+        workspace_statement = re.findall(
+            r'db\.execSQL\(\s*"""(.*?)"""\.trimIndent\(\),\s*\)',
+            workspace_block,
+            flags=re.DOTALL,
+        )[0]
+        graph_block = repository.split(
+            "private fun installArtifactGraph(db: SQLiteDatabase)", maxsplit=1
+        )[1].split("private fun installFts(", maxsplit=1)[0]
+        graph_statements = re.findall(
+            r'db\.execSQL\(\s*"""(.*?)"""\.trimIndent\(\),\s*\)',
+            graph_block,
+            flags=re.DOTALL,
+        )
+        self.assertEqual(len(graph_statements), 6)
+
+        connection = sqlite3.connect(":memory:")
+        try:
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.execute(textwrap.dedent(workspace_statement).strip())
+            artifact_id = "WA-0123456789ABCDEF0123456789ABCDEF"
+            document_uri = "content://tree/root/document/one"
+            connection.execute(
+                "INSERT INTO workspace_artifacts VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (
+                    artifact_id,
+                    "content://tree/root",
+                    document_uri,
+                    "applications/letter.md",
+                    "letter.md",
+                    0,
+                    "a" * 64,
+                    1,
+                    "2026-09-26T00:00:00Z",
+                    "2026-09-26T00:00:00Z",
+                ),
+            )
+            for statement in graph_statements:
+                connection.execute(textwrap.dedent(statement).strip())
+
+            node = connection.execute(
+                "SELECT artifact_id,logical_type,current_version FROM artifact_nodes"
+            ).fetchone()
+            version = connection.execute(
+                "SELECT artifact_id,version,content_sha256 FROM artifact_versions"
+            ).fetchone()
+            edge = connection.execute(
+                "SELECT relation,target_reference FROM artifact_edges"
+            ).fetchone()
+            self.assertEqual(node, (artifact_id, "workspace_file", 1))
+            self.assertEqual(version, (artifact_id, 1, "a" * 64))
+            self.assertEqual(edge, ("STORED_AS", document_uri))
         finally:
             connection.close()
 

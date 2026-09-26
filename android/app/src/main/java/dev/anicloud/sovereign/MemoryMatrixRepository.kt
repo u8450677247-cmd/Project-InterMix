@@ -15,7 +15,7 @@ import java.util.Locale
 import java.util.UUID
 
 private const val MatrixDatabaseName = "sovereign_memory_v1.db"
-private const val MatrixSchemaVersion = 7
+private const val MatrixSchemaVersion = 8
 private const val LegacyHistoryName = "conversation_history_v1.json"
 private const val MaxStoredMessageCharacters = 32 * 1024
 private const val RecentConversationCharacterBudget = 4_096
@@ -184,6 +184,9 @@ class MemoryMatrixRepository(private val context: Context) :
             "memories",
             "project_events",
             "workspace_artifacts",
+            "artifact_nodes",
+            "artifact_versions",
+            "artifact_edges",
             "resonance_profile",
             "resonance_trait",
         )
@@ -312,6 +315,7 @@ class MemoryMatrixRepository(private val context: Context) :
         installInteractionProfile(db)
         installResonance(db)
         installWorkspaceArtifactRegistry(db)
+        installArtifactGraph(db)
         installFts(db)
         ensureSession(db)
     }
@@ -323,6 +327,7 @@ class MemoryMatrixRepository(private val context: Context) :
         if (oldVersion < 5) installContextLedger(db)
         if (oldVersion < 6) installResonance(db)
         if (oldVersion < 7) installWorkspaceArtifactRegistry(db)
+        if (oldVersion < 8) installArtifactGraph(db)
     }
 
     @Synchronized
@@ -726,6 +731,25 @@ class MemoryMatrixRepository(private val context: Context) :
             updatedAt = now(),
             identity = identity,
         )
+        result.artifactId
+            ?.takeIf { succeeded && isValidWorkspaceArtifactId(it) }
+            ?.let { artifactId ->
+                val taskId = proposal.taskId.takeIf(String::isNotBlank)
+                    ?: current.missionManifest?.currentTaskId.orEmpty()
+                val logicalType = proposal.artifactType.takeIf(String::isNotBlank) ?: when (proposal.kind) {
+                    WorkspaceActionKind.CreateDirectory,
+                    WorkspaceActionKind.ListFiles,
+                    -> "directory"
+                    else -> "workspace_file"
+                }
+                bindWorkspaceArtifactProvenance(
+                    artifactId = artifactId,
+                    taskId = taskId,
+                    logicalType = logicalType,
+                    displayName = proposal.displayName,
+                    createdByRunId = current.executionLedger?.currentRunId.orEmpty(),
+                )
+            }
         persistAgentMission(next)
         updateActiveSessionTask(next)
         return next
@@ -835,6 +859,17 @@ class MemoryMatrixRepository(private val context: Context) :
     ): AgentMissionCheckpoint {
         val current = activeAgentMission() ?: error("No long-form mission is active.")
         val next = MissionProgressReducer.recordCheckpoint(current, proposal, now())
+        val checkpointArtifacts = if (proposal.kind == MissionCheckpointKind.TaskComplete) {
+            current.missionManifest?.task(proposal.taskId)?.artifactIds.orEmpty()
+        } else {
+            proposal.artifactIds
+        }
+        if (checkpointArtifacts.isNotEmpty()) {
+            verifyWorkspaceArtifacts(
+                artifactIds = checkpointArtifacts,
+                checkpointId = "CP-${next.logicalStepsCompleted.toString().padStart(6, '0')}",
+            )
+        }
         persistAgentMission(next)
         updateActiveSessionTask(next)
         return next
@@ -2324,6 +2359,13 @@ class MemoryMatrixRepository(private val context: Context) :
         val artifactId = existingId ?: "WA-" + UUID.randomUUID().toString()
             .replace("-", "")
             .uppercase(Locale.ROOT)
+        val replacedArtifactIds = db.rawQuery(
+            "SELECT artifact_id FROM workspace_artifacts " +
+                "WHERE root_uri=? AND canonical_path=? AND document_uri<>? AND active=1",
+            arrayOf(root, path, document),
+        ).use { cursor ->
+            buildList { while (cursor.moveToNext()) add(cursor.getString(0)) }
+        }
 
         db.beginTransaction()
         try {
@@ -2354,6 +2396,35 @@ class MemoryMatrixRepository(private val context: Context) :
                     values,
                     "artifact_id=? AND root_uri=?",
                     arrayOf(artifactId, root),
+                )
+            }
+            observeArtifactGraph(
+                db = db,
+                artifactId = artifactId,
+                storageReference = document,
+                displayName = name,
+                logicalType = if (isDirectory) "directory" else "workspace_file",
+                contentSha256 = effectiveHash,
+                timestamp = timestamp,
+            )
+            replacedArtifactIds.forEach { replacedId ->
+                db.execSQL(
+                    "UPDATE artifact_nodes SET status=?,updated_at=? WHERE artifact_id=?",
+                    arrayOf(ArtifactStatus.Superseded.name, timestamp, replacedId),
+                )
+                db.execSQL(
+                    "UPDATE artifact_versions SET status=? WHERE artifact_id=? AND version=" +
+                        "(SELECT current_version FROM artifact_nodes WHERE artifact_id=?)",
+                    arrayOf(ArtifactStatus.Superseded.name, replacedId, replacedId),
+                )
+                insertArtifactEdge(
+                    db,
+                    ArtifactEdge(
+                        sourceArtifactId = artifactId,
+                        relation = ArtifactRelation.REPLACES,
+                        targetArtifactId = replacedId,
+                        createdAt = timestamp,
+                    ),
                 )
             }
             db.setTransactionSuccessful()
@@ -2456,10 +2527,226 @@ class MemoryMatrixRepository(private val context: Context) :
 
     @Synchronized
     override fun retireWorkspaceArtifact(rootUri: String, artifactId: String) {
-        writableDatabase.execSQL(
-            "UPDATE workspace_artifacts SET active=0,updated_at=? WHERE root_uri=? AND artifact_id=?",
-            arrayOf(now(), rootUri.trim(), normalizeWorkspaceArtifactId(artifactId)),
-        )
+        val exactId = normalizeWorkspaceArtifactId(artifactId)
+        val timestamp = now()
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.execSQL(
+                "UPDATE workspace_artifacts SET active=0,updated_at=? WHERE root_uri=? AND artifact_id=?",
+                arrayOf(timestamp, rootUri.trim(), exactId),
+            )
+            db.execSQL(
+                "UPDATE artifact_nodes SET status=?,updated_at=? WHERE artifact_id=?",
+                arrayOf(ArtifactStatus.Superseded.name, timestamp, exactId),
+            )
+            db.execSQL(
+                "UPDATE artifact_versions SET status=? WHERE artifact_id=? AND version=" +
+                    "(SELECT current_version FROM artifact_nodes WHERE artifact_id=?)",
+                arrayOf(ArtifactStatus.Superseded.name, exactId, exactId),
+            )
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    @Synchronized
+    override fun bindWorkspaceArtifactProvenance(
+        artifactId: String,
+        taskId: String,
+        logicalType: String,
+        displayName: String,
+        createdByRunId: String,
+    ): ArtifactNode {
+        val exactId = normalizeWorkspaceArtifactId(artifactId)
+        val exactTask = taskId.trim().also {
+            require(it.isBlank() || Regex("^TASK-[0-9]{3}$").matches(it)) {
+                "Artifact provenance task identity is invalid."
+            }
+        }
+        val type = logicalType.trim().lowercase(Locale.ROOT).also {
+            require(Regex("^[a-z][a-z0-9_-]{0,63}$").matches(it)) {
+                "Artifact provenance logical type is invalid."
+            }
+        }
+        val runId = createdByRunId.trim().also {
+            require(it.isBlank() || Regex("^RUN-[0-9]{8}$").matches(it)) {
+                "Artifact provenance run identity is invalid."
+            }
+        }
+        val timestamp = now()
+        val db = writableDatabase
+        val existingName = db.rawQuery(
+            "SELECT display_name FROM artifact_nodes WHERE artifact_id=? LIMIT 1",
+            arrayOf(exactId),
+        ).use { cursor ->
+            require(cursor.moveToFirst()) { "Unknown artifact graph identity $exactId." }
+            cursor.getString(0)
+        }
+        val name = displayName.replace("\u0000", "").trim().take(255).ifBlank { existingName }
+        val values = ContentValues().apply {
+            put("task_id", exactTask)
+            put("logical_type", type)
+            put("display_name", name)
+            if (runId.isNotBlank()) put("created_by_run_id", runId)
+            put("updated_at", timestamp)
+        }
+        db.beginTransaction()
+        try {
+            require(db.update("artifact_nodes", values, "artifact_id=?", arrayOf(exactId)) == 1) {
+                "Artifact provenance update lost its logical identity."
+            }
+            if (runId.isNotBlank()) {
+                db.execSQL(
+                    "UPDATE artifact_versions SET created_by_run_id=? WHERE artifact_id=? AND version=" +
+                        "(SELECT current_version FROM artifact_nodes WHERE artifact_id=?)",
+                    arrayOf(runId, exactId, exactId),
+                )
+            }
+            if (exactTask.isNotBlank()) {
+                insertArtifactEdge(
+                    db,
+                    ArtifactEdge(
+                        sourceArtifactId = exactId,
+                        relation = ArtifactRelation.BELONGS_TO,
+                        targetReference = exactTask,
+                        createdByRunId = runId,
+                        createdAt = timestamp,
+                    ),
+                )
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return requireNotNull(artifactGraphRecord(exactId)).node
+    }
+
+    @Synchronized
+    override fun verifyWorkspaceArtifacts(
+        artifactIds: List<String>,
+        checkpointId: String,
+    ) {
+        val ids = artifactIds.map(::normalizeWorkspaceArtifactId).distinct()
+        require(ids.isNotEmpty()) { "A verified checkpoint requires artifact evidence." }
+        val exactCheckpoint = checkpointId.trim().also {
+            require(Regex("^CP-[0-9]{6}$").matches(it)) { "Artifact checkpoint identity is invalid." }
+        }
+        val timestamp = now()
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            ids.forEach { artifactId ->
+                val changed = db.update(
+                    "artifact_nodes",
+                    ContentValues().apply {
+                        put("status", ArtifactStatus.Verified.name)
+                        put("verified_checkpoint_id", exactCheckpoint)
+                        put("updated_at", timestamp)
+                    },
+                    "artifact_id=?",
+                    arrayOf(artifactId),
+                )
+                require(changed == 1) { "Unknown artifact graph identity $artifactId." }
+                db.execSQL(
+                    "UPDATE artifact_versions SET status=?,verified_checkpoint_id=? " +
+                        "WHERE artifact_id=? AND version=" +
+                        "(SELECT current_version FROM artifact_nodes WHERE artifact_id=?)",
+                    arrayOf(ArtifactStatus.Verified.name, exactCheckpoint, artifactId, artifactId),
+                )
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    @Synchronized
+    override fun artifactGraphRecord(artifactId: String): ArtifactGraphRecord? {
+        val exactId = normalizeWorkspaceArtifactId(artifactId)
+        val node = readableDatabase.rawQuery(
+            """
+            SELECT n.artifact_id,n.task_id,n.logical_type,n.display_name,n.status,n.current_version,
+                   v.content_sha256,v.storage_reference,n.created_by_run_id,
+                   n.verified_checkpoint_id,n.created_at,n.updated_at
+            FROM artifact_nodes n
+            JOIN artifact_versions v ON v.artifact_id=n.artifact_id AND v.version=n.current_version
+            WHERE n.artifact_id=? LIMIT 1
+            """.trimIndent(),
+            arrayOf(exactId),
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) null else ArtifactNode(
+                artifactId = cursor.getString(0),
+                taskId = cursor.getString(1),
+                logicalType = cursor.getString(2),
+                displayName = cursor.getString(3),
+                status = ArtifactStatus.valueOf(cursor.getString(4)),
+                currentVersion = cursor.getInt(5),
+                contentSha256 = if (cursor.isNull(6)) null else cursor.getString(6),
+                storageReference = cursor.getString(7),
+                createdByRunId = cursor.getString(8),
+                verifiedCheckpointId = cursor.getString(9),
+                createdAt = cursor.getString(10),
+                updatedAt = cursor.getString(11),
+            )
+        } ?: return null
+        val versions = readableDatabase.rawQuery(
+            """
+            SELECT artifact_id,version,storage_reference,content_sha256,status,created_by_run_id,
+                   verified_checkpoint_id,supersedes_version,created_at
+            FROM artifact_versions WHERE artifact_id=? ORDER BY version
+            """.trimIndent(),
+            arrayOf(exactId),
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    add(ArtifactVersion(
+                        artifactId = cursor.getString(0),
+                        version = cursor.getInt(1),
+                        storageReference = cursor.getString(2),
+                        contentSha256 = if (cursor.isNull(3)) null else cursor.getString(3),
+                        status = ArtifactStatus.valueOf(cursor.getString(4)),
+                        createdByRunId = cursor.getString(5),
+                        verifiedCheckpointId = cursor.getString(6),
+                        supersedesVersion = if (cursor.isNull(7)) null else cursor.getInt(7),
+                        createdAt = cursor.getString(8),
+                    ))
+                }
+            }
+        }
+        val edges = readableDatabase.rawQuery(
+            """
+            SELECT source_artifact_id,relation,target_artifact_id,target_reference,
+                   created_by_run_id,created_at
+            FROM artifact_edges WHERE source_artifact_id=? ORDER BY id
+            """.trimIndent(),
+            arrayOf(exactId),
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    add(ArtifactEdge(
+                        sourceArtifactId = cursor.getString(0),
+                        relation = ArtifactRelation.valueOf(cursor.getString(1)),
+                        targetArtifactId = cursor.getString(2),
+                        targetReference = cursor.getString(3),
+                        createdByRunId = cursor.getString(4),
+                        createdAt = cursor.getString(5),
+                    ))
+                }
+            }
+        }
+        return ArtifactGraphRecord(node, versions, edges)
+    }
+
+    @Synchronized
+    override fun addArtifactEdge(edge: ArtifactEdge) {
+        val db = writableDatabase
+        require(artifactNodeExists(db, edge.sourceArtifactId)) { "Artifact edge source is unknown." }
+        if (edge.targetArtifactId.isNotBlank()) {
+            require(artifactNodeExists(db, edge.targetArtifactId)) { "Artifact edge target is unknown." }
+        }
+        insertArtifactEdge(db, edge.copy(createdAt = edge.createdAt.ifBlank { now() }))
     }
 
     /**
@@ -3317,6 +3604,173 @@ class MemoryMatrixRepository(private val context: Context) :
         InteractionTrait.entries.all { left.valueOf(it) == right.valueOf(it) } &&
             left.automaticAdaptation == right.automaticAdaptation
 
+    private fun observeArtifactGraph(
+        db: SQLiteDatabase,
+        artifactId: String,
+        storageReference: String,
+        displayName: String,
+        logicalType: String,
+        contentSha256: String?,
+        timestamp: String,
+    ) {
+        val existing = db.rawQuery(
+            "SELECT current_version,status,logical_type,created_by_run_id,created_at " +
+                "FROM artifact_nodes WHERE artifact_id=? LIMIT 1",
+            arrayOf(artifactId),
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) null else listOf(
+                cursor.getInt(0).toString(),
+                cursor.getString(1),
+                cursor.getString(2),
+                cursor.getString(3),
+                cursor.getString(4),
+            )
+        }
+        if (existing == null) {
+            db.insertOrThrow(
+                "artifact_nodes",
+                null,
+                ContentValues().apply {
+                    put("artifact_id", artifactId)
+                    put("task_id", "")
+                    put("logical_type", logicalType)
+                    put("display_name", displayName)
+                    put("status", ArtifactStatus.Draft.name)
+                    put("current_version", 1)
+                    put("created_by_run_id", "")
+                    put("verified_checkpoint_id", "")
+                    put("created_at", timestamp)
+                    put("updated_at", timestamp)
+                },
+            )
+            db.insertOrThrow(
+                "artifact_versions",
+                null,
+                artifactVersionValues(
+                    artifactId = artifactId,
+                    version = 1,
+                    storageReference = storageReference,
+                    contentSha256 = contentSha256,
+                    status = ArtifactStatus.Draft,
+                    createdByRunId = "",
+                    verifiedCheckpointId = "",
+                    supersedesVersion = null,
+                    timestamp = timestamp,
+                ),
+            )
+        } else {
+            val currentVersion = existing[0].toInt()
+            val currentStatus = ArtifactStatus.valueOf(existing[1])
+            val currentHash = db.rawQuery(
+                "SELECT content_sha256 FROM artifact_versions WHERE artifact_id=? AND version=? LIMIT 1",
+                arrayOf(artifactId, currentVersion.toString()),
+            ).use { cursor ->
+                if (!cursor.moveToFirst() || cursor.isNull(0)) null else cursor.getString(0)
+            }
+            val versionDecision = decideArtifactVersion(currentVersion, currentHash, contentSha256)
+            val createsVersion = versionDecision.createsVersion
+            val nextVersion = versionDecision.version
+            if (createsVersion) {
+                db.execSQL(
+                    "UPDATE artifact_versions SET status=? WHERE artifact_id=? AND version=?",
+                    arrayOf(ArtifactStatus.Superseded.name, artifactId, currentVersion),
+                )
+                db.insertOrThrow(
+                    "artifact_versions",
+                    null,
+                    artifactVersionValues(
+                        artifactId = artifactId,
+                        version = nextVersion,
+                        storageReference = storageReference,
+                        contentSha256 = contentSha256,
+                        status = ArtifactStatus.Draft,
+                        createdByRunId = existing[3],
+                        verifiedCheckpointId = "",
+                        supersedesVersion = currentVersion,
+                        timestamp = timestamp,
+                    ),
+                )
+            } else {
+                val versionValues = ContentValues().apply {
+                    put("storage_reference", storageReference)
+                    if (contentSha256 == null) putNull("content_sha256") else put("content_sha256", contentSha256)
+                }
+                db.update(
+                    "artifact_versions",
+                    versionValues,
+                    "artifact_id=? AND version=?",
+                    arrayOf(artifactId, currentVersion.toString()),
+                )
+            }
+            db.update(
+                "artifact_nodes",
+                ContentValues().apply {
+                    put("display_name", displayName)
+                    put("current_version", nextVersion)
+                    put("status", if (createsVersion) ArtifactStatus.Draft.name else currentStatus.name)
+                    if (createsVersion) put("verified_checkpoint_id", "")
+                    put("updated_at", timestamp)
+                },
+                "artifact_id=?",
+                arrayOf(artifactId),
+            )
+        }
+        insertArtifactEdge(
+            db,
+            ArtifactEdge(
+                sourceArtifactId = artifactId,
+                relation = ArtifactRelation.STORED_AS,
+                targetReference = storageReference,
+                createdAt = timestamp,
+            ),
+        )
+    }
+
+    private fun artifactVersionValues(
+        artifactId: String,
+        version: Int,
+        storageReference: String,
+        contentSha256: String?,
+        status: ArtifactStatus,
+        createdByRunId: String,
+        verifiedCheckpointId: String,
+        supersedesVersion: Int?,
+        timestamp: String,
+    ): ContentValues = ContentValues().apply {
+        put("artifact_id", artifactId)
+        put("version", version)
+        put("storage_reference", storageReference)
+        if (contentSha256 == null) putNull("content_sha256") else put("content_sha256", contentSha256)
+        put("status", status.name)
+        put("created_by_run_id", createdByRunId)
+        put("verified_checkpoint_id", verifiedCheckpointId)
+        if (supersedesVersion == null) putNull("supersedes_version") else {
+            put("supersedes_version", supersedesVersion)
+        }
+        put("created_at", timestamp)
+    }
+
+    private fun artifactNodeExists(db: SQLiteDatabase, artifactId: String): Boolean = db.rawQuery(
+        "SELECT 1 FROM artifact_nodes WHERE artifact_id=? LIMIT 1",
+        arrayOf(normalizeWorkspaceArtifactId(artifactId)),
+    ).use { it.moveToFirst() }
+
+    private fun insertArtifactEdge(db: SQLiteDatabase, edge: ArtifactEdge) {
+        db.insertWithOnConflict(
+            "artifact_edges",
+            null,
+            ContentValues().apply {
+                put("source_artifact_id", edge.sourceArtifactId)
+                put("relation", edge.relation.name)
+                put("target_artifact_id", edge.targetArtifactId)
+                put("target_reference", edge.targetReference)
+                put("created_by_run_id", edge.createdByRunId)
+                put("created_at", edge.createdAt.ifBlank { now() })
+            },
+            SQLiteDatabase.CONFLICT_IGNORE,
+        )
+    }
+
     private fun installWorkspaceArtifactRegistry(db: SQLiteDatabase) {
         db.execSQL(
             """
@@ -3338,6 +3792,94 @@ class MemoryMatrixRepository(private val context: Context) :
         db.execSQL(
             "CREATE INDEX IF NOT EXISTS idx_workspace_artifacts_path " +
                 "ON workspace_artifacts(root_uri, active, canonical_path)",
+        )
+    }
+
+    private fun installArtifactGraph(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS artifact_nodes (
+                artifact_id TEXT PRIMARY KEY REFERENCES workspace_artifacts(artifact_id) ON DELETE CASCADE,
+                task_id TEXT NOT NULL DEFAULT '',
+                logical_type TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('Draft','Verified','Approved','Superseded')),
+                current_version INTEGER NOT NULL CHECK(current_version > 0),
+                created_by_run_id TEXT NOT NULL DEFAULT '',
+                verified_checkpoint_id TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS artifact_versions (
+                artifact_id TEXT NOT NULL REFERENCES artifact_nodes(artifact_id) ON DELETE CASCADE,
+                version INTEGER NOT NULL CHECK(version > 0),
+                storage_reference TEXT NOT NULL,
+                content_sha256 TEXT,
+                status TEXT NOT NULL CHECK(status IN ('Draft','Verified','Approved','Superseded')),
+                created_by_run_id TEXT NOT NULL DEFAULT '',
+                verified_checkpoint_id TEXT NOT NULL DEFAULT '',
+                supersedes_version INTEGER,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY(artifact_id, version)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS artifact_edges (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_artifact_id TEXT NOT NULL REFERENCES artifact_nodes(artifact_id) ON DELETE CASCADE,
+                relation TEXT NOT NULL CHECK(relation IN ('BELONGS_TO','DERIVED_FROM','SUPPORTS','REFERENCES','REPLACES','STORED_AS')),
+                target_artifact_id TEXT NOT NULL DEFAULT '',
+                target_reference TEXT NOT NULL DEFAULT '',
+                created_by_run_id TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                CHECK((target_artifact_id <> '') != (target_reference <> '')),
+                UNIQUE(source_artifact_id, relation, target_artifact_id, target_reference)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            INSERT OR IGNORE INTO artifact_nodes(
+                artifact_id,task_id,logical_type,display_name,status,current_version,
+                created_by_run_id,verified_checkpoint_id,created_at,updated_at
+            )
+            SELECT artifact_id,'',CASE WHEN is_directory=1 THEN 'directory' ELSE 'workspace_file' END,
+                   display_name,'Draft',1,'','',first_seen_at,updated_at
+            FROM workspace_artifacts
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            INSERT OR IGNORE INTO artifact_versions(
+                artifact_id,version,storage_reference,content_sha256,status,
+                created_by_run_id,verified_checkpoint_id,supersedes_version,created_at
+            )
+            SELECT artifact_id,1,document_uri,content_sha256,'Draft','','',NULL,first_seen_at
+            FROM workspace_artifacts
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            INSERT OR IGNORE INTO artifact_edges(
+                source_artifact_id,relation,target_artifact_id,target_reference,created_by_run_id,created_at
+            )
+            SELECT artifact_id,'STORED_AS','',document_uri,'',first_seen_at
+            FROM workspace_artifacts
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS idx_artifact_nodes_task " +
+                "ON artifact_nodes(task_id, status, updated_at)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS idx_artifact_edges_target " +
+                "ON artifact_edges(target_artifact_id, relation)",
         )
     }
 

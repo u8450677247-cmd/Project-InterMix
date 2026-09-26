@@ -34,6 +34,141 @@ data class WorkspaceArtifactIdentity(
     }
 }
 
+enum class ArtifactStatus {
+    Draft,
+    Verified,
+    Approved,
+    Superseded,
+}
+
+enum class ArtifactRelation {
+    BELONGS_TO,
+    DERIVED_FROM,
+    SUPPORTS,
+    REFERENCES,
+    REPLACES,
+    STORED_AS,
+}
+
+data class ArtifactVersion(
+    val artifactId: String,
+    val version: Int,
+    val storageReference: String,
+    val contentSha256: String? = null,
+    val status: ArtifactStatus = ArtifactStatus.Draft,
+    val createdByRunId: String = "",
+    val verifiedCheckpointId: String = "",
+    val supersedesVersion: Int? = null,
+    val createdAt: String = "",
+) {
+    init {
+        require(isValidWorkspaceArtifactId(artifactId)) { "Artifact version identity is invalid." }
+        require(version > 0) { "Artifact versions are one-based." }
+        require(storageReference.isNotBlank()) { "Artifact version storage reference is required." }
+        require(contentSha256 == null || Regex("^[0-9a-f]{64}$").matches(contentSha256)) {
+            "Artifact version content hash is invalid."
+        }
+        require(createdByRunId.isBlank() || Regex("^RUN-[0-9]{8}$").matches(createdByRunId)) {
+            "Artifact version run provenance is invalid."
+        }
+        require(verifiedCheckpointId.isBlank() || Regex("^CP-[0-9]{6}$").matches(verifiedCheckpointId)) {
+            "Artifact version checkpoint provenance is invalid."
+        }
+        require(supersedesVersion == null || supersedesVersion in 1 until version) {
+            "Artifact version supersession is invalid."
+        }
+    }
+}
+
+data class ArtifactNode(
+    val artifactId: String,
+    val taskId: String = "",
+    val logicalType: String,
+    val displayName: String,
+    val status: ArtifactStatus,
+    val currentVersion: Int,
+    val contentSha256: String? = null,
+    val storageReference: String,
+    val createdByRunId: String = "",
+    val verifiedCheckpointId: String = "",
+    val createdAt: String = "",
+    val updatedAt: String = "",
+) {
+    init {
+        require(isValidWorkspaceArtifactId(artifactId)) { "Artifact graph identity is invalid." }
+        require(taskId.isBlank() || Regex("^TASK-[0-9]{3}$").matches(taskId)) {
+            "Artifact graph task identity is invalid."
+        }
+        require(Regex("^[a-z][a-z0-9_-]{0,63}$").matches(logicalType)) {
+            "Artifact graph logical type is invalid."
+        }
+        require(displayName.isNotBlank() && displayName.length <= 255) {
+            "Artifact graph display name is invalid."
+        }
+        require(currentVersion > 0) { "Artifact graph versions are one-based." }
+        require(storageReference.isNotBlank()) { "Artifact graph storage reference is required." }
+        require(contentSha256 == null || Regex("^[0-9a-f]{64}$").matches(contentSha256)) {
+            "Artifact graph content hash is invalid."
+        }
+        require(createdByRunId.isBlank() || Regex("^RUN-[0-9]{8}$").matches(createdByRunId)) {
+            "Artifact graph run provenance is invalid."
+        }
+        require(verifiedCheckpointId.isBlank() || Regex("^CP-[0-9]{6}$").matches(verifiedCheckpointId)) {
+            "Artifact graph checkpoint provenance is invalid."
+        }
+    }
+}
+
+data class ArtifactEdge(
+    val sourceArtifactId: String,
+    val relation: ArtifactRelation,
+    val targetArtifactId: String = "",
+    val targetReference: String = "",
+    val createdByRunId: String = "",
+    val createdAt: String = "",
+) {
+    init {
+        require(isValidWorkspaceArtifactId(sourceArtifactId)) { "Artifact edge source is invalid." }
+        require((targetArtifactId.isNotBlank()) xor (targetReference.isNotBlank())) {
+            "Artifact edges require exactly one target identity or reference."
+        }
+        require(targetArtifactId.isBlank() || isValidWorkspaceArtifactId(targetArtifactId)) {
+            "Artifact edge target is invalid."
+        }
+        require(createdByRunId.isBlank() || Regex("^RUN-[0-9]{8}$").matches(createdByRunId)) {
+            "Artifact edge run provenance is invalid."
+        }
+    }
+}
+
+data class ArtifactGraphRecord(
+    val node: ArtifactNode,
+    val versions: List<ArtifactVersion>,
+    val edges: List<ArtifactEdge>,
+)
+
+data class ArtifactVersionDecision(
+    val version: Int,
+    val createsVersion: Boolean,
+)
+
+fun decideArtifactVersion(
+    currentVersion: Int,
+    currentContentSha256: String?,
+    observedContentSha256: String?,
+): ArtifactVersionDecision {
+    require(currentVersion > 0) { "Artifact versions are one-based." }
+    listOfNotNull(currentContentSha256, observedContentSha256).forEach { hash ->
+        require(Regex("^[0-9a-f]{64}$").matches(hash)) { "Artifact content hash is invalid." }
+    }
+    val createsVersion = currentContentSha256 != null && observedContentSha256 != null &&
+        currentContentSha256 != observedContentSha256
+    return ArtifactVersionDecision(
+        version = if (createsVersion) currentVersion + 1 else currentVersion,
+        createsVersion = createsVersion,
+    )
+}
+
 /** SQLite-backed by Memory Matrix in the controller process. */
 interface WorkspaceArtifactRegistry {
     fun registerWorkspaceArtifact(
@@ -57,6 +192,23 @@ interface WorkspaceArtifactRegistry {
     ): List<WorkspaceArtifactIdentity>
 
     fun retireWorkspaceArtifact(rootUri: String, artifactId: String)
+
+    fun bindWorkspaceArtifactProvenance(
+        artifactId: String,
+        taskId: String,
+        logicalType: String,
+        displayName: String = "",
+        createdByRunId: String = "",
+    ): ArtifactNode
+
+    fun verifyWorkspaceArtifacts(
+        artifactIds: List<String>,
+        checkpointId: String,
+    )
+
+    fun artifactGraphRecord(artifactId: String): ArtifactGraphRecord?
+
+    fun addArtifactEdge(edge: ArtifactEdge)
 }
 
 fun isValidWorkspaceArtifactId(raw: String): Boolean = WorkspaceArtifactIdPattern.matches(raw)
