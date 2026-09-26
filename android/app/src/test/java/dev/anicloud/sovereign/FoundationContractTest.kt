@@ -2,6 +2,7 @@ package dev.anicloud.sovereign.prototype
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -108,6 +109,26 @@ class FoundationContractTest {
     }
 
     @Test
+    fun exactArtifactHandleCanReplaceAMutableReadPath() {
+        val artifactId = "WA-0123456789ABCDEF0123456789ABCDEF"
+        val raw = "<INTERMIX_ACTION>{\"kind\":\"read_file\",\"artifact_id\":\"$artifactId\"}" +
+            "</INTERMIX_ACTION>"
+        val parsed = ControllerProtocol.parse(raw)
+
+        assertEquals(WorkspaceActionKind.ReadFile, parsed.workspaceAction?.kind)
+        assertEquals("", parsed.workspaceAction?.path)
+        assertEquals(artifactId, parsed.workspaceAction?.artifactId)
+        assertFalse(parsed.malformedProtocolSuffix)
+
+        val drifted = ControllerProtocol.parse(
+            "<INTERMIX_ACTION>{\"kind\":\"read_file\",\"artifact_id\":\"wa-0123456789abcdef0123456789abcdef\"}" +
+                "</INTERMIX_ACTION>",
+        )
+        assertEquals(null, drifted.workspaceAction)
+        assertTrue(drifted.malformedProtocolSuffix)
+    }
+
+    @Test
     fun emptyWorkspaceMutationsNeverBecomeExecutableActions() {
         listOf(
             "<INTERMIX_ACTION>{\"kind\":\"create_file\",\"path\":\"draft.txt\"}</INTERMIX_ACTION>",
@@ -121,7 +142,7 @@ class FoundationContractTest {
     }
 
     @Test
-    fun missionPathsAnchorOnceAndCollapseRootAliasDrift() {
+    fun missionPathsAnchorExactRootsAndRejectAliasDrift() {
         val root = "story-forge-orbit"
         assertEquals(root, scopeWorkspaceMissionPath("", root))
         assertEquals(
@@ -134,19 +155,41 @@ class FoundationContractTest {
         )
         assertEquals(
             "$root/installment_01.txt",
-            scopeWorkspaceMissionPath("story-forge_orbit/installment_01.txt", root),
-        )
-        assertEquals(
-            "$root/installment_01.txt",
             scopeWorkspaceMissionPath(
-                "story-forge-orbit/story-forge_orbit/installment_01.txt",
+                "story-forge-orbit/story-forge-orbit/installment_01.txt",
                 root,
             ),
         )
+        assertThrows(IllegalStateException::class.java) {
+            scopeWorkspaceMissionPath("story-forge_orbit/installment_01.txt", root)
+        }
+        assertThrows(IllegalStateException::class.java) {
+            scopeWorkspaceMissionPath(
+                "Story-Forge-Orbit/installment_01.txt",
+                root,
+            )
+        }
         assertEquals(
             "$root/chapters/001.txt",
             scopeWorkspaceMissionPath("chapters/001.txt", root),
         )
+    }
+
+    @Test
+    fun pathCandidatesAreReviewOnlyAndArtifactIdsRemainExact() {
+        val artifactId = "WA-0123456789ABCDEF0123456789ABCDEF"
+        assertTrue(isValidWorkspaceArtifactId(artifactId))
+        assertEquals(artifactId, normalizeWorkspaceArtifactId(artifactId))
+        assertThrows(IllegalArgumentException::class.java) {
+            normalizeWorkspaceArtifactId(artifactId.lowercase())
+        }
+        val candidates = workspaceNameCandidates(
+            requestedName = "worldflow.md",
+            availableNames = listOf("worldline.md", "worldview.md", "characters.json"),
+            limit = 2,
+        )
+        assertEquals(2, candidates.size)
+        assertTrue("worldview.md" in candidates)
     }
 
     @Test

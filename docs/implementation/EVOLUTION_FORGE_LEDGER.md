@@ -274,3 +274,77 @@ Next highest-value action:
 
 - Publish the checkpointed branch, consume the Android CI result, then perform the first approved
   Evolution Forge device run against one disposable workspace patch.
+
+## Patch WS-ID-01 — Controller-owned workspace artifact identity
+
+Objective:
+
+- Stop spending model context on fragile path spelling by adding durable, exact artifact handles
+  while preserving the existing Storage Access Framework authority boundary and scoped mission grant.
+
+Verified before state:
+
+- Work Session persisted one canonical mission root and exact project-event paths.
+- Existing artifacts had no immutable controller address; every later read or write required the model
+  to reproduce a path string.
+- Root alias recovery silently collapsed case and punctuation variants, so safe recovery and ambiguous
+  drift were not distinguishable.
+- Android foundation source contracts passed 46/46 before the patch.
+
+Change:
+
+- Add schema-v7 `workspace_artifacts` operational truth keyed by exact controller `WA-…` ids and
+  registered SAF document URIs.
+- Re-observing the same document updates path/display/hash metadata without changing its id; a new
+  document at the same path retires the old binding rather than inheriting its identity.
+- Directory listings, reads, creates, and writes return/register handles. Active mission prompt
+  reconstruction includes the bounded artifact index for its exact root.
+- Existing-entry list/read/write actions may use an exact `artifact_id`; a supplied model path cannot
+  override that identity.
+- If a registered URI moved, one bounded 2,048-entry / 16-level scan repairs its canonical path. The
+  scan runs only after exact lookup fails and retires an unreachable handle.
+- Similar-looking paths now produce review candidates without selecting one. Only exact repeated
+  mission roots collapse; case, punctuation, or spelling aliases fail closed.
+
+Test:
+
+- `python -m unittest tests.test_android_foundation`: 48/48 PASS, including executable SQLite
+  artifact-registry DDL and duplicate-document rejection.
+- `python -m unittest discover -s tests -p 'test_android*.py' -v`: 56/56 PASS, including the
+  unchanged release-trust and update-publisher gates.
+- `python -m unittest discover -s tests -v`: 180 PASS; 5 environment-dependent Textual tests skipped.
+- `python -m compileall -q tests tools engine`: PASS.
+- `git diff --check`: PASS.
+- Focused Android/JUnit compilation: PENDING BRANCH CI; the repository has wrapper properties but no
+  checked-in wrapper executable/JAR or host Gradle installation.
+
+Regression check:
+
+- No delete, shell, network, provider, release-signing, updater, or permission boundary changed.
+- Ordinary writes still require visible approval; scoped mission writes retain the existing bounded grant.
+- Story Forge numbering/append logic and the recursion watchdog are unchanged.
+- Schema migration is additive and does not reset or rewrite existing Matrix rows.
+
+Known limitation:
+
+- SAF providers that change document URI during a move cannot be correlated without a fresh exact
+  listing; the old handle retires rather than guessing from filename or content.
+- Rename/move controller actions remain intentionally out of scope for this patch.
+- DEVICE VERIFICATION REQUIRED for provider-specific URI stability and process-restart behavior.
+
+Patch Evolution Review:
+
+- Pros: stable identity survives model spelling drift and normal process restart; stale paths never bind
+  silently; lookup recovery is bounded and auditable.
+- Cons: one additive SQLite table and a small bounded artifact index increase controller state; the first
+  stale-handle recovery may scan up to 2,048 entries.
+- Resource impact: no polling or resident service; registry writes occur only on observed workspace I/O.
+- UX impact: no new human-facing opaque-id UI; ids remain in controller/tool evidence.
+- Security/privacy impact: all ids are scoped to the exact persisted root URI and grant no new access.
+
+Result: **LOCAL CONTRACTS PASS; ANDROID CI REQUIRED**
+
+Next candidate:
+
+- Add deterministic parent creation as a bounded action bundle only after the artifact-identity compile
+  and migration gates pass.

@@ -59,7 +59,7 @@ private sealed interface SessionTransitionCommand {
 class SovereignViewModel(application: Application) : AndroidViewModel(application) {
     private val modelRepository = ModelRepository(application)
     private val memoryMatrix = MemoryMatrixRepository(application)
-    private val workspaceRepository = WorkspaceRepository(application)
+    private val workspaceRepository = WorkspaceRepository(application, memoryMatrix)
     private val termuxBridge = TermuxExecutionBridge(application)
     private val termuxBridgeConfig = TermuxBridgeConfigStore(application)
     private val providerVault = ProviderCredentialVault(application)
@@ -1135,13 +1135,25 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                     val normalizedProposal = normalizeProposal(proposed)
                     val scoped = mission?.let {
                         normalizedProposal.copy(
-                            path = scopeWorkspaceMissionPath(normalizedProposal.path, it.rootPath),
+                            path = if (normalizedProposal.artifactId.isBlank()) {
+                                scopeWorkspaceMissionPath(normalizedProposal.path, it.rootPath)
+                            } else {
+                                normalizedProposal.path
+                            },
                         )
                     } ?: normalizedProposal
+                    val identityResolution = workspaceRepository.resolveActionIdentity(scoped)
                     val reconciliation = if (mission != null) {
-                        workspaceRepository.reconcileMissionAction(scoped)
+                        val missionResolution = workspaceRepository.reconcileMissionAction(
+                            identityResolution.proposal,
+                        )
+                        missionResolution.copy(
+                            detail = listOf(identityResolution.detail, missionResolution.detail)
+                                .filter(String::isNotBlank)
+                                .joinToString(" "),
+                        )
                     } else {
-                        WorkspaceActionReconciliation(scoped)
+                        identityResolution
                     }
                     val normalized = reconciliation.proposal
                     val signature = "${normalized.kind.wireName}:${normalized.path}:${normalized.content.hashCode()}"
@@ -1940,7 +1952,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         deliveryContract: ResonanceDeliveryContract,
     ): String {
         val evolution = EvolutionForgeStateCodec.decode(mission.evolutionState)
-        val workspace = workspaceRepository.controllerContext().take(1_800)
+        val workspace = workspaceRepository.controllerContext(mission.rootPath).take(3_200)
         val currentRequest = if (prompt.trim() == mission.objective.trim()) {
             "Inspect the authorized workspace and propose the highest-value bounded first patch."
         } else {
@@ -1966,7 +1978,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         cockpit: CockpitState,
         deliveryContract: ResonanceDeliveryContract,
     ): String {
-        val workspace = workspaceRepository.controllerContext().take(2_000)
+        val workspace = workspaceRepository.controllerContext(mission.rootPath).take(3_600)
         val guidance = mission.guidance.takeLast(4).joinToString("\n") { "- ${it.take(500)}" }
         val recentActions = mission.actionTrail.takeLast(12).joinToString("\n") { "- ${it.take(240)}" }
         val currentRequest = if (prompt.trim() == mission.objective.trim()) {
@@ -2436,15 +2448,22 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private fun normalizeProposal(proposal: WorkspaceActionProposal): WorkspaceActionProposal {
-        val path = normalizeWorkspacePath(
-            proposal.path,
-            allowRoot = proposal.kind == WorkspaceActionKind.ListFiles,
-        )
+        val artifactId = proposal.artifactId.takeIf(String::isNotBlank)
+            ?.let(::normalizeWorkspaceArtifactId)
+            .orEmpty()
+        val path = if (proposal.path.isBlank() && artifactId.isNotBlank()) {
+            ""
+        } else {
+            normalizeWorkspacePath(
+                proposal.path,
+                allowRoot = proposal.kind == WorkspaceActionKind.ListFiles,
+            )
+        }
         require(proposal.kind !in setOf(WorkspaceActionKind.CreateFile, WorkspaceActionKind.WriteFile) ||
             proposal.content.toByteArray(Charsets.UTF_8).size <= 2 * 1024 * 1024) {
             "The proposed file exceeds the 2 MiB write ceiling."
         }
-        return proposal.copy(path = path)
+        return proposal.copy(path = path, artifactId = artifactId)
     }
 
     private suspend fun handleLocalCommand(prompt: String, sourceMessageId: Long, serial: Long): Boolean {

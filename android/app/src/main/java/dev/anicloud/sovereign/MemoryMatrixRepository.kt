@@ -15,7 +15,7 @@ import java.util.Locale
 import java.util.UUID
 
 private const val MatrixDatabaseName = "sovereign_memory_v1.db"
-private const val MatrixSchemaVersion = 6
+private const val MatrixSchemaVersion = 7
 private const val LegacyHistoryName = "conversation_history_v1.json"
 private const val MaxStoredMessageCharacters = 32 * 1024
 private const val RecentConversationCharacterBudget = 4_096
@@ -146,7 +146,7 @@ data class ResonanceChangeResult(
  * deterministic controller validates and commits them.
  */
 class MemoryMatrixRepository(private val context: Context) :
-    SQLiteOpenHelper(context, MatrixDatabaseName, null, MatrixSchemaVersion) {
+    SQLiteOpenHelper(context, MatrixDatabaseName, null, MatrixSchemaVersion), WorkspaceArtifactRegistry {
 
     init {
         setWriteAheadLoggingEnabled(true)
@@ -184,6 +184,7 @@ class MemoryMatrixRepository(private val context: Context) :
             "messages",
             "memories",
             "project_events",
+            "workspace_artifacts",
             "resonance_profile",
             "resonance_trait",
         )
@@ -311,6 +312,7 @@ class MemoryMatrixRepository(private val context: Context) :
         installContextLedger(db)
         installInteractionProfile(db)
         installResonance(db)
+        installWorkspaceArtifactRegistry(db)
         installFts(db)
         ensureSession(db)
     }
@@ -321,6 +323,7 @@ class MemoryMatrixRepository(private val context: Context) :
         if (oldVersion < 4) installNumericMatrix(db)
         if (oldVersion < 5) installContextLedger(db)
         if (oldVersion < 6) installResonance(db)
+        if (oldVersion < 7) installWorkspaceArtifactRegistry(db)
     }
 
     @Synchronized
@@ -2088,6 +2091,184 @@ class MemoryMatrixRepository(private val context: Context) :
     }
 
     /**
+     * Registers SAF identity separately from model-authored paths. Re-observing the same document
+     * updates display/recovery metadata without changing its controller id. A replacement document
+     * at the same path receives a new id, so stale handles never silently bind to new user data.
+     */
+    @Synchronized
+    override fun registerWorkspaceArtifact(
+        rootUri: String,
+        documentUri: String,
+        canonicalPath: String,
+        displayName: String,
+        isDirectory: Boolean,
+        contentSha256: String?,
+    ): WorkspaceArtifactIdentity {
+        val root = rootUri.trim().also { require(it.isNotBlank()) }
+        val document = documentUri.trim().also { require(it.isNotBlank()) }
+        val path = normalizeWorkspacePath(canonicalPath, allowRoot = true)
+        val name = displayName.replace("\u0000", "").trim().take(255)
+        require(name.isNotBlank()) { "Workspace artifacts require a display name." }
+        val hash = contentSha256?.also {
+            require(Regex("^[0-9a-f]{64}$").matches(it)) { "Workspace artifact hash is invalid." }
+        }
+        val db = writableDatabase
+        val timestamp = now()
+        val existing = db.rawQuery(
+            "SELECT artifact_id,content_sha256 FROM workspace_artifacts " +
+                "WHERE root_uri=? AND document_uri=? LIMIT 1",
+            arrayOf(root, document),
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) {
+                null
+            } else {
+                cursor.getString(0) to if (cursor.isNull(1)) null else cursor.getString(1)
+            }
+        }
+        val existingId = existing?.first
+        val effectiveHash = hash ?: existing?.second
+        val artifactId = existingId ?: "WA-" + UUID.randomUUID().toString()
+            .replace("-", "")
+            .uppercase(Locale.ROOT)
+
+        db.beginTransaction()
+        try {
+            db.execSQL(
+                "UPDATE workspace_artifacts SET active=0,updated_at=? " +
+                    "WHERE root_uri=? AND canonical_path=? AND document_uri<>? AND active=1",
+                arrayOf(timestamp, root, path, document),
+            )
+            val values = ContentValues().apply {
+                put("artifact_id", artifactId)
+                put("root_uri", root)
+                put("document_uri", document)
+                put("canonical_path", path)
+                put("display_name", name)
+                put("is_directory", if (isDirectory) 1 else 0)
+                if (effectiveHash == null) putNull("content_sha256") else {
+                    put("content_sha256", effectiveHash)
+                }
+                put("active", 1)
+                if (existingId == null) put("first_seen_at", timestamp)
+                put("updated_at", timestamp)
+            }
+            if (existingId == null) {
+                db.insertOrThrow("workspace_artifacts", null, values)
+            } else {
+                db.update(
+                    "workspace_artifacts",
+                    values,
+                    "artifact_id=? AND root_uri=?",
+                    arrayOf(artifactId, root),
+                )
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return WorkspaceArtifactIdentity(
+            artifactId = artifactId,
+            rootUri = root,
+            documentUri = document,
+            canonicalPath = path,
+            displayName = name,
+            isDirectory = isDirectory,
+            contentSha256 = effectiveHash,
+            active = true,
+            updatedAt = timestamp,
+        )
+    }
+
+    @Synchronized
+    override fun workspaceArtifactById(
+        rootUri: String,
+        artifactId: String,
+    ): WorkspaceArtifactIdentity? {
+        val exactId = normalizeWorkspaceArtifactId(artifactId)
+        return readableDatabase.rawQuery(
+            """
+            SELECT artifact_id,root_uri,document_uri,canonical_path,display_name,
+                   is_directory,content_sha256,active,updated_at
+            FROM workspace_artifacts
+            WHERE root_uri=? AND artifact_id=? AND active=1
+            LIMIT 1
+            """.trimIndent(),
+            arrayOf(rootUri.trim(), exactId),
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) null else WorkspaceArtifactIdentity(
+                artifactId = cursor.getString(0),
+                rootUri = cursor.getString(1),
+                documentUri = cursor.getString(2),
+                canonicalPath = cursor.getString(3),
+                displayName = cursor.getString(4),
+                isDirectory = cursor.getInt(5) != 0,
+                contentSha256 = if (cursor.isNull(6)) null else cursor.getString(6),
+                active = cursor.getInt(7) != 0,
+                updatedAt = cursor.getString(8),
+            )
+        }
+    }
+
+    @Synchronized
+    override fun listWorkspaceArtifacts(
+        rootUri: String,
+        scopePath: String,
+        limit: Int,
+    ): List<WorkspaceArtifactIdentity> {
+        val root = rootUri.trim()
+        val scope = normalizeWorkspacePath(scopePath, allowRoot = true)
+        val boundedLimit = limit.coerceIn(1, 100)
+        val selection: String
+        val args: Array<String>
+        if (scope.isBlank()) {
+            selection = "root_uri=? AND active=1"
+            args = arrayOf(root, boundedLimit.toString())
+        } else {
+            val prefix = "$scope/"
+            selection = "root_uri=? AND active=1 AND (canonical_path=? OR " +
+                "substr(canonical_path,1,?)=?)"
+            args = arrayOf(root, scope, prefix.length.toString(), prefix, boundedLimit.toString())
+        }
+        return readableDatabase.rawQuery(
+            """
+            SELECT artifact_id,root_uri,document_uri,canonical_path,display_name,
+                   is_directory,content_sha256,active,updated_at
+            FROM workspace_artifacts
+            WHERE $selection
+            ORDER BY canonical_path COLLATE BINARY
+            LIMIT ?
+            """.trimIndent(),
+            args,
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    add(
+                        WorkspaceArtifactIdentity(
+                            artifactId = cursor.getString(0),
+                            rootUri = cursor.getString(1),
+                            documentUri = cursor.getString(2),
+                            canonicalPath = cursor.getString(3),
+                            displayName = cursor.getString(4),
+                            isDirectory = cursor.getInt(5) != 0,
+                            contentSha256 = if (cursor.isNull(6)) null else cursor.getString(6),
+                            active = cursor.getInt(7) != 0,
+                            updatedAt = cursor.getString(8),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    @Synchronized
+    override fun retireWorkspaceArtifact(rootUri: String, artifactId: String) {
+        writableDatabase.execSQL(
+            "UPDATE workspace_artifacts SET active=0,updated_at=? WHERE root_uri=? AND artifact_id=?",
+            arrayOf(now(), rootUri.trim(), normalizeWorkspaceArtifactId(artifactId)),
+        )
+    }
+
+    /**
      * Records measurements only—never prompt text. This makes context compaction and recovery
      * inspectable without copying conversation or workspace content into a second store.
      */
@@ -2997,6 +3178,30 @@ class MemoryMatrixRepository(private val context: Context) :
     private fun profilesEquivalent(left: InteractionProfile, right: InteractionProfile): Boolean =
         InteractionTrait.entries.all { left.valueOf(it) == right.valueOf(it) } &&
             left.automaticAdaptation == right.automaticAdaptation
+
+    private fun installWorkspaceArtifactRegistry(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS workspace_artifacts (
+                artifact_id TEXT PRIMARY KEY,
+                root_uri TEXT NOT NULL,
+                document_uri TEXT NOT NULL,
+                canonical_path TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                is_directory INTEGER NOT NULL,
+                content_sha256 TEXT,
+                active INTEGER NOT NULL DEFAULT 1,
+                first_seen_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(root_uri, document_uri)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS idx_workspace_artifacts_path " +
+                "ON workspace_artifacts(root_uri, active, canonical_path)",
+        )
+    }
 
     private fun installFts(db: SQLiteDatabase) {
         runCatching {

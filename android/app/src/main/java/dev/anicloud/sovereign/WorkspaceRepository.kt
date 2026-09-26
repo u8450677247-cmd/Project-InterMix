@@ -12,6 +12,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.security.MessageDigest
+import java.util.ArrayDeque
 import java.util.Base64
 
 private const val WorkspacePreferences = "anicloud_workspace"
@@ -22,6 +23,8 @@ private const val MaxModelReadCharacters = 16 * 1024
 private const val StoryForgeFileName = "story.md"
 private const val StoryForgeHeaderMarker = "<!-- ANICLOUD_STORY_FORGE_V1 -->"
 private const val StoryForgeContextCharacters = 4_096
+private const val MaxArtifactRecoveryEntries = 2_048
+private const val MaxArtifactRecoveryDepth = 16
 
 data class WorkspaceEntry(
     val uri: String,
@@ -58,6 +61,17 @@ data class WorkspaceActionReconciliation(
     val detail: String = "",
 )
 
+private data class ResolvedRegisteredArtifact(
+    val identity: WorkspaceArtifactIdentity,
+    val entry: WorkspaceEntry,
+    val recoveredPath: Boolean,
+)
+
+private data class LocatedWorkspaceEntry(
+    val canonicalPath: String,
+    val entry: WorkspaceEntry,
+)
+
 /**
  * A scoped mission has already granted write authority. If the model asks to replace a target
  * that Android has verified does not exist, creation is the lossless, non-destructive repair.
@@ -78,7 +92,10 @@ fun reconcileScopedWorkspaceAction(
 }
 
 /** A persisted Storage Access Framework tree is the complete authority boundary. */
-class WorkspaceRepository(private val context: Context) {
+class WorkspaceRepository(
+    private val context: Context,
+    private val artifactRegistry: WorkspaceArtifactRegistry? = null,
+) {
     private val preferences = context.getSharedPreferences(WorkspacePreferences, Context.MODE_PRIVATE)
 
     fun storedRoot(): Uri? = preferences.getString(WorkspaceRootKey, null)?.let(Uri::parse)
@@ -141,11 +158,13 @@ class WorkspaceRepository(private val context: Context) {
                     check(created.isDirectory) {
                         "The document provider did not persist $currentPath as a directory."
                     }
+                    registerArtifact(root, currentPath, created)
                     createdCount++
                 } else {
                     require(existing.isDirectory) {
                         "Work Session root crosses a file at $currentPath. Choose a different mission folder."
                     }
+                    registerArtifact(root, currentPath, existing)
                 }
             }
             WorkspaceActionResult(
@@ -169,6 +188,46 @@ class WorkspaceRepository(private val context: Context) {
         reconcileScopedWorkspaceAction(
             proposal = proposal.copy(path = path),
             targetExists = resolveEntry(root, path) != null,
+        )
+    }
+
+    /**
+     * Resolves an exact controller-owned handle before scope validation or approval queuing.
+     * A model-supplied path never overrides the registered identity.
+     */
+    suspend fun resolveActionIdentity(
+        proposal: WorkspaceActionProposal,
+    ): WorkspaceActionReconciliation = withContext(Dispatchers.IO) {
+        if (proposal.artifactId.isBlank()) return@withContext WorkspaceActionReconciliation(proposal)
+        require(
+            proposal.kind in setOf(
+                WorkspaceActionKind.ListFiles,
+                WorkspaceActionKind.ReadFile,
+                WorkspaceActionKind.WriteFile,
+            ),
+        ) { "Artifact handles address existing files or directories only." }
+        val root = storedRoot() ?: error("No workspace is connected.")
+        val artifactId = normalizeWorkspaceArtifactId(proposal.artifactId)
+        val resolved = resolveRegisteredArtifact(root, artifactId)
+        val suppliedPath = proposal.path.takeIf(String::isNotBlank)?.let {
+            normalizeWorkspacePath(it, allowRoot = proposal.kind == WorkspaceActionKind.ListFiles)
+        }
+        WorkspaceActionReconciliation(
+            proposal = proposal.copy(
+                path = resolved.identity.canonicalPath,
+                artifactId = artifactId,
+            ),
+            detail = buildString {
+                append("Resolved the controller-owned artifact to canonical path ")
+                append(displayPath(resolved.identity.canonicalPath))
+                append('.')
+                if (resolved.recoveredPath) append(" The persisted handle survived a moved path.")
+                if (suppliedPath != null && suppliedPath != resolved.identity.canonicalPath) {
+                    append(" Ignored the non-authoritative supplied path ")
+                    append(displayPath(suppliedPath))
+                    append('.')
+                }
+            },
         )
     }
 
@@ -371,18 +430,38 @@ class WorkspaceRepository(private val context: Context) {
         withContext(Dispatchers.IO) { restoreFromTrashNow(root, receipt) }
 
     /** Controller truth supplied to the model on every turn. */
-    suspend fun controllerContext(): String = withContext(Dispatchers.IO) {
+    suspend fun controllerContext(scopePath: String = ""): String = withContext(Dispatchers.IO) {
         val root = storedRoot()
         if (root == null) {
             "[WORKSPACE]\nDisconnected. Ask the user to open Workspace and CONNECT PROJECT."
         } else {
             val label = runCatching { queryDisplayName(root) }.getOrNull() ?: fallbackRootLabel(root)
-            "[WORKSPACE]\nConnected root: $label\n" +
-                "Tools: list_files and read_file run inside this root. " +
-                "In ordinary Chat, create_file, write_file, and create_directory require visible " +
-                "approval. A controller-owned active Work Session may separately grant those " +
-                "actions inside one exact scoped root. " +
-                "Deletion and access outside this root are unavailable."
+            val normalizedScope = normalizeWorkspacePath(scopePath, allowRoot = true)
+            val knownArtifacts = artifactRegistry
+                ?.listWorkspaceArtifacts(root.toString(), normalizedScope, limit = 48)
+                .orEmpty()
+            buildString {
+                appendLine("[WORKSPACE]")
+                appendLine("Connected root: $label")
+                append(
+                    "Tools: list_files and read_file run inside this root. " +
+                        "In ordinary Chat, create_file, write_file, and create_directory require visible " +
+                        "approval. A controller-owned active Work Session may separately grant those " +
+                        "actions inside one exact scoped root. " +
+                        "Deletion and access outside this root are unavailable.",
+                )
+                if (knownArtifacts.isNotEmpty()) {
+                    appendLine()
+                    appendLine("[CONTROLLER ARTIFACT INDEX · EXACT IDS]")
+                    knownArtifacts.forEach { artifact ->
+                        append(if (artifact.isDirectory) "DIR  " else "FILE ")
+                        append(artifact.artifactId)
+                        append("  ")
+                        appendLine(displayPath(artifact.canonicalPath))
+                    }
+                    append("Use an exact artifact_id for an existing entry; never respell or fuzzy-match it.")
+                }
+            }
         }
     }
 
@@ -412,28 +491,40 @@ class WorkspaceRepository(private val context: Context) {
     private fun listPath(root: Uri, rawPath: String): WorkspaceActionResult {
         val path = normalizeWorkspacePath(rawPath, allowRoot = true)
         val directory = resolveEntry(root, path)
-            ?: error("Workspace path not found: ${displayPath(path)}")
+            ?: error(missingPathDetail(root, path))
         require(directory.isDirectory) { "The requested list path is not a directory." }
         val entries = listChildrenNow(root, Uri.parse(directory.uri)).take(200)
+        val directoryIdentity = registerArtifact(root, path, directory)
+        val registeredEntries = entries.map { entry ->
+            val childPath = listOf(path, entry.displayName)
+                .filter(String::isNotBlank)
+                .joinToString("/")
+            entry to registerArtifact(root, childPath, entry)
+        }
         val body = buildString {
             appendLine("Directory: ${displayPath(path)}")
-            entries.forEach { entry ->
+            directoryIdentity?.let { appendLine("Directory artifact_id: ${it.artifactId}") }
+            registeredEntries.forEach { (entry, identity) ->
                 append(if (entry.isDirectory) "DIR  " else "FILE ")
                 append(entry.displayName)
                 entry.byteSize?.takeIf { !entry.isDirectory }?.let { append("  ($it bytes)") }
+                identity?.let { append("  [artifact_id=${it.artifactId}]") }
                 appendLine()
             }
         }.take(24 * 1024)
         return WorkspaceActionResult(
-            detail = "Listed ${entries.size} entries in ${displayPath(path)}.",
+            detail = "Listed ${entries.size} exact entries in ${displayPath(path)}" +
+                if (artifactRegistry == null) "." else "; stable artifact ids registered.",
             toolContent = body,
         )
     }
 
     private fun readPath(root: Uri, rawPath: String): WorkspaceActionResult {
         val path = normalizeWorkspacePath(rawPath)
-        val entry = resolveEntry(root, path) ?: error("Workspace file not found: $path")
+        val entry = resolveEntry(root, path) ?: error(missingPathDetail(root, path))
         val full = readTextNow(entry)
+        val contentHash = sha256(full.toByteArray(Charsets.UTF_8))
+        val identity = registerArtifact(root, path, entry, contentHash)
         val clipped = full.take(MaxModelReadCharacters)
         val suffix = if (full.length > MaxModelReadCharacters) {
             "\n[TRUNCATED: ${full.length - MaxModelReadCharacters} more characters were not sent to the model]"
@@ -442,8 +533,15 @@ class WorkspaceRepository(private val context: Context) {
         }
         return WorkspaceActionResult(
             detail = "Read $path (${full.length} characters).",
-            toolContent = "File: $path\n---\n$clipped$suffix",
-            afterSha256 = sha256(full.toByteArray(Charsets.UTF_8)),
+            toolContent = buildString {
+                appendLine("File: $path")
+                identity?.let { appendLine("Artifact ID: ${it.artifactId}") }
+                appendLine("SHA-256: $contentHash")
+                appendLine("---")
+                append(clipped)
+                append(suffix)
+            },
+            afterSha256 = contentHash,
         )
     }
 
@@ -451,13 +549,15 @@ class WorkspaceRepository(private val context: Context) {
         require(content.isNotBlank()) {
             "Refused an empty write for $path. File mutations require complete non-empty content."
         }
-        val entry = resolveEntry(root, path) ?: error("Workspace file not found: $path")
+        val entry = resolveEntry(root, path) ?: error(missingPathDetail(root, path))
         require(!entry.isDirectory) { "Cannot replace a directory with text." }
         val snapshot = writeTextNow(entry, content)
         val bytes = content.toByteArray(Charsets.UTF_8)
+        val identity = registerArtifact(root, path, entry, snapshot.afterSha256)
         return WorkspaceActionResult(
             detail = "Wrote and verified $path (${bytes.size} bytes); " +
                 "pre-write snapshot ${snapshot.snapshotName} retained.",
+            toolContent = identity?.let { "Artifact ID: ${it.artifactId}" }.orEmpty(),
             beforeSha256 = snapshot.beforeSha256,
             afterSha256 = snapshot.afterSha256,
         )
@@ -469,7 +569,7 @@ class WorkspaceRepository(private val context: Context) {
         }
         val (parentPath, name) = splitParent(path)
         val parent = resolveEntry(root, parentPath)
-            ?: error("Parent directory not found: ${displayPath(parentPath)}")
+            ?: error(missingPathDetail(root, parentPath))
         require(parent.isDirectory) { "The parent path is not a directory." }
         require(resolveEntry(root, path) == null) { "A workspace entry already exists at $path." }
         val bytes = content.toByteArray(Charsets.UTF_8)
@@ -486,25 +586,46 @@ class WorkspaceRepository(private val context: Context) {
             "The document provider created $path but did not persist its exact content; " +
                 "the incomplete entry may remain for user review."
         }
+        val entry = WorkspaceEntry(
+            uri = created.toString(),
+            displayName = name,
+            mimeType = mimeForName(name),
+            byteSize = bytes.size.toLong(),
+            isDirectory = false,
+        )
+        val contentHash = sha256(bytes)
+        val identity = registerArtifact(root, path, entry, contentHash)
         return WorkspaceActionResult(
             detail = "Created and verified $path (${bytes.size} bytes).",
-            afterSha256 = sha256(bytes),
+            toolContent = identity?.let { "Artifact ID: ${it.artifactId}" }.orEmpty(),
+            afterSha256 = contentHash,
         )
     }
 
     private fun createDirectory(root: Uri, path: String): WorkspaceActionResult {
         val (parentPath, name) = splitParent(path)
         val parent = resolveEntry(root, parentPath)
-            ?: error("Parent directory not found: ${displayPath(parentPath)}")
+            ?: error(missingPathDetail(root, parentPath))
         require(parent.isDirectory) { "The parent path is not a directory." }
         require(resolveEntry(root, path) == null) { "A workspace entry already exists at $path." }
-        DocumentsContract.createDocument(
+        val created = DocumentsContract.createDocument(
             context.contentResolver,
             Uri.parse(parent.uri),
             DocumentsContract.Document.MIME_TYPE_DIR,
             name,
         ) ?: error("The document provider refused to create $path.")
-        return WorkspaceActionResult(detail = "Created directory $path.")
+        val entry = WorkspaceEntry(
+            uri = created.toString(),
+            displayName = name,
+            mimeType = DocumentsContract.Document.MIME_TYPE_DIR,
+            byteSize = null,
+            isDirectory = true,
+        )
+        val identity = registerArtifact(root, path, entry)
+        return WorkspaceActionResult(
+            detail = "Created directory $path.",
+            toolContent = identity?.let { "Artifact ID: ${it.artifactId}" }.orEmpty(),
+        )
     }
 
     /**
@@ -626,6 +747,118 @@ class WorkspaceRepository(private val context: Context) {
             compareByDescending<WorkspaceEntry> { it.isDirectory }
                 .thenBy { it.displayName.lowercase() },
         )
+    }
+
+    private fun registerArtifact(
+        root: Uri,
+        canonicalPath: String,
+        entry: WorkspaceEntry,
+        contentSha256: String? = null,
+    ): WorkspaceArtifactIdentity? = artifactRegistry?.registerWorkspaceArtifact(
+        rootUri = root.toString(),
+        documentUri = entry.uri,
+        canonicalPath = normalizeWorkspacePath(canonicalPath, allowRoot = true),
+        displayName = entry.displayName,
+        isDirectory = entry.isDirectory,
+        contentSha256 = contentSha256,
+    )
+
+    private fun resolveRegisteredArtifact(
+        root: Uri,
+        artifactId: String,
+    ): ResolvedRegisteredArtifact {
+        val registry = artifactRegistry
+            ?: error("Artifact handles are unavailable until Memory Matrix is connected.")
+        val identity = registry.workspaceArtifactById(root.toString(), artifactId)
+            ?: error("Unknown or retired artifact id $artifactId. Re-list the exact directory.")
+        val exact = resolveEntry(root, identity.canonicalPath)
+        if (exact?.uri == identity.documentUri) {
+            require(exact.isDirectory == identity.isDirectory) {
+                "Artifact $artifactId changed type; re-list before continuing."
+            }
+            return ResolvedRegisteredArtifact(identity, exact, recoveredPath = false)
+        }
+
+        val recovered = locateDocumentUri(root, identity.documentUri)
+        if (recovered != null) {
+            require(recovered.entry.isDirectory == identity.isDirectory) {
+                "Artifact $artifactId changed type while moving; re-list before continuing."
+            }
+            val updated = registerArtifact(
+                root = root,
+                canonicalPath = recovered.canonicalPath,
+                entry = recovered.entry,
+                contentSha256 = identity.contentSha256,
+            ) ?: error("Artifact registry became unavailable during recovery.")
+            require(updated.artifactId == identity.artifactId) {
+                "Artifact identity changed during bounded move recovery."
+            }
+            return ResolvedRegisteredArtifact(updated, recovered.entry, recoveredPath = true)
+        }
+
+        registry.retireWorkspaceArtifact(root.toString(), artifactId)
+        error(
+            "Artifact $artifactId is no longer reachable inside the granted workspace. " +
+                "Its last canonical path was ${displayPath(identity.canonicalPath)}; re-list before continuing.",
+        )
+    }
+
+    /** Bounded and invoked only when an exact registered path no longer resolves to its document. */
+    private fun locateDocumentUri(root: Uri, targetDocumentUri: String): LocatedWorkspaceEntry? {
+        val rootEntry = resolveEntry(root, "") ?: return null
+        val queue = ArrayDeque<Pair<LocatedWorkspaceEntry, Int>>()
+        queue.add(LocatedWorkspaceEntry("", rootEntry) to 0)
+        var observed = 0
+        while (queue.isNotEmpty() && observed < MaxArtifactRecoveryEntries) {
+            val (located, depth) = queue.removeFirst()
+            observed++
+            if (located.entry.uri == targetDocumentUri) return located
+            if (!located.entry.isDirectory || depth >= MaxArtifactRecoveryDepth) continue
+            val remaining = MaxArtifactRecoveryEntries - observed
+            if (remaining <= 0) break
+            listChildrenNow(root, Uri.parse(located.entry.uri)).take(remaining).forEach { child ->
+                val childPath = listOf(located.canonicalPath, child.displayName)
+                    .filter(String::isNotBlank)
+                    .joinToString("/")
+                val childLocation = LocatedWorkspaceEntry(childPath, child)
+                if (child.uri == targetDocumentUri) return childLocation
+                if (child.isDirectory) queue.add(childLocation to depth + 1)
+            }
+        }
+        return null
+    }
+
+    private fun missingPathDetail(root: Uri, path: String): String {
+        val normalized = normalizeWorkspacePath(path, allowRoot = true)
+        if (normalized.isBlank()) return "The connected workspace root is unavailable."
+        var parentPath = ""
+        var parent = resolveEntry(root, parentPath)
+            ?: return "The connected workspace root is unavailable."
+        for (segment in normalized.split('/')) {
+            if (!parent.isDirectory) {
+                return "Workspace path crosses the file ${displayPath(parentPath)}; no candidate was selected."
+            }
+            val children = listChildrenNow(root, Uri.parse(parent.uri))
+            val exact = children.firstOrNull { it.displayName == segment }
+            if (exact == null) {
+                val candidates = workspaceNameCandidates(segment, children.map(WorkspaceEntry::displayName))
+                return buildString {
+                    append("Workspace path not found exactly: ")
+                    append(displayPath(normalized))
+                    append(". No candidate was selected")
+                    if (candidates.isNotEmpty()) {
+                        append("; candidates inside ")
+                        append(displayPath(parentPath))
+                        append(": ")
+                        append(candidates.joinToString())
+                    }
+                    append(". Re-list the directory and reuse its exact artifact_id.")
+                }
+            }
+            parentPath = listOf(parentPath, segment).filter(String::isNotBlank).joinToString("/")
+            parent = exact
+        }
+        return "Workspace path is unavailable: ${displayPath(normalized)}."
     }
 
     private fun resolveEntry(root: Uri, path: String): WorkspaceEntry? {
@@ -798,9 +1031,9 @@ fun normalizeWorkspacePath(raw: String, allowRoot: Boolean = false): String {
 }
 
 /**
- * Anchors a model-proposed path exactly once beneath a mission root. Small local models often
- * restate the root with dash/underscore drift; collapse only that immediate alias instead of
- * allowing recursive `root/root_alias/file` paths to consume the bounded action budget.
+ * Anchors a model-proposed path beneath the immutable mission root. Only exact root repetitions
+ * collapse. Similar-looking case, punctuation, or spelling variants fail closed so controller
+ * identity never depends on a generative model's fuzzy string repair.
  */
 fun scopeWorkspaceMissionPath(rawPath: String, rawRootPath: String): String {
     val root = normalizeWorkspacePath(rawRootPath)
@@ -809,17 +1042,20 @@ fun scopeWorkspaceMissionPath(rawPath: String, rawRootPath: String): String {
 
     val rootSegments = root.split('/')
     val proposedSegments = proposed.split('/')
-    var relative = if (proposedSegments.take(rootSegments.size) == rootSegments) {
-        proposedSegments.drop(rootSegments.size)
-    } else {
-        proposedSegments
+    var relative = proposedSegments
+    while (relative.take(rootSegments.size) == rootSegments) {
+        relative = relative.drop(rootSegments.size)
     }
     val canonicalRootLeaf = rootSegments.last().filter { it.isLetterOrDigit() }.lowercase()
     if (
-        relative.size > 1 &&
+        relative.isNotEmpty() &&
+        proposedSegments.take(rootSegments.size) != rootSegments &&
         relative.first().filter { it.isLetterOrDigit() }.lowercase() == canonicalRootLeaf
     ) {
-        relative = relative.drop(1)
+        error(
+            "Mission path repeats or resembles the immutable root without its exact canonical " +
+                "prefix. Use a path relative to $root or repeat that exact root.",
+        )
     }
     return normalizeWorkspacePath((rootSegments + relative).joinToString("/"))
 }

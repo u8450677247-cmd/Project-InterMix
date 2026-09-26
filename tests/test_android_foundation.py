@@ -236,8 +236,10 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("LegacyHistoryName.migrated", repository)
         self.assertIn("memoryMatrix.loadMessages()", view_model)
         self.assertIn("memoryMatrix.recallContext", view_model)
-        self.assertIn("MatrixSchemaVersion = 6", repository)
+        self.assertIn("MatrixSchemaVersion = 7", repository)
         self.assertIn("CREATE TABLE IF NOT EXISTS context_windows", repository)
+        self.assertIn("CREATE TABLE IF NOT EXISTS workspace_artifacts", repository)
+        self.assertIn("if (oldVersion < 7) installWorkspaceArtifactRegistry(db)", repository)
         self.assertIn("undoLatestProfileChange", repository)
 
     def test_resonance_is_durable_scoped_bounded_and_user_controllable(self):
@@ -386,6 +388,68 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("GRANT SCOPED AUTONOMY & START", ui)
         self.assertIn("NO PER-FILE CLICKS", ui)
         self.assertIn("PROJECT TREE ·", ui)
+
+    def test_workspace_identity_is_matrix_backed_exact_and_move_recoverable(self):
+        identity = (SOURCE / "WorkspaceIdentity.kt").read_text(encoding="utf-8")
+        protocol = (SOURCE / "ControllerProtocol.kt").read_text(encoding="utf-8")
+        workspace = (SOURCE / "WorkspaceRepository.kt").read_text(encoding="utf-8")
+        memory = (SOURCE / "MemoryMatrixRepository.kt").read_text(encoding="utf-8")
+        view_model = (SOURCE / "SovereignViewModel.kt").read_text(encoding="utf-8")
+
+        self.assertIn("data class WorkspaceArtifactIdentity", identity)
+        self.assertIn("interface WorkspaceArtifactRegistry", identity)
+        self.assertIn('Regex("^WA-[0-9A-F]{32}$")', identity)
+        self.assertIn("artifactId: String = \"\"", protocol)
+        self.assertIn('payload.optString("artifact_id")', protocol)
+        self.assertIn("WorkspaceArtifactRegistry", memory)
+        self.assertIn("UNIQUE(root_uri, document_uri)", memory)
+        self.assertIn("registerWorkspaceArtifact", workspace)
+        self.assertIn("resolveRegisteredArtifact", workspace)
+        self.assertIn("locateDocumentUri", workspace)
+        self.assertIn("MaxArtifactRecoveryEntries", workspace)
+        self.assertIn("No candidate was selected", workspace)
+        self.assertIn("artifactRegistry: WorkspaceArtifactRegistry? = null", workspace)
+        self.assertIn("WorkspaceRepository(application, memoryMatrix)", view_model)
+        self.assertIn("resolveActionIdentity", view_model)
+        self.assertNotIn("relative = relative.drop(1)", workspace)
+
+    def test_workspace_artifact_schema_executes_and_rejects_duplicate_document_identity(self):
+        repository = (SOURCE / "MemoryMatrixRepository.kt").read_text(encoding="utf-8")
+        install_block = repository.split(
+            "private fun installWorkspaceArtifactRegistry(db: SQLiteDatabase)", maxsplit=1
+        )[1].split("private fun installFts(", maxsplit=1)[0]
+        table_statements = re.findall(
+            r'db\.execSQL\(\s*"""(.*?)"""\.trimIndent\(\),\s*\)',
+            install_block,
+            flags=re.DOTALL,
+        )
+        self.assertEqual(len(table_statements), 1)
+
+        connection = sqlite3.connect(":memory:")
+        try:
+            connection.execute(textwrap.dedent(table_statements[0]).strip())
+            row = (
+                "WA-0123456789ABCDEF0123456789ABCDEF",
+                "content://tree/root",
+                "content://tree/root/document/one",
+                "narrative/worldview.md",
+                "worldview.md",
+                0,
+                None,
+                1,
+                "2026-09-25T00:00:00Z",
+                "2026-09-25T00:00:00Z",
+            )
+            connection.execute(
+                "INSERT INTO workspace_artifacts VALUES(?,?,?,?,?,?,?,?,?,?)", row
+            )
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute(
+                    "INSERT INTO workspace_artifacts VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    ("WA-FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",) + row[1:],
+                )
+        finally:
+            connection.close()
 
     def test_native_conversation_sessions_preserve_history_and_reset_model_context(self):
         repository = (SOURCE / "MemoryMatrixRepository.kt").read_text(

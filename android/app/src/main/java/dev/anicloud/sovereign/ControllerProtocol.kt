@@ -46,6 +46,7 @@ data class WorkspaceActionProposal(
     val path: String,
     val content: String = "",
     val reason: String = "",
+    val artifactId: String = "",
 )
 
 data class ControllerProtocolResult(
@@ -111,6 +112,9 @@ object ControllerProtocol {
         For a directory listing or file read, emit exactly one action and no speculative result:
         <INTERMIX_ACTION>{"kind":"list_files","path":""}</INTERMIX_ACTION>
         <INTERMIX_ACTION>{"kind":"read_file","path":"relative/file.kt"}</INTERMIX_ACTION>
+        When a verified tool result supplies an artifact_id, reuse that exact id for later reads,
+        directory listings, or writes instead of respelling its path. Never invent or alter an id:
+        <INTERMIX_ACTION>{"kind":"read_file","artifact_id":"WA-0123456789ABCDEF0123456789ABCDEF"}</INTERMIX_ACTION>
 
         For a requested mutation, emit exactly one proposal. Android will show it in Agents and
         nothing is written until the user approves it. create_file and write_file must contain the
@@ -186,6 +190,8 @@ object ControllerProtocol {
         exact typed operation; recalling stored context never requires a tool action.
         Never invent tool results or claim access outside the connected workspace.
         For one read, emit <INTERMIX_ACTION>{"kind":"list_files|read_file","path":"relative/path"}</INTERMIX_ACTION>.
+        A verified artifact_id may replace path for list_files, read_file, or write_file; copy the
+        controller string exactly and never guess an id.
         For one requested write, emit kind create_file, write_file, or create_directory with a
         relative path, complete non-empty content for every file mutation, and a short reason. Android requires
         visible approval before ordinary-chat mutations.
@@ -207,6 +213,9 @@ object ControllerProtocol {
         Emit exactly one raw <INTERMIX_ACTION> JSON block per response and no speculative result.
         Kinds: list_files, read_file, create_file, write_file, create_directory. Paths stay inside
         the authorized mission root, which Android prepares before inference; do not recreate that root.
+        Verified results may include a stable artifact_id. Reuse that exact id for an existing file
+        or directory instead of respelling its path. Artifact ids are controller-owned: never invent,
+        re-case, shorten, or fuzzily repair one. New files and directories still require an exact path.
         Use create_file for a missing target and write_file only for a file verified to exist. File
         proposals contain complete, non-empty final content; never create an empty placeholder or split
         create-then-fill into separate actions. After a successful mutation, verify it with read_file
@@ -330,7 +339,19 @@ object ControllerProtocol {
     private fun parseWorkspaceAction(payload: JSONObject): WorkspaceActionProposal? {
         val kind = WorkspaceActionKind.fromWireName(payload.optString("kind")) ?: return null
         val path = payload.optString("path").trim()
-        if (kind != WorkspaceActionKind.ListFiles && path.isBlank()) return null
+        val artifactId = payload.optString("artifact_id").trim().let { raw ->
+            if (raw.isBlank()) "" else runCatching { normalizeWorkspaceArtifactId(raw) }.getOrNull()
+                ?: return null
+        }
+        if (
+            kind in setOf(WorkspaceActionKind.CreateFile, WorkspaceActionKind.CreateDirectory) &&
+            artifactId.isNotBlank()
+        ) return null
+        if (
+            kind != WorkspaceActionKind.ListFiles &&
+            path.isBlank() &&
+            artifactId.isBlank()
+        ) return null
         val content = payload.optString("content").take(64 * 1024)
         if (
             kind in setOf(WorkspaceActionKind.CreateFile, WorkspaceActionKind.WriteFile) &&
@@ -341,6 +362,7 @@ object ControllerProtocol {
             path = path,
             content = content,
             reason = payload.optString("reason").trim().take(280),
+            artifactId = artifactId,
         )
     }
 
