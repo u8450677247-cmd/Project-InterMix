@@ -200,6 +200,24 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                 }
             }
         }
+        viewModelScope.launch {
+            AgentRunSchedulerEvents.wake.collect { wake ->
+                val mission = withContext(Dispatchers.IO) { memoryMatrix.activeAgentMission() }
+                if (mission?.id != wake.missionId) return@collect
+                when (wake.state) {
+                    AgentRunState.Runnable -> pendingCrashRecoveryMissionId = mission.id
+                    AgentRunState.Reconciling -> {
+                        pendingExecutionRecoveryId = Regex("Termux execution #(\\d+)")
+                            .find(mission.lastResult)
+                            ?.groupValues
+                            ?.getOrNull(1)
+                            ?.toLongOrNull()
+                    }
+                    else -> Unit
+                }
+                resumeRecoveredMissionIfReady()
+            }
+        }
         recordThermalStatus(powerManager.currentThermalStatus)
         powerManager.addThermalStatusListener(application.mainExecutor, thermalListener)
         (restoredReasoningModel ?: restoredConversationModel)?.let(::loadModel)
@@ -1751,6 +1769,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                         "Paused explicitly by the user.",
                     )
                 }
+                AgentRunScheduler.kick(getApplication())
                 completeControllerResponse(agentMissionReport(paused))
                 return null
             }
@@ -1762,6 +1781,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                         "Cancelled explicitly by the user. Existing files were retained.",
                     )
                 }
+                AgentRunScheduler.kick(getApplication())
                 completeControllerResponse(agentMissionReport(cancelled))
                 return null
             }
@@ -1953,7 +1973,16 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                 .onFailure { failure ->
                     val detail = "Termux execution #$id could not start: ${safeFailure(failure)}"
                     withContext(Dispatchers.IO) {
-                        memoryMatrix.setExecutionActionStatus(id, "running", "failed", detail)
+                        memoryMatrix.completeExecutionAction(
+                            id = id,
+                            stdout = "",
+                            stderr = "",
+                            stdoutOriginalLength = 0L,
+                            stderrOriginalLength = 0L,
+                            exitCode = -1,
+                            errorCode = 1,
+                            errorMessage = detail,
+                        )
                     }
                     commitMessage(
                         ChatSpeaker.System,
@@ -2455,13 +2484,31 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                         val detail = "Granted Termux execution #${action.id} could not start: " +
                             safeFailure(failure)
                         withContext(Dispatchers.IO) {
-                            val expected = if (claimed) "running" else "pending"
-                            memoryMatrix.setExecutionActionStatus(action.id, expected, "failed", detail)
+                            if (claimed) {
+                                memoryMatrix.completeExecutionAction(
+                                    id = action.id,
+                                    stdout = "",
+                                    stderr = "",
+                                    stdoutOriginalLength = 0L,
+                                    stderrOriginalLength = 0L,
+                                    exitCode = -1,
+                                    errorCode = 1,
+                                    errorMessage = detail,
+                                )
+                            } else {
+                                memoryMatrix.setExecutionActionStatus(
+                                    action.id,
+                                    "pending",
+                                    "failed",
+                                    detail,
+                                )
+                            }
                         }
                         pendingExecutionRecoveryId = action.id
                         detail
                     },
                 )
+                AgentRunScheduler.kick(getApplication())
                 refreshRuntimeState()
                 return ControllerCycleOutcome(mission = paused, completedResponse = response)
             }
@@ -2487,6 +2534,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                     "Resume only after its terminal result returns.",
             )
         }
+        AgentRunScheduler.kick(getApplication())
         refreshRuntimeState()
         return ControllerCycleOutcome(mission = updatedMission, completedResponse = response)
     }
@@ -3121,6 +3169,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
     private fun agentMissionReport(mission: AgentMissionCheckpoint?): String = if (mission == null) {
         "No long-form work-session checkpoint exists.\n\n${missionUsage()}"
     } else {
+        val schedule = runCatching { memoryMatrix.agentRunSchedule(mission.id) }.getOrNull()
         buildString {
             appendLine("# Work session ${mission.id}")
             appendLine()
@@ -3128,6 +3177,9 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             appendLine("- **Scope:** `${mission.rootPath}`")
             appendLine("- **Mode:** ${mission.mode.label}")
             appendLine("- **Controller:** ${mission.planKind}")
+            schedule?.let {
+                appendLine("- **Scheduler:** ${it.state.name} · revision ${it.revision} · ${it.reason}")
+            }
             if (mission.planKind == EvolutionForgeMissionKind) {
                 runCatching { EvolutionForgeStateCodec.decode(mission.evolutionState) }.getOrNull()?.let {
                     appendLine("- **Evolution stage:** ${it.stage.name}")
@@ -3873,6 +3925,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                     nowEpochMillis,
                 )
             }
+            AgentRunScheduler.kick(getApplication())
             refreshRuntimeState()
             return "Issued bounded execution grant `${issued.id}` for ${mission.id}: " +
                 "${issued.maxExecutions} offline inspect/build/test/lint commands, " +
@@ -3891,6 +3944,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                 ?: error("No mission checkpoint is available.")
             val revoked = withContext(Dispatchers.IO) { memoryMatrix.revokeExecutionGrant(mission.id) }
                 ?: return "No execution grant exists for ${mission.id}."
+            AgentRunScheduler.kick(getApplication())
             refreshRuntimeState()
             return "Execution grant `${revoked.id}` is ${revoked.status.name.lowercase()}. " +
                 "Queued or running commands keep their independently auditable state."

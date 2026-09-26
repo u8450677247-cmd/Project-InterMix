@@ -5,6 +5,7 @@ import android.app.Application
 class IntermixApplication : Application() {
     override fun onCreate() {
         super.onCreate()
+        AgentRunScheduler.schedule(this)
         UpdateNotifications.createChannel(this)
         UpdateScheduler.schedulePostInstallVerification(this)
         runCatching { ReleaseTrustConfig.configuredOrNull() }

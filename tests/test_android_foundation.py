@@ -443,6 +443,41 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("object CognitionRoutingPolicy", provider)
         self.assertIn("CognitionRoutingPolicy.select", routing)
 
+    def test_agent_scheduler_is_durable_constrained_and_recovers_granted_dispatch(self):
+        policy = (SOURCE / "AgentRunScheduler.kt").read_text(encoding="utf-8")
+        worker = (SOURCE / "AgentRunSchedulerWorker.kt").read_text(
+            encoding="utf-8"
+        )
+        repository = (SOURCE / "MemoryMatrixRepository.kt").read_text(
+            encoding="utf-8"
+        )
+        application = (SOURCE / "IntermixApplication.kt").read_text(
+            encoding="utf-8"
+        )
+
+        for state in (
+            "Runnable",
+            "WaitingRuntime",
+            "WaitingPower",
+            "WaitingThermal",
+            "WaitingAuthority",
+            "WaitingExecution",
+            "Reconciling",
+            "Paused",
+            "Completed",
+            "Failed",
+        ):
+            self.assertIn(state, policy)
+        self.assertIn("object AgentRunSchedulerPolicy", policy)
+        self.assertIn("AgentRunScheduleCodec", policy)
+        self.assertIn("fun reconcileAgentRunSchedule", repository)
+        self.assertIn("CREATE TABLE IF NOT EXISTS agent_run_schedule", repository)
+        self.assertIn("PeriodicWorkRequestBuilder<AgentRunSchedulerWorker>", worker)
+        self.assertIn("setRequiresBatteryNotLow(true)", worker)
+        self.assertIn("setRequiresStorageNotLow(true)", worker)
+        self.assertIn("recoverGrantedExecution", worker)
+        self.assertIn("AgentRunScheduler.schedule(this)", application)
+
     def test_work_session_is_one_scoped_grant_with_controller_owned_path_recovery(self):
         protocol = (SOURCE / "ControllerProtocol.kt").read_text(encoding="utf-8")
         workspace = (SOURCE / "WorkspaceRepository.kt").read_text(encoding="utf-8")

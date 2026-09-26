@@ -2109,9 +2109,97 @@ class MemoryMatrixRepository(private val context: Context) :
     fun revokeExecutionGrant(missionId: String): ExecutionGrant? {
         val grant = latestExecutionGrant(missionId) ?: return null
         if (grant.status != ExecutionGrantStatus.Active) return grant
-        return grant.copy(status = ExecutionGrantStatus.Revoked).also {
-            persistExecutionGrant(writableDatabase, it)
+        val revoked = grant.copy(status = ExecutionGrantStatus.Revoked)
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            persistExecutionGrant(db, revoked)
+            val values = ContentValues().apply {
+                put("status", "denied")
+                put("error", "Execution grant was revoked before dispatch.")
+                put("updated_at", now())
+            }
+            db.update(
+                "execution_actions",
+                values,
+                "grant_id=? AND status='pending'",
+                arrayOf(grant.id),
+            )
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
         }
+        return revoked
+    }
+
+    @Synchronized
+    fun agentRunSchedule(missionId: String): AgentRunSchedule? = readableDatabase.rawQuery(
+        "SELECT state_json FROM agent_run_schedule WHERE mission_id=? LIMIT 1",
+        arrayOf(missionId),
+    ).use { cursor ->
+        if (!cursor.moveToFirst()) null else runCatching {
+            AgentRunScheduleCodec.decode(JSONObject(cursor.getString(0)))
+        }.getOrNull()
+    }
+
+    @Synchronized
+    fun reconcileAgentRunSchedule(
+        runtimeAvailable: Boolean,
+        powerAvailable: Boolean,
+        thermalAvailable: Boolean,
+        nowEpochMillis: Long = Instant.now().toEpochMilli(),
+    ): AgentRunSchedule? {
+        val mission = activeAgentMission() ?: return null
+        val executions = pendingExecutionActions(limit = 100).filter { it.missionId == mission.id }
+        val terminalExecutionStatus = Regex("Termux execution #(\\d+)")
+            .find(mission.lastResult)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toLongOrNull()
+            ?.let(::executionAction)
+            ?.status
+        val terminalExecutionReady = terminalExecutionStatus != null &&
+            terminalExecutionStatus in setOf("completed", "failed", "cancelled")
+        val schedule = AgentRunSchedulerPolicy.reduce(
+            input = AgentRunSchedulerInput(
+                missionId = mission.id,
+                missionStatus = mission.status,
+                runtimeAvailable = runtimeAvailable,
+                powerAvailable = powerAvailable,
+                thermalAvailable = thermalAvailable,
+                authorityRequired = executions.any { it.status == "pending" && it.grantId.isBlank() },
+                pendingGrantedExecution = executions.any {
+                    it.status == "pending" && it.grantId.isNotBlank()
+                },
+                runningExecution = executions.any {
+                    it.status in setOf("running", "cancel_requested")
+                },
+                terminalExecutionReady = terminalExecutionReady,
+                nowEpochMillis = nowEpochMillis,
+            ),
+            previous = agentRunSchedule(mission.id),
+        )
+        persistAgentRunSchedule(schedule)
+        return schedule
+    }
+
+    @Synchronized
+    fun persistAgentRunSchedule(schedule: AgentRunSchedule) {
+        val values = ContentValues().apply {
+            put("mission_id", schedule.missionId)
+            put("state_json", AgentRunScheduleCodec.encode(schedule).toString())
+            put("state", schedule.state.name)
+            put("next_run_at_epoch_millis", schedule.nextRunAtEpochMillis)
+            put("updated_at", now())
+        }
+        check(
+            writableDatabase.insertWithOnConflict(
+                "agent_run_schedule",
+                null,
+                values,
+                SQLiteDatabase.CONFLICT_REPLACE,
+            ) != -1L,
+        ) { "Agent run schedule persistence failed." }
     }
 
     @Synchronized

@@ -270,6 +270,7 @@ class TermuxExecutionResultService : IntentService("AniCloudAI-Termux-Result") {
             }
         }
         TermuxExecutionEvents.completed.tryEmit(jobId)
+        AgentRunScheduler.kick(applicationContext)
     }
 }
 
