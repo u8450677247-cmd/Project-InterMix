@@ -27,6 +27,8 @@ data class WorkspaceState(
     val savedText: String = "",
     val newFolderOpen: Boolean = false,
     val newFolderName: String = "",
+    val newFileOpen: Boolean = false,
+    val newFileName: String = "",
     val pendingTrash: WorkspaceEntry? = null,
     val lastTrash: WorkspaceTrashReceipt? = null,
     val busy: Boolean = false,
@@ -35,6 +37,7 @@ data class WorkspaceState(
     val isDirty: Boolean get() = selected != null && editorText != savedText
     val canNavigateUp: Boolean get() = selected != null || navigationTrail.size > 1
     val breadcrumb: String get() = navigationTrail.joinToString(" / ") { it.label }
+    val creationOpen: Boolean get() = newFolderOpen || newFileOpen
 }
 
 class WorkspaceViewModel(application: Application) : AndroidViewModel(application) {
@@ -89,6 +92,10 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun open(entry: WorkspaceEntry) {
+        if (_state.value.creationOpen) {
+            _state.update { it.copy(detail = "Create or cancel the pending workspace entry before navigating.") }
+            return
+        }
         if (_state.value.pendingTrash != null) {
             _state.update { it.copy(detail = "Confirm or cancel the reviewed trash request before navigating.") }
             return
@@ -138,6 +145,7 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
     fun requestNewFolder() {
         val state = _state.value
         if (state.rootUri == null || state.currentUri == null || state.busy) return
+        if (state.creationOpen) return
         if (state.pendingTrash != null || state.lastTrash != null) {
             _state.update {
                 it.copy(detail = "Finish the current trash review before creating a folder.")
@@ -194,9 +202,72 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    fun requestNewFile() {
+        val state = _state.value
+        if (state.rootUri == null || state.currentUri == null || state.busy) return
+        if (state.creationOpen) return
+        if (state.pendingTrash != null || state.lastTrash != null) {
+            _state.update {
+                it.copy(detail = "Finish the current trash review before creating a file.")
+            }
+            return
+        }
+        if (state.isDirty) {
+            _state.update { it.copy(detail = "Save or revert the current draft before creating a file.") }
+            return
+        }
+        _state.update {
+            it.copy(
+                newFileOpen = true,
+                newFileName = "",
+                detail = "Name one text file inside ${it.currentLabel}; nothing is created until confirmation.",
+            )
+        }
+    }
+
+    fun updateNewFileName(name: String) {
+        _state.update { it.copy(newFileName = name.take(160)) }
+    }
+
+    fun cancelNewFile() {
+        _state.update {
+            it.copy(
+                newFileOpen = false,
+                newFileName = "",
+                detail = "File creation cancelled; no workspace entries changed.",
+            )
+        }
+    }
+
+    fun confirmNewFile() {
+        val state = _state.value
+        val root = state.rootUri?.let(Uri::parse) ?: return
+        val parent = state.currentUri?.let(Uri::parse) ?: return
+        if (!state.newFileOpen || state.busy || state.isDirty) return
+        viewModelScope.launch {
+            _state.update { it.copy(busy = true, detail = "Creating and verifying reviewed text file…") }
+            runCatching {
+                repository.createUserTextFile(root, parent, state.newFileName)
+            }.onSuccess { created ->
+                _state.update {
+                    it.copy(
+                        selected = created,
+                        editorText = "",
+                        savedText = "",
+                        newFileOpen = false,
+                        newFileName = "",
+                        busy = false,
+                        detail = "Created ${created.displayName} and opened its verified empty editor buffer.",
+                    )
+                }
+                refresh()
+            }.onFailure(::showFailure)
+        }
+    }
+
     fun returnToRoot() {
-        if (_state.value.newFolderOpen) {
-            _state.update { it.copy(detail = "Create or cancel the pending folder before navigating.") }
+        if (_state.value.creationOpen) {
+            _state.update { it.copy(detail = "Create or cancel the pending workspace entry before navigating.") }
             return
         }
         if (_state.value.pendingTrash != null) {
@@ -225,6 +296,10 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
         val state = _state.value
         if (state.newFolderOpen) {
             cancelNewFolder()
+            return
+        }
+        if (state.newFileOpen) {
+            cancelNewFile()
             return
         }
         if (state.pendingTrash != null) {
@@ -263,8 +338,8 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
     fun requestTrash(entry: WorkspaceEntry) {
         val state = _state.value
         if (state.busy) return
-        if (state.newFolderOpen) {
-            _state.update { it.copy(detail = "Create or cancel the pending folder before reviewing trash.") }
+        if (state.creationOpen) {
+            _state.update { it.copy(detail = "Create or cancel the pending workspace entry before reviewing trash.") }
             return
         }
         if (state.lastTrash != null) {

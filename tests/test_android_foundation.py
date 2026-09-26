@@ -774,6 +774,15 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("fun createUserDirectory", repository)
         self.assertIn("fun requestNewFolder", view_model)
         self.assertIn('Text("NEW FOLDER")', ui)
+        self.assertIn("fun createUserTextFile", repository)
+        self.assertIn("Explicit user creation may start empty", repository)
+        self.assertIn("persisted.contentEquals(emptyContent)", repository)
+        self.assertIn("persistedName == name", repository)
+        self.assertIn("fun requestNewFile", view_model)
+        self.assertIn("fun confirmNewFile", view_model)
+        self.assertIn("creationOpen", view_model)
+        self.assertIn('Text("NEW FILE")', ui)
+        self.assertIn('"CREATE TEXT FILE"', ui)
 
     def test_workspace_write_grants_are_visible_nonempty_and_byte_verified(self):
         protocol = (SOURCE / "ControllerProtocol.kt").read_text(encoding="utf-8")

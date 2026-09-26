@@ -247,6 +247,18 @@ class FoundationContractTest {
     }
 
     @Test
+    fun visibleWorkspaceEntryNamesRemainSingleExactLeaves() {
+        assertEquals("notes.md", normalizeWorkspaceLeafName("  notes.md  "))
+        assertEquals("fl02-Narrative.kt", normalizeWorkspaceLeafName("fl02-Narrative.kt"))
+        listOf("", ".", "..", "nested/notes.md", "nested\\notes.md", "bad\u0007name.txt")
+            .forEach { invalid ->
+                assertThrows(IllegalArgumentException::class.java) {
+                    normalizeWorkspaceLeafName(invalid)
+                }
+            }
+    }
+
+    @Test
     fun recursiveMissionActionPatternsAreDetectedWithoutRejectingProgress() {
         assertTrue(hasRecursiveActionTail(listOf("read:a", "read:a", "read:a")))
         assertTrue(

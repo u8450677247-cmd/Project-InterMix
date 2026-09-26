@@ -316,7 +316,9 @@ class WorkspaceRepository(
         rawName: String,
     ): WorkspaceEntry = withContext(Dispatchers.IO) {
         val name = normalizeWorkspaceLeafName(rawName)
-        require(name != ".anicloud-trash") { "The recoverable trash name is reserved." }
+        require(!name.equals(".anicloud-trash", ignoreCase = true)) {
+            "The recoverable trash name is reserved."
+        }
         require(
             listChildrenNow(root, parent).none { it.displayName.equals(name, ignoreCase = true) },
         ) { "An entry named $name already exists in this folder." }
@@ -332,6 +334,47 @@ class WorkspaceRepository(
             mimeType = DocumentsContract.Document.MIME_TYPE_DIR,
             byteSize = null,
             isDirectory = true,
+        )
+    }
+
+    /** Explicit user creation may start empty; model-authored file actions remain non-empty. */
+    suspend fun createUserTextFile(
+        root: Uri,
+        parent: Uri,
+        rawName: String,
+    ): WorkspaceEntry = withContext(Dispatchers.IO) {
+        val name = normalizeWorkspaceLeafName(rawName)
+        require(!name.equals(".anicloud-trash", ignoreCase = true)) {
+            "The recoverable trash name is reserved."
+        }
+        require(
+            listChildrenNow(root, parent).none { it.displayName.equals(name, ignoreCase = true) },
+        ) { "An entry named $name already exists in this folder." }
+        val mimeType = mimeForName(name)
+        val created = DocumentsContract.createDocument(
+            context.contentResolver,
+            documentUriForQuery(parent),
+            mimeType,
+            name,
+        ) ?: error("The document provider refused to create file $name.")
+        val emptyContent = ByteArray(0)
+        writeBytes(created, emptyContent)
+        val persisted = readBytes(created)
+        check(persisted.contentEquals(emptyContent)) {
+            "The document provider created $name but did not persist an exact empty text file; " +
+                "the incomplete entry may remain for user review."
+        }
+        val persistedName = queryDisplayName(created)
+            ?: error("The document provider created the file but did not expose its display name.")
+        check(persistedName == name) {
+            "The document provider changed $name to $persistedName; review the created entry before retrying."
+        }
+        WorkspaceEntry(
+            uri = created.toString(),
+            displayName = persistedName,
+            mimeType = mimeType,
+            byteSize = 0L,
+            isDirectory = false,
         )
     }
 
@@ -1227,15 +1270,15 @@ fun scopeWorkspaceMissionPath(rawPath: String, rawRootPath: String): String {
     return normalizeWorkspacePath((rootSegments + relative).joinToString("/"))
 }
 
-/** A user-entered folder name is one leaf, never a path or controller instruction. */
+/** A user-entered file or folder name is one leaf, never a path or controller instruction. */
 fun normalizeWorkspaceLeafName(raw: String): String {
     val name = raw.replace("\u0000", "").trim()
-    require(name.isNotBlank()) { "Enter a folder name." }
-    require(name !in setOf(".", "..")) { "Choose a normal folder name." }
-    require('/' !in name && '\\' !in name) { "Folder names cannot contain path separators." }
-    require(name.length <= 120) { "Folder names are limited to 120 characters." }
+    require(name.isNotBlank()) { "Enter a file or folder name." }
+    require(name !in setOf(".", "..")) { "Choose a normal file or folder name." }
+    require('/' !in name && '\\' !in name) { "Names cannot contain path separators." }
+    require(name.length <= 120) { "Names are limited to 120 characters." }
     require(name.none { it.code < 0x20 || it.code == 0x7f }) {
-        "Folder names cannot contain control characters."
+        "Names cannot contain control characters."
     }
     return name
 }

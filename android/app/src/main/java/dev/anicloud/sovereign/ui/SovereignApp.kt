@@ -2176,10 +2176,14 @@ private fun WorkspaceSurface(
         uri?.let(workspaceViewModel::attachRoot)
     }
     BackHandler(
-        enabled = !workSessionOpen && (state.newFolderOpen || state.canNavigateUp) &&
+        enabled = !workSessionOpen && (state.creationOpen || state.canNavigateUp) &&
             !state.busy && state.pendingTrash == null,
     ) {
-        if (state.newFolderOpen) workspaceViewModel.cancelNewFolder() else workspaceViewModel.navigateUp()
+        when {
+            state.newFolderOpen -> workspaceViewModel.cancelNewFolder()
+            state.newFileOpen -> workspaceViewModel.cancelNewFile()
+            else -> workspaceViewModel.navigateUp()
+        }
     }
 
     Column(
@@ -2213,8 +2217,13 @@ private fun WorkspaceSurface(
             OutlinedButton(
                 onClick = workspaceViewModel::requestNewFolder,
                 enabled = state.rootUri != null && !workSessionOpen && !state.busy &&
-                    !state.newFolderOpen && state.pendingTrash == null && state.lastTrash == null,
+                    !state.creationOpen && state.pendingTrash == null && state.lastTrash == null,
             ) { Text("NEW FOLDER") }
+            OutlinedButton(
+                onClick = workspaceViewModel::requestNewFile,
+                enabled = state.rootUri != null && !workSessionOpen && !state.busy &&
+                    !state.creationOpen && state.pendingTrash == null && state.lastTrash == null,
+            ) { Text("NEW FILE") }
             FluorescentChip(
                 selected = !workSessionOpen,
                 onClick = { workSessionOpen = false },
@@ -2252,14 +2261,19 @@ private fun WorkspaceSurface(
             )
         }
 
-        if (state.newFolderOpen) {
+        if (state.creationOpen) {
+            val creatingFile = state.newFileOpen
             OutlinedCard(
                 border = BorderStroke(1.dp, HorizonCyan.copy(alpha = 0.72f)),
                 colors = CardDefaults.outlinedCardColors(containerColor = Color.Transparent),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("CREATE FOLDER", color = HorizonCyan, fontWeight = FontWeight.Bold)
+                    Text(
+                        if (creatingFile) "CREATE TEXT FILE" else "CREATE FOLDER",
+                        color = HorizonCyan,
+                        fontWeight = FontWeight.Bold,
+                    )
                     Text(
                         "Location: ${state.breadcrumb.ifBlank { state.rootLabel }}",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2269,26 +2283,53 @@ private fun WorkspaceSurface(
                         overflow = TextOverflow.Ellipsis,
                     )
                     OutlinedTextField(
-                        value = state.newFolderName,
-                        onValueChange = workspaceViewModel::updateNewFolderName,
-                        label = { Text("FOLDER NAME") },
-                        placeholder = { Text("new-component") },
+                        value = if (creatingFile) state.newFileName else state.newFolderName,
+                        onValueChange = { name ->
+                            if (creatingFile) {
+                                workspaceViewModel.updateNewFileName(name)
+                            } else {
+                                workspaceViewModel.updateNewFolderName(name)
+                            }
+                        },
+                        label = { Text(if (creatingFile) "FILE NAME" else "FOLDER NAME") },
+                        placeholder = { Text(if (creatingFile) "notes.md" else "new-component") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
-                            onClick = workspaceViewModel::confirmNewFolder,
-                            enabled = state.newFolderName.isNotBlank() && !state.busy,
+                            onClick = {
+                                if (creatingFile) {
+                                    workspaceViewModel.confirmNewFile()
+                                } else {
+                                    workspaceViewModel.confirmNewFolder()
+                                }
+                            },
+                            enabled = (
+                                if (creatingFile) state.newFileName.isNotBlank()
+                                else state.newFolderName.isNotBlank()
+                                ) && !state.busy,
                         ) { Text("CREATE", fontWeight = FontWeight.Bold) }
                         OutlinedButton(
-                            onClick = workspaceViewModel::cancelNewFolder,
+                            onClick = {
+                                if (creatingFile) {
+                                    workspaceViewModel.cancelNewFile()
+                                } else {
+                                    workspaceViewModel.cancelNewFolder()
+                                }
+                            },
                             enabled = !state.busy,
                         ) { Text("CANCEL") }
                     }
                     Text(
-                        "Uses the project’s existing Android folder permission; no additional device-wide permission is requested.",
+                        if (creatingFile) {
+                            "Creates one verified empty text file, then opens it in the editor. " +
+                                "The first SAVE retains an empty pre-write snapshot."
+                        } else {
+                            "Uses the project’s existing Android folder permission; " +
+                                "no additional device-wide permission is requested."
+                        },
                         color = ResonanceMint,
                         fontSize = 10.sp,
                     )
@@ -3128,7 +3169,7 @@ private fun WorkspaceBrowser(
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                         TextButton(
                             onClick = { onOpen(entry) },
-                            enabled = !state.busy && state.pendingTrash == null,
+                            enabled = !state.busy && !state.creationOpen && state.pendingTrash == null,
                             modifier = Modifier.weight(1f),
                         ) {
                             Text(
@@ -3142,7 +3183,8 @@ private fun WorkspaceBrowser(
                         if (state.currentLabel != ".anicloud-trash" && entry.displayName != ".anicloud-trash") {
                             TextButton(
                                 onClick = { onTrash(entry) },
-                                enabled = !state.busy && state.pendingTrash == null && state.lastTrash == null,
+                                enabled = !state.busy && !state.creationOpen &&
+                                    state.pendingTrash == null && state.lastTrash == null,
                             ) {
                                 Text("TRASH", color = InterventionCoral, fontSize = 9.sp)
                             }

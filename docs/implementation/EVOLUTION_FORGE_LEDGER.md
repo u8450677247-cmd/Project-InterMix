@@ -386,12 +386,14 @@ Change:
 Test:
 
 - `python -m unittest tests.test_android_foundation`: 48/48 PASS.
+- `python -m unittest discover -s tests -p 'test_android*.py' -v`: 56/56 PASS.
 - `python -m unittest discover -s tests -v`: 180 PASS; 5 environment-dependent Textual tests skipped.
 - `python -m compileall -q tests tools engine`: PASS.
 - `git diff --check`: PASS.
-- Added JVM contract cases for exact parent ordering, root confinement, rejection of reordered plans,
-  and the eight-directory repair ceiling; execution is pending branch CI below.
-- Focused Android/JUnit compilation: PENDING BRANCH CI.
+- JVM contract cases passed for exact parent ordering, root confinement, rejection of reordered plans,
+  and the eight-directory repair ceiling.
+- GitHub Actions `android-foundation` run `36228976805`: PASS. Android unit tests, debug APK assembly,
+  provenance staging, and artifact retention all completed successfully.
 
 Regression check:
 
@@ -419,9 +421,84 @@ Patch Evolution Review:
 - Security/privacy impact: authority is unchanged and every repair path is a strict target ancestor under
   the already-approved mission root.
 
+Result: **KEEP; BRANCH CI PASS; DEVICE VERIFICATION REQUIRED**
+
+Next candidate:
+
+- Add the missing explicit text-file creation flow in Workspace Lens; existing files were editable and
+  folders were creatable, but the visible editor could not create its own file.
+
+## Patch FILE-01 — Verified user-created text files
+
+Objective:
+
+- Let the user create a new text/code file in the currently open Workspace Lens folder and begin editing
+  it immediately, without routing a direct UI action through model inference or broadening storage access.
+
+Verified before state:
+
+- Workspace Lens could browse folders, navigate up/root, create a folder, edit and snapshot-save an
+  existing text file, and move an entry to recoverable project-local trash.
+- It exposed no `NEW FILE` action. Controller-authored creates existed, but those are a different,
+  model-mediated approval surface and do not replace a basic editor file-creation workflow.
+- REC-01 passed Android unit-test compilation and debug APK assembly in Actions run `36228976805`.
+
+Change:
+
+- Add an explicit `NEW FILE` action beside `NEW FOLDER`, with the current breadcrumb, one leaf-name
+  field, visible confirmation, cancellation, and Android-back cancellation.
+- Reuse the exact leaf-name validator for files and folders: trim once, preserve case/spelling, reject
+  traversal, separators, dot aliases, control characters, and names above 120 characters.
+- Reject `.anicloud-trash` and case-insensitive collisions in the open folder before invoking the SAF
+  provider. No parent path can be supplied through this surface.
+- Create one zero-byte text file through the existing persisted tree grant, read it back, and verify the
+  provider retained both the exact empty bytes and exact requested display name.
+- Open the verified file in the existing editor immediately. The first content save uses the unchanged
+  pre-write snapshot path, so even its empty starting state is retained before replacement.
+- Freeze browser open/trash actions while either creation review is active so the displayed parent cannot
+  drift between review and confirmation.
+- Keep model/controller create actions non-empty. Empty initial content is allowed only for this explicit
+  user-driven editor action.
+
+Test:
+
+- `python -m unittest tests.test_android_foundation`: 48/48 PASS.
+- `python -m unittest discover -s tests -p 'test_android*.py' -v`: 56/56 PASS.
+- Added JVM contract cases for exact case/spelling preservation and rejection of blank, dot, traversal,
+  separator, and control-character leaf names; execution is pending branch CI.
+- `python -m unittest discover -s tests -v`: 180 PASS; 5 environment-dependent Textual tests skipped.
+- `python -m compileall -q tests tools engine`: PASS.
+- `git diff --check`: PASS.
+- Focused Android/JUnit compilation and debug APK assembly: PENDING BRANCH CI.
+
+Regression check:
+
+- No manifest permission, workspace root, mission grant, controller protocol, delete/trash, shell,
+  network, updater, release, or SQLite behavior changed.
+- Existing dirty-draft and trash-review interlocks remain; file creation adds the same interlocks.
+- The provider receives only the currently open document URI under the persisted tree grant.
+
+Known limitation:
+
+- Provider-specific zero-byte creation, display-name fidelity, editor focus, and first-save behavior still
+  require device verification.
+- Rename, move between folders, search, and arbitrary file import remain separate capabilities.
+
+Patch Evolution Review:
+
+- Pros: closes a basic editor capability with explicit user intent, exact name validation, provider
+  verification, and immediate handoff to the already-protected save path.
+- Cons: a confirmed empty file is a real workspace mutation before the user types content; cancellation
+  therefore happens before confirmation, and later removal uses the existing recoverable-trash flow.
+- Resource impact: one provider create, one empty write/fsync, one bounded read-back, and one directory
+  refresh; no service, polling, or dependency was added.
+- UX impact: the editor is now self-sufficient for starting a file, while one shared creation card keeps
+  folder/file confirmation behavior consistent on phone and desktop.
+- Security/privacy impact: no new authority; creation stays inside the currently displayed SAF folder.
+
 Result: **LOCAL CONTRACTS PASS; ANDROID CI REQUIRED**
 
 Next candidate:
 
-- Publish REC-01, consume its Android compile/APK gate, then inspect the highest-value remaining
-  Workspace Lens create/edit/navigation gap before selecting the next small patch.
+- Publish FILE-01 and consume its Android gate, then assess exact user-driven rename as the next bounded
+  file-management gap before moving to import or OLED work.
