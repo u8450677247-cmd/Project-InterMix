@@ -14,6 +14,7 @@ import java.io.InputStream
 import java.security.MessageDigest
 import java.util.ArrayDeque
 import java.util.Base64
+import java.util.concurrent.CancellationException
 
 private const val WorkspacePreferences = "anicloud_workspace"
 private const val WorkspaceRootKey = "root_uri"
@@ -25,6 +26,7 @@ private const val StoryForgeHeaderMarker = "<!-- ANICLOUD_STORY_FORGE_V1 -->"
 private const val StoryForgeContextCharacters = 4_096
 private const val MaxArtifactRecoveryEntries = 2_048
 private const val MaxArtifactRecoveryDepth = 16
+internal const val MaxMissionParentRepairs = 8
 
 data class WorkspaceEntry(
     val uri: String,
@@ -59,6 +61,7 @@ data class WorkspaceActionResult(
 data class WorkspaceActionReconciliation(
     val proposal: WorkspaceActionProposal,
     val detail: String = "",
+    val prerequisiteDirectories: List<String> = emptyList(),
 )
 
 private data class ResolvedRegisteredArtifact(
@@ -89,6 +92,46 @@ fun reconcileScopedWorkspaceAction(
     )
 } else {
     WorkspaceActionReconciliation(proposal)
+}
+
+/**
+ * Returns every directory between an immutable mission root and one proposed target. The root and
+ * target are excluded. This is ordering data only; the repository still verifies each path against
+ * the Storage Access Framework immediately before performing a repair.
+ */
+fun orderedMissionParentPaths(rawTargetPath: String, rawMissionRootPath: String): List<String> {
+    val targetPath = normalizeWorkspacePath(rawTargetPath)
+    val missionRootPath = normalizeWorkspacePath(rawMissionRootPath)
+    require(
+        targetPath == missionRootPath || targetPath.startsWith("$missionRootPath/"),
+    ) { "The proposed target is outside the authorized mission root." }
+    if (targetPath == missionRootPath) return emptyList()
+
+    val targetSegments = targetPath.split('/')
+    val rootSegments = missionRootPath.split('/')
+    return (rootSegments.size + 1 until targetSegments.size).map { segmentCount ->
+        targetSegments.take(segmentCount).joinToString("/")
+    }
+}
+
+/** Validates that a recovery plan is bounded, unique, and in exact ancestor order. */
+fun validateMissionParentRepairPlan(
+    rawTargetPath: String,
+    rawMissionRootPath: String,
+    rawRepairPaths: List<String>,
+): List<String> {
+    val candidates = orderedMissionParentPaths(rawTargetPath, rawMissionRootPath)
+    val repairs = rawRepairPaths.map { normalizeWorkspacePath(it) }
+    require(repairs.size <= MaxMissionParentRepairs) {
+        "A mission action may repair at most $MaxMissionParentRepairs missing parent directories."
+    }
+    require(repairs.distinct().size == repairs.size) {
+        "A mission parent-repair plan cannot repeat a directory."
+    }
+    require(repairs == candidates.takeLast(repairs.size)) {
+        "Mission parent repairs must be the exact missing ancestor suffix in deterministic order."
+    }
+    return repairs
 }
 
 /** A persisted Storage Access Framework tree is the complete authority boundary. */
@@ -179,15 +222,50 @@ class WorkspaceRepository(
     /** Resolves only the safe missing-write ambiguity inside an already active mission grant. */
     suspend fun reconcileMissionAction(
         proposal: WorkspaceActionProposal,
+        rawMissionRootPath: String,
     ): WorkspaceActionReconciliation = withContext(Dispatchers.IO) {
-        if (proposal.kind != WorkspaceActionKind.WriteFile) {
-            return@withContext WorkspaceActionReconciliation(proposal)
-        }
         val root = storedRoot() ?: error("No workspace is connected.")
         val path = normalizeWorkspacePath(proposal.path)
-        reconcileScopedWorkspaceAction(
+        val missionRootPath = normalizeWorkspacePath(rawMissionRootPath)
+        require(path == missionRootPath || path.startsWith("$missionRootPath/")) {
+            "The proposed target is outside the authorized mission root."
+        }
+        val missionRoot = resolveEntry(root, missionRootPath)
+            ?: error("The authorized mission root is no longer available at $missionRootPath.")
+        require(missionRoot.isDirectory) { "The authorized mission root is no longer a directory." }
+
+        val reconciled = reconcileScopedWorkspaceAction(
             proposal = proposal.copy(path = path),
             targetExists = resolveEntry(root, path) != null,
+        )
+        if (
+            reconciled.proposal.kind !in setOf(
+                WorkspaceActionKind.CreateFile,
+                WorkspaceActionKind.CreateDirectory,
+            )
+        ) {
+            return@withContext reconciled
+        }
+
+        val missingParents = orderedMissionParentPaths(path, missionRootPath).filter { parentPath ->
+            val parent = resolveEntry(root, parentPath)
+            if (parent != null) {
+                require(parent.isDirectory) {
+                    "Mission parent recovery crosses a file at $parentPath."
+                }
+            }
+            parent == null
+        }
+        val repairPlan = validateMissionParentRepairPlan(path, missionRootPath, missingParents)
+        reconciled.copy(
+            detail = listOf(
+                reconciled.detail,
+                repairPlan.takeIf { it.isNotEmpty() }?.let {
+                    "Planned ${it.size} missing parent ${if (it.size == 1) "directory" else "directories"} " +
+                        "in deterministic order: ${it.joinToString(" -> ")}."
+                }.orEmpty(),
+            ).filter(String::isNotBlank).joinToString(" "),
+            prerequisiteDirectories = repairPlan,
         )
     }
 
@@ -480,13 +558,102 @@ class WorkspaceRepository(
             require(proposal.kind.requiresApproval) { "This action does not require approval." }
             val root = storedRoot() ?: error("No workspace is connected.")
             val normalized = normalizeWorkspacePath(proposal.path)
-            when (proposal.kind) {
-                WorkspaceActionKind.CreateFile -> createFile(root, normalized, proposal.content)
-                WorkspaceActionKind.WriteFile -> writePath(root, normalized, proposal.content)
-                WorkspaceActionKind.CreateDirectory -> createDirectory(root, normalized)
-                else -> error("Read-only actions execute without an approval record.")
-            }
+            executeApprovedNow(root, proposal.copy(path = normalized))
         }
+
+    /**
+     * Executes one already-authorized mission mutation plus its bounded mechanical prerequisites.
+     * Parent creation is ordered, re-verified at execution time, and reported as one consolidated
+     * result. Ordinary approval-queue writes continue to use [executeApproved] without this repair.
+     */
+    suspend fun executeMissionApproved(
+        reconciliation: WorkspaceActionReconciliation,
+        rawMissionRootPath: String,
+    ): WorkspaceActionResult = withContext(Dispatchers.IO) {
+        val proposal = reconciliation.proposal
+        require(proposal.kind.requiresApproval) { "This mission action does not mutate the workspace." }
+        val root = storedRoot() ?: error("No workspace is connected.")
+        val missionRootPath = normalizeWorkspacePath(rawMissionRootPath)
+        val normalized = proposal.copy(path = normalizeWorkspacePath(proposal.path))
+        val plannedParents = validateMissionParentRepairPlan(
+            rawTargetPath = normalized.path,
+            rawMissionRootPath = missionRootPath,
+            rawRepairPaths = reconciliation.prerequisiteDirectories,
+        )
+        val allParents = orderedMissionParentPaths(normalized.path, missionRootPath)
+        val createdParents = mutableListOf<String>()
+        val reusedParents = mutableListOf<String>()
+        val parentResults = mutableListOf<WorkspaceActionResult>()
+
+        try {
+            plannedParents.forEach { parentPath ->
+                val existing = resolveEntry(root, parentPath)
+                if (existing == null) {
+                    parentResults += createDirectory(root, parentPath)
+                    val created = resolveEntry(root, parentPath)
+                        ?: error("The document provider did not expose repaired parent $parentPath.")
+                    check(created.isDirectory) {
+                        "The document provider did not persist repaired parent $parentPath as a directory."
+                    }
+                    createdParents += parentPath
+                } else {
+                    require(existing.isDirectory) {
+                        "Mission parent recovery found a file at $parentPath."
+                    }
+                    registerArtifact(root, parentPath, existing)
+                    reusedParents += parentPath
+                }
+            }
+            allParents.forEach { parentPath ->
+                val parent = resolveEntry(root, parentPath)
+                    ?: error("Mission parent $parentPath changed before the target action.")
+                require(parent.isDirectory) { "Mission parent $parentPath is not a directory." }
+            }
+
+            val result = executeApprovedNow(root, normalized)
+            if (plannedParents.isEmpty()) return@withContext result
+            result.copy(
+                detail = buildString {
+                    append("Executed an ordered mission bundle: ")
+                    if (createdParents.isNotEmpty()) {
+                        append("created ${createdParents.joinToString(" -> ")}; ")
+                    }
+                    if (reusedParents.isNotEmpty()) {
+                        append("reused ${reusedParents.joinToString(" -> ")}; ")
+                    }
+                    append("then ${result.detail.replaceFirstChar { it.lowercaseChar() }}")
+                },
+                toolContent = buildString {
+                    parentResults.forEach { parentResult ->
+                        appendLine(parentResult.detail)
+                        if (parentResult.toolContent.isNotBlank()) appendLine(parentResult.toolContent)
+                    }
+                    append(result.toolContent)
+                }.trim(),
+            )
+        } catch (failure: Throwable) {
+            if (failure is CancellationException) throw failure
+            val progress = buildList {
+                if (createdParents.isNotEmpty()) add("created ${createdParents.joinToString(" -> ")}")
+                if (reusedParents.isNotEmpty()) add("reused ${reusedParents.joinToString(" -> ")}")
+            }.joinToString("; ").ifBlank { "completed no prerequisite directories" }
+            throw IllegalStateException(
+                "Mission bundle stopped after it $progress. " +
+                    (failure.message ?: failure::class.java.simpleName),
+                failure,
+            )
+        }
+    }
+
+    private fun executeApprovedNow(
+        root: Uri,
+        proposal: WorkspaceActionProposal,
+    ): WorkspaceActionResult = when (proposal.kind) {
+        WorkspaceActionKind.CreateFile -> createFile(root, proposal.path, proposal.content)
+        WorkspaceActionKind.WriteFile -> writePath(root, proposal.path, proposal.content)
+        WorkspaceActionKind.CreateDirectory -> createDirectory(root, proposal.path)
+        else -> error("Read-only actions execute without an approval record.")
+    }
 
     private fun listPath(root: Uri, rawPath: String): WorkspaceActionResult {
         val path = normalizeWorkspacePath(rawPath, allowRoot = true)

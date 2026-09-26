@@ -216,6 +216,37 @@ class FoundationContractTest {
     }
 
     @Test
+    fun missionParentRepairPlansAreScopedOrderedAndBounded() {
+        val target = "mission/chapters/act-1/opening.md"
+        val ordered = orderedMissionParentPaths(target, "mission")
+        assertEquals(
+            listOf("mission/chapters", "mission/chapters/act-1"),
+            ordered,
+        )
+        assertEquals(
+            ordered,
+            validateMissionParentRepairPlan(target, "mission", ordered),
+        )
+        assertEquals(
+            emptyList<String>(),
+            orderedMissionParentPaths("mission/readme.md", "mission"),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            orderedMissionParentPaths("other/chapters/opening.md", "mission")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            validateMissionParentRepairPlan(target, "mission", ordered.reversed())
+        }
+
+        val deepTarget = "mission/" + (1..9).joinToString("/") { "level-$it" } + "/proof.md"
+        val excessive = orderedMissionParentPaths(deepTarget, "mission")
+        assertEquals(MaxMissionParentRepairs + 1, excessive.size)
+        assertThrows(IllegalArgumentException::class.java) {
+            validateMissionParentRepairPlan(deepTarget, "mission", excessive)
+        }
+    }
+
+    @Test
     fun recursiveMissionActionPatternsAreDetectedWithoutRejectingProgress() {
         assertTrue(hasRecursiveActionTail(listOf("read:a", "read:a", "read:a")))
         assertTrue(

@@ -1143,9 +1143,11 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                         )
                     } ?: normalizedProposal
                     val identityResolution = workspaceRepository.resolveActionIdentity(scoped)
-                    val reconciliation = if (mission != null) {
+                    val missionAtAction = mission
+                    val reconciliation = if (missionAtAction != null) {
                         val missionResolution = workspaceRepository.reconcileMissionAction(
                             identityResolution.proposal,
+                            missionAtAction.rootPath,
                         )
                         missionResolution.copy(
                             detail = listOf(identityResolution.detail, missionResolution.detail)
@@ -1186,7 +1188,14 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                     }
                     val toolResult = runCatching {
                         if (normalized.kind.requiresApproval) {
-                            workspaceRepository.executeApproved(normalized)
+                            if (missionAtAction == null) {
+                                workspaceRepository.executeApproved(normalized)
+                            } else {
+                                workspaceRepository.executeMissionApproved(
+                                    reconciliation,
+                                    missionAtAction.rootPath,
+                                )
+                            }
                         } else {
                             workspaceRepository.executeReadOnly(normalized)
                         }

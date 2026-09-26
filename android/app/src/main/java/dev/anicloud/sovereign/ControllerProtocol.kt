@@ -218,9 +218,11 @@ object ControllerProtocol {
         re-case, shorten, or fuzzily repair one. New files and directories still require an exact path.
         Use create_file for a missing target and write_file only for a file verified to exist. File
         proposals contain complete, non-empty final content; never create an empty placeholder or split
-        create-then-fill into separate actions. After a successful mutation, verify it with read_file
-        rather than repeating the mutation. This active mission is the bounded approval grant; Android
-        executes, audits, checkpoints, and returns the result without per-file approval clicks.
+        create-then-fill into separate actions. For a nested creation, emit the final target directly;
+        Android may create up to eight verified missing parent directories as one ordered, audited bundle.
+        After a successful mutation, verify it with read_file rather than repeating the mutation. This
+        active mission is the bounded approval grant; Android executes, audits, checkpoints, and returns
+        the consolidated result without per-file approval clicks.
         Use <INTERMIX_CALC>{"expression":"decimal expression","reason":"why"}</INTERMIX_CALC> for
         derived arithmetic. Use <INTERMIX_EXEC> only when a separate Termux approval is genuinely
         required; include kind, command, relative workdir, network_required, dependencies, reason,

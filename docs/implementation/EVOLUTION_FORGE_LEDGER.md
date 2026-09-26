@@ -315,8 +315,10 @@ Test:
 - `python -m unittest discover -s tests -v`: 180 PASS; 5 environment-dependent Textual tests skipped.
 - `python -m compileall -q tests tools engine`: PASS.
 - `git diff --check`: PASS.
-- Focused Android/JUnit compilation: PENDING BRANCH CI; the repository has wrapper properties but no
-  checked-in wrapper executable/JAR or host Gradle installation.
+- GitHub Actions `android-foundation` run `36223329606`: PASS. The pinned JDK 17 / Gradle job ran the
+  Android unit tests, assembled the debug APK, staged provenance, and retained the debug artifact.
+- Local Android/JUnit execution remains unavailable because the repository has wrapper properties but
+  no checked-in wrapper executable/JAR or host Gradle installation.
 
 Regression check:
 
@@ -342,9 +344,84 @@ Patch Evolution Review:
 - UX impact: no new human-facing opaque-id UI; ids remain in controller/tool evidence.
 - Security/privacy impact: all ids are scoped to the exact persisted root URI and grant no new access.
 
+Result: **KEEP; BRANCH CI PASS; DEVICE VERIFICATION REQUIRED**
+
+Next candidate:
+
+- Add deterministic parent creation as a bounded action bundle; the artifact-identity compile and
+  migration gates have passed.
+
+## Patch REC-01 — Bounded missing-parent mission bundles
+
+Objective:
+
+- Repair a safe, common mechanical failure without spending another model turn: when an already
+  authorized mission creates a nested target whose parent directories are absent, create those exact
+  parents in order and then execute the original target mutation.
+
+Verified before state:
+
+- `prepareWorkspaceMission` created and verified the immutable mission root, but `createFile` and
+  `createDirectory` stopped on any absent intermediate parent.
+- The model therefore had to emit one speculative directory action per level even though the target,
+  root, authorization, and ordering were already known.
+- Ordinary Chat mutations were and remain separately approval-gated.
+- WS-ID-01 passed Android unit-test compilation and debug APK assembly in Actions run `36223329606`.
+
+Change:
+
+- Derive the exact ordered ancestor paths between the active mission root and a create target; never
+  infer names, repair aliases, or cross the root.
+- Plan only the missing ancestor suffix and reject duplicate, reordered, non-ancestor, or more than
+  eight automatic parent repairs before any write occurs.
+- Re-verify the mission root, every existing ancestor, and each newly created SAF directory. A file in
+  the chain or an unexpected state change stops the bundle before the target mutation.
+- Execute the original create only after its prerequisites are verified, and return one consolidated
+  result containing ordered parent outcomes plus the final target result.
+- If a provider fails mid-bundle, surface the exact parents already created/reused in the audited
+  failure; no unbounded retry is attempted.
+- Restrict the bundle to an active scoped mission. Visible ordinary-chat approvals continue to execute
+  exactly one requested mutation and never gain implicit parent creation.
+
+Test:
+
+- `python -m unittest tests.test_android_foundation`: 48/48 PASS.
+- `python -m unittest discover -s tests -v`: 180 PASS; 5 environment-dependent Textual tests skipped.
+- `python -m compileall -q tests tools engine`: PASS.
+- `git diff --check`: PASS.
+- Added JVM contract cases for exact parent ordering, root confinement, rejection of reordered plans,
+  and the eight-directory repair ceiling; execution is pending branch CI below.
+- Focused Android/JUnit compilation: PENDING BRANCH CI.
+
+Regression check:
+
+- No delete, rename, move, shell, network, permission, release, updater, or SQLite schema boundary changed.
+- The original target still requires complete non-empty content and byte-for-byte post-write verification.
+- Existing files are never overwritten by parent recovery; create conflicts continue to fail closed.
+- Mission action, write-byte, recursion, and controller-cycle watchdogs remain in force.
+
+Known limitation:
+
+- SAF provider behavior and partial-bundle reporting still require device verification.
+- The bundle deliberately stops above eight missing parents; deeper creation needs a new reasoning step
+  or explicit directory work so one proposal cannot fan out into an unbounded write sequence.
+- This patch does not add fuzzy recovery, rename/move actions, or ordinary-chat implicit writes.
+
+Patch Evolution Review:
+
+- Pros: removes predictable one-operation-per-inference churn while preserving exact identity, scope,
+  deterministic ordering, bounded work, and consolidated audit evidence.
+- Cons: one model proposal can now produce up to nine SAF mutations (eight parents plus its target), so
+  provider interruption may leave verified empty parents for the user or resumed mission to reuse.
+- Resource impact: no resident work or polling; at most eight additional exact tree traversals and
+  directory creates occur only for a requested nested mission mutation.
+- UX impact: no new prompt or approval; the existing mission report explains the consolidated bundle.
+- Security/privacy impact: authority is unchanged and every repair path is a strict target ancestor under
+  the already-approved mission root.
+
 Result: **LOCAL CONTRACTS PASS; ANDROID CI REQUIRED**
 
 Next candidate:
 
-- Add deterministic parent creation as a bounded action bundle only after the artifact-identity compile
-  and migration gates pass.
+- Publish REC-01, consume its Android compile/APK gate, then inspect the highest-value remaining
+  Workspace Lens create/edit/navigation gap before selecting the next small patch.
