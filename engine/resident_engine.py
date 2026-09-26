@@ -31,11 +31,45 @@ class ResidentEngineError(RuntimeError):
     """The resident backend could not complete an inference request."""
 
 
+@dataclass(frozen=True)
+class EngineProfile:
+    name: str
+    label: str
+    model_path: str
+    cache_dir: str
+    context_tokens: int
+
+    @property
+    def available(self) -> bool:
+        return Path(self.model_path).expanduser().is_file()
+
+
+REASONING_PROFILE = EngineProfile(
+    name="reasoning",
+    label=CONFIG.model_label,
+    model_path=str(CONFIG.model_path),
+    cache_dir=str(CONFIG.model_cache_dir),
+    context_tokens=CONFIG.context_tokens,
+)
+LIBRARIAN_PROFILE = EngineProfile(
+    name="librarian",
+    label=CONFIG.librarian_model_label,
+    model_path=str(CONFIG.librarian_model_path),
+    cache_dir=str(CONFIG.model_cache_dir),
+    context_tokens=CONFIG.librarian_context_tokens,
+)
+ENGINE_PROFILES = {
+    REASONING_PROFILE.name: REASONING_PROFILE,
+    LIBRARIAN_PROFILE.name: LIBRARIAN_PROFILE,
+}
+
+
 @dataclass
 class _InferenceRequest:
     prompt: str
     loop: asyncio.AbstractEventLoop
     events: asyncio.Queue[tuple[str, str]]
+    profile: EngineProfile | None = None
     request_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     cancelled: threading.Event = field(default_factory=threading.Event)
 
@@ -44,6 +78,7 @@ class _InferenceRequest:
 class _WarmRequest:
     loop: asyncio.AbstractEventLoop
     events: asyncio.Queue[tuple[str, str]]
+    profile: EngineProfile | None = None
     request_id: str = field(default_factory=lambda: "warm-" + uuid.uuid4().hex[:8])
     cancelled: threading.Event = field(default_factory=threading.Event)
 
@@ -99,10 +134,20 @@ class ResidentEngineManager:
         prewarm_memory_mb: int | None = None,
         request_timeout: int | None = None,
         module_loader: Callable[[], Any] | None = None,
+        profiles: dict[str, EngineProfile] | None = None,
     ):
         self.model_path = str(Path(model_path).expanduser())
         self.cache_dir = str(Path(cache_dir).expanduser())
         self.context_tokens = context_tokens
+        self.default_profile = EngineProfile(
+            name="reasoning",
+            label=Path(self.model_path).stem,
+            model_path=self.model_path,
+            cache_dir=self.cache_dir,
+            context_tokens=self.context_tokens,
+        )
+        self.profiles = dict(profiles or {})
+        self.profiles.setdefault(self.default_profile.name, self.default_profile)
         self.idle_seconds = idle_seconds if idle_seconds is not None else int(
             os.environ.get("INTERMIX_ENGINE_IDLE_SECONDS", "600")
         )
@@ -138,6 +183,7 @@ class ResidentEngineManager:
         self._thread_lock = threading.Lock()
         self._state_lock = threading.Lock()
         self._engine: Any = None
+        self._active_profile = ""
         self._state = "cold"
         self._last_used = 0.0
         self._init_seconds: float | None = None
@@ -145,6 +191,7 @@ class ResidentEngineManager:
         self._last_first_text_seconds: float | None = None
         self._requests_completed = 0
         self._failures = 0
+        self._profile_failures: dict[str, int] = {}
         self._last_error = ""
         self._shutdown_requested = False
 
@@ -164,7 +211,9 @@ class ResidentEngineManager:
                 "last_first_text_seconds": self._last_first_text_seconds,
                 "requests_completed": self._requests_completed,
                 "failures": self._failures,
+                "profile_failures": dict(self._profile_failures),
                 "last_error": self._last_error,
+                "active_profile": self._active_profile,
             }
         memory_mb = available_memory_mb()
         profile, effective_idle = self._residency_profile(memory_mb)
@@ -177,6 +226,14 @@ class ResidentEngineManager:
         snapshot["critical_memory_mb"] = self.critical_memory_mb
         snapshot["keep_hot_memory_mb"] = self.keep_hot_memory_mb
         snapshot["prewarm_memory_mb"] = self.prewarm_memory_mb
+        snapshot["profiles"] = {
+            name: {
+                "label": profile.label,
+                "available": profile.available,
+                "context_tokens": profile.context_tokens,
+            }
+            for name, profile in self.profiles.items()
+        }
         return snapshot
 
     def _residency_profile(self, memory_mb: int | None) -> tuple[str, int]:
@@ -190,18 +247,30 @@ class ResidentEngineManager:
             return "pressure", min(self.pressure_idle_seconds, 20)
         return "critical", 5
 
-    def can_prewarm(self) -> bool:
+    def _resolve_profile(self, name: str | None) -> EngineProfile:
+        if not name:
+            return self.default_profile
+        try:
+            return self.profiles[name]
+        except KeyError as exc:
+            raise ResidentEngineError(f"Unknown model profile: {name}") from exc
+
+    def can_prewarm(self, profile: str | None = None) -> bool:
+        selected = self._resolve_profile(profile)
+        if not selected.available:
+            return False
         with self._state_lock:
-            if self._engine is not None:
+            if self._engine is not None and self._active_profile == selected.name:
                 return True
         memory_mb = available_memory_mb()
         return memory_mb is not None and memory_mb >= self.prewarm_memory_mb
 
-    def can_attempt(self, force: bool = False) -> bool:
+    def can_attempt(self, force: bool = False, profile: str | None = None) -> bool:
         if self._shutdown_requested:
             return False
+        selected = self._resolve_profile(profile)
         with self._state_lock:
-            return force or self._failures < 2
+            return force or self._profile_failures.get(selected.name, 0) < 2
 
     def _ensure_thread(self) -> None:
         with self._thread_lock:
@@ -238,32 +307,57 @@ class ResidentEngineManager:
             setter(severity)
 
     def _ensure_engine(self, request: _InferenceRequest | _WarmRequest) -> float:
-        if self._engine is not None:
-            self._emit(request, "phase", _phase("engine_hot", "Resident GPU engine reused"))
+        profile = request.profile or self.default_profile
+        if self._engine is not None and self._active_profile == profile.name:
+            self._emit(
+                request,
+                "phase",
+                _phase("engine_hot", f"Resident {profile.name} GPU engine reused"),
+            )
             return 0.0
-        if not Path(self.model_path).is_file():
-            raise FileNotFoundError(f"Model file not found: {self.model_path}")
+        if self._engine is not None:
+            self._emit(
+                request,
+                "phase",
+                _phase(
+                    "model_switch",
+                    f"Releasing {self._active_profile or 'previous'} model before loading {profile.name}",
+                ),
+            )
+            self._close_engine("model_switch")
+        if not Path(profile.model_path).is_file():
+            raise FileNotFoundError(f"Model file not found: {profile.model_path}")
 
         self._set_state("warming")
-        self._emit(request, "phase", _phase("warming", "Loading resident GPU engine"))
+        self._emit(
+            request,
+            "phase",
+            _phase("warming", f"Loading {profile.name} GPU engine", model_role=profile.name),
+        )
         started = time.perf_counter()
         module = self._module_loader()
         self._suppress_native_logs(module)
-        Path(self.cache_dir).mkdir(parents=True, exist_ok=True)
+        Path(profile.cache_dir).mkdir(parents=True, exist_ok=True)
         self._engine = module.Engine(
-            self.model_path,
+            profile.model_path,
             backend=module.Backend.GPU(),
-            max_num_tokens=self.context_tokens,
-            cache_dir=self.cache_dir,
+            max_num_tokens=profile.context_tokens,
+            cache_dir=profile.cache_dir,
         )
         elapsed = time.perf_counter() - started
         with self._state_lock:
             self._init_seconds = elapsed
             self._state = "hot"
+            self._active_profile = profile.name
         self._emit(
             request,
             "phase",
-            _phase("engine_ready", "Resident GPU engine ready", seconds=round(elapsed, 3)),
+            _phase(
+                "engine_ready",
+                f"Resident {profile.name} GPU engine ready",
+                seconds=round(elapsed, 3),
+                model_role=profile.name,
+            ),
         )
         return elapsed
 
@@ -306,6 +400,7 @@ class ResidentEngineManager:
             self._last_inference_seconds = elapsed
             self._last_first_text_seconds = first_text_seconds
             self._requests_completed += 1
+            self._profile_failures[(request.profile or self.default_profile).name] = 0
             self._last_used = time.monotonic()
             self._state = "hot"
         self._emit(
@@ -320,6 +415,8 @@ class ResidentEngineManager:
                         round(first_text_seconds, 3) if first_text_seconds is not None else None
                     ),
                     "total_seconds": round(elapsed, 3),
+                    "model_role": (request.profile or self.default_profile).name,
+                    "model_label": (request.profile or self.default_profile).label,
                 }
             ),
         )
@@ -346,6 +443,7 @@ class ResidentEngineManager:
             with self._state_lock:
                 self._engine = None
                 self._state = "cold"
+                self._active_profile = ""
                 if reason == "error":
                     self._last_used = 0.0
 
@@ -382,8 +480,12 @@ class ResidentEngineManager:
                 else:
                     self._handle_request(item)
             except Exception as exc:
+                failed_profile = (item.profile or self.default_profile).name
                 with self._state_lock:
                     self._failures += 1
+                    self._profile_failures[failed_profile] = (
+                        self._profile_failures.get(failed_profile, 0) + 1
+                    )
                     self._last_error = f"{type(exc).__name__}: {exc}"
                     self._state = "error"
                 try:
@@ -394,14 +496,20 @@ class ResidentEngineManager:
                 self._emit(item, "_done", "")
 
     async def stream(
-        self, prompt: str, *, force: bool = False
+        self, prompt: str, *, force: bool = False, profile: str | None = None
     ) -> AsyncGenerator[tuple[str, str], None]:
-        if not self.can_attempt(force=force):
+        selected = self._resolve_profile(profile)
+        if not self.can_attempt(force=force, profile=selected.name):
             raise ResidentEngineError("Resident backend disabled after repeated failures")
         self._ensure_thread()
         loop = asyncio.get_running_loop()
         events: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
-        request = _InferenceRequest(prompt=prompt, loop=loop, events=events)
+        request = _InferenceRequest(
+            prompt=prompt,
+            loop=loop,
+            events=events,
+            profile=selected,
+        )
         self._requests.put(request)
         try:
             while True:
@@ -421,17 +529,18 @@ class ResidentEngineManager:
         finally:
             request.cancelled.set()
 
-    async def warm(self) -> bool:
+    async def warm(self, profile: str | None = None) -> bool:
         """Load the engine without generating text when measured headroom is safe."""
-        if not self.can_attempt() or not self.can_prewarm():
+        selected = self._resolve_profile(profile)
+        if not self.can_attempt(profile=selected.name) or not self.can_prewarm(selected.name):
             return False
         with self._state_lock:
-            if self._engine is not None:
+            if self._engine is not None and self._active_profile == selected.name:
                 return True
         self._ensure_thread()
         loop = asyncio.get_running_loop()
         events: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
-        request = _WarmRequest(loop=loop, events=events)
+        request = _WarmRequest(loop=loop, events=events, profile=selected)
         self._requests.put(request)
         try:
             while True:
@@ -464,11 +573,15 @@ class ResidentEngineManager:
                 self._thread.join(timeout=12)
 
 
-RESIDENT_ENGINE = ResidentEngineManager()
+RESIDENT_ENGINE = ResidentEngineManager(profiles=ENGINE_PROFILES)
 atexit.register(RESIDENT_ENGINE.shutdown)
 
 
 __all__ = [
+    "ENGINE_PROFILES",
+    "EngineProfile",
+    "LIBRARIAN_PROFILE",
+    "REASONING_PROFILE",
     "RESIDENT_ENGINE",
     "ResidentEngineError",
     "ResidentEngineManager",

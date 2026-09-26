@@ -22,7 +22,7 @@ from typing import Any, Iterator, Sequence
 from runtime_config import CONFIG
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 DEFAULT_DB = str(CONFIG.memory_db)
 
 
@@ -200,6 +200,19 @@ class MemoryStore:
                     source_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
                     created_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS persona_revisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    before_json TEXT NOT NULL,
+                    after_json TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    source_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+                    created_at TEXT NOT NULL,
+                    undone_at TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_persona_revisions_active
+                    ON persona_revisions(undone_at, id DESC);
 
                 CREATE TABLE IF NOT EXISTS memory_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,

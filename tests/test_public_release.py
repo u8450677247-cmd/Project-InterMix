@@ -35,6 +35,8 @@ class RuntimeConfigTests(unittest.TestCase):
                         "assistant_name": "Core",
                         "project_dir": str(root / "project"),
                         "context_tokens": 999999,
+                        "librarian_context_tokens": 999999,
+                        "dual_model_enabled": False,
                     }
                 ),
                 encoding="utf-8",
@@ -44,14 +46,26 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(loaded.user_name, "Pilot")
         self.assertEqual(loaded.assistant_name, "Core")
         self.assertEqual(loaded.context_tokens, 32768)
+        self.assertEqual(loaded.librarian_context_tokens, 32768)
+        self.assertFalse(loaded.dual_model_enabled)
+        self.assertTrue(str(loaded.librarian_model_path).endswith("gemma-4-E2B-it.litertlm"))
         self.assertTrue(str(loaded.project_dir).endswith("project"))
 
     def test_environment_override_wins_without_accepting_provider_keys(self):
         with tempfile.TemporaryDirectory() as temporary:
             config = Path(temporary) / "missing.json"
-            with patch.dict(os.environ, {"INTERMIX_USER_NAME": "Environment Pilot"}):
+            with patch.dict(
+                os.environ,
+                {
+                    "INTERMIX_USER_NAME": "Environment Pilot",
+                    "INTERMIX_DUAL_MODEL": "off",
+                    "INTERMIX_LIBRARIAN_CONTEXT_TOKENS": "4096",
+                },
+            ):
                 loaded = load_runtime_config(config)
         self.assertEqual(loaded.user_name, "Environment Pilot")
+        self.assertFalse(loaded.dual_model_enabled)
+        self.assertEqual(loaded.librarian_context_tokens, 4096)
         self.assertNotIn("provider", loaded.public_status())
 
 
@@ -106,7 +120,10 @@ class PublicReleaseAuditTests(unittest.TestCase):
             self.assertEqual(manifest_a, manifest_b)
             with __import__("zipfile").ZipFile(archive_a) as bundle:
                 names = bundle.namelist()
-            self.assertTrue(any(name.endswith("/RELEASE_MANIFEST.json") for name in names))
+            manifest_names = [
+                name for name in names if name.endswith("/RELEASE_MANIFEST.json")
+            ]
+            self.assertEqual(len(manifest_names), 1)
 
 
 class InstallerContractTests(unittest.TestCase):
@@ -126,6 +143,8 @@ class InstallerContractTests(unittest.TestCase):
         )
         self.assertEqual(help_result.returncode, 0, help_result.stderr)
         self.assertIn("--dry-run", help_result.stdout)
+        self.assertIn("--librarian-model", help_result.stdout)
+        self.assertIn("--dual-model", help_result.stdout)
         self.assertIn("never downloads model weights", help_result.stdout)
 
 

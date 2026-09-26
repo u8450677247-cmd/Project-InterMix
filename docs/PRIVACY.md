@@ -17,6 +17,18 @@ information through screenshots, issues, backups, or workspace files.
 | Voice requests/output | optional bridge directory | Local transient output; bounded archive |
 | Device report | explicit user-generated file | Share-safe by design; review manually |
 
+## Persona and Sanctuary
+
+The persona profile records only explicit instructions about communication
+style. Each change is appended to a local revision log and can be undone. It
+must not silently convert mood, jokes, disclosures, or writing style into a
+psychological diagnosis or immutable identity claim.
+
+Termux Sanctuary is intentionally unavailable. `/sanctuary on` remains off and
+does not increase raw-message retention because the current SQLite store is not
+an authenticated encrypted vault. The planned APK boundary requires Android
+Keystore-backed keys and biometric authentication before that label is valid.
+
 ## Sensitive wellbeing memory
 
 Fresh public installs default capture to `off`. If explicitly enabled, the

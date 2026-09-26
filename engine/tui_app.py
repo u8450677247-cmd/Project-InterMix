@@ -122,6 +122,18 @@ SLASH_COMMANDS = [
     "/engine mode auto",
     "/engine mode resident",
     "/engine mode pty",
+    "/model status",
+    "/model mode auto",
+    "/model mode librarian",
+    "/model mode reasoning",
+    "/persona status",
+    "/persona history",
+    "/persona undo",
+    "/persona auto on",
+    "/persona auto off",
+    "/sanctuary status",
+    "/sanctuary on",
+    "/sanctuary off",
     "/inspect context",
     "/memory facts",
     "/memory domains",
@@ -157,6 +169,7 @@ PHASE_STYLES = {
     "warming": ("WARMING", "#ffca6b"),
     "engine_ready": ("ENGINE HOT", "#39d5ff"),
     "engine_hot": ("ENGINE HOT", "#39d5ff"),
+    "model_switch": ("MODEL SWITCH", "#c39aff"),
     "generating": ("THINKING", "#39d5ff"),
     "streaming": ("STREAMING", "#67e8c2"),
     "verifying": ("VERIFYING", "#a970ff"),
@@ -814,10 +827,17 @@ class IntermixTUI(App):
             with Horizontal(id="content-grid"):
                 with Vertical(id="sidebar"):
                     yield Label("CORE", classes="rail-title")
+                    librarian_state = (
+                        "ready"
+                        if CONFIG.dual_model_enabled and CONFIG.librarian_model_path.is_file()
+                        else "disabled"
+                        if not CONFIG.dual_model_enabled
+                        else "optional"
+                    )
                     yield Static(
-                        f"[#39d5ff]{escape(CONFIG.model_label)}[/]\n"
-                        "[#8997aa]LiteRT-LM · GPU[/]\n"
-                        "[#66758b]Resonance v1.3.1 · optional[/]",
+                        f"[#39d5ff]{escape(CONFIG.model_label)} · reasoning[/]\n"
+                        f"[#a970ff]{escape(CONFIG.librarian_model_label)} · {librarian_state}[/]\n"
+                        "[#8997aa]LiteRT-LM · one resident[/]",
                         classes="rail-copy",
                     )
                     yield Label("MEMORY MATRIX", classes="rail-title")
@@ -833,6 +853,9 @@ class IntermixTUI(App):
                         "[#a970ff]/task status[/] mission\n"
                         "[#a970ff]/approvals[/] deletions\n"
                         "[#a970ff]/memory facts[/] recall\n"
+                        "[#a970ff]/model status[/] routing\n"
+                        "[#a970ff]/persona status[/] identity\n"
+                        "[#a970ff]/sanctuary status[/] vault\n"
                         "[#a970ff]/sessions[/] timeline\n"
                         "[#a970ff]/engine status[/] runtime\n"
                         "[#a970ff]/status[/] diagnostics\n"
@@ -1331,6 +1354,10 @@ class IntermixTUI(App):
                 else "#c5cfdd"
         )
         loaded = "HOT" if engine["loaded"] else "COLD"
+        active_profile = str(engine.get("active_profile") or "").upper()
+        engine_line = f"Engine   {engine['mode'].upper()} · {loaded}"
+        if active_profile:
+            engine_line += f" · {escape(active_profile[:3])}"
         task_line = (
             f"Mission  {escape(str(task.get('status', '')).upper())}\n"
             if task
@@ -1345,7 +1372,7 @@ class IntermixTUI(App):
             f"Timeline {status.get('events', 0)}\n"
             f"Reply    {escape(response_mode.upper())}\n"
             f"{task_line}"
-            f"Engine   {engine['mode'].upper()} · {loaded}\n"
+            f"{engine_line}\n"
             f"System   [{memory_color}]{memory_text}[/]"
         )
         self.query_one("#memory-telemetry", Static).update(text)

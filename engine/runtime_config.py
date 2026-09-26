@@ -45,6 +45,19 @@ def _integer(value: Any, fallback: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(maximum, parsed))
 
 
+def _boolean(value: Any, fallback: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return fallback
+    normalized = str(value).strip().casefold()
+    if normalized in {"1", "true", "yes", "on", "enabled", "auto"}:
+        return True
+    if normalized in {"0", "false", "no", "off", "disabled"}:
+        return False
+    return fallback
+
+
 def _path(value: Any, fallback: str | Path) -> Path:
     raw = str(value or fallback)
     return Path(os.path.expandvars(raw)).expanduser().resolve(strict=False)
@@ -71,6 +84,10 @@ class RuntimeConfig:
     project_dir: Path
     model_path: Path
     model_cache_dir: Path
+    librarian_model_path: Path
+    librarian_model_label: str
+    librarian_context_tokens: int
+    dual_model_enabled: bool
     memory_db: Path
     identity_file: Path
     archive_dir: Path
@@ -88,6 +105,9 @@ class RuntimeConfig:
             "model_label": self.model_label,
             "project_dir": str(self.project_dir),
             "model_path": str(self.model_path),
+            "librarian_model_path": str(self.librarian_model_path),
+            "librarian_model_available": self.librarian_model_path.is_file(),
+            "dual_model_enabled": self.dual_model_enabled,
             "workspace_dir": str(self.workspace_dir),
             "context_tokens": self.context_tokens,
         }
@@ -120,6 +140,16 @@ def load_runtime_config(path: Path | None = None) -> RuntimeConfig:
         ),
         model_path.parent,
     )
+    default_librarian_model = project_dir / "models" / "gemma-4-E2B-it.litertlm"
+    librarian_model_path = _path(
+        _configured(
+            payload,
+            "librarian_model_path",
+            "INTERMIX_LIBRARIAN_MODEL_PATH",
+            default_librarian_model,
+        ),
+        default_librarian_model,
+    )
 
     return RuntimeConfig(
         config_file=config_file,
@@ -147,6 +177,36 @@ def load_runtime_config(path: Path | None = None) -> RuntimeConfig:
         project_dir=project_dir,
         model_path=model_path,
         model_cache_dir=model_cache_dir,
+        librarian_model_path=librarian_model_path,
+        librarian_model_label=_label(
+            _configured(
+                payload,
+                "librarian_model_label",
+                "INTERMIX_LIBRARIAN_MODEL_LABEL",
+                librarian_model_path.stem,
+            ),
+            librarian_model_path.stem,
+        ),
+        librarian_context_tokens=_integer(
+            _configured(
+                payload,
+                "librarian_context_tokens",
+                "INTERMIX_LIBRARIAN_CONTEXT_TOKENS",
+                8000,
+            ),
+            8000,
+            1024,
+            32768,
+        ),
+        dual_model_enabled=_boolean(
+            _configured(
+                payload,
+                "dual_model_enabled",
+                "INTERMIX_DUAL_MODEL",
+                True,
+            ),
+            True,
+        ),
         memory_db=_path(
             _configured(
                 payload,
