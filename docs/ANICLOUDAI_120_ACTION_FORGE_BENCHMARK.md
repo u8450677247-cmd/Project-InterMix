@@ -8,8 +8,7 @@ are separately audited tool operations under a 1,440-operation ceiling. The fixe
 remains useful for parser, order, containment, and audit regression tests, but it must not be used to
 make `completedActions` synonymous with filesystem calls again.
 
-The historical fixture deliberately stays inside narrow local authority:
-It deliberately stays inside the capabilities that are locally available today:
+The historical fixture deliberately stays inside the capabilities that were locally available:
 
 - one user-selected Storage Access Framework tree;
 - one new mission folder inside that tree;
@@ -30,8 +29,9 @@ The test separates two questions that must never be conflated:
 2. In **Workspace**, connect a disposable parent folder.
 3. Confirm that `forge-120-signal-lab` does not already exist. If it does, rename it or
    move it to AniCloudAI's recoverable trash first.
-4. Do not use this legacy payload as the current reliability-convergence acceptance mission. Use
-   the A–L manifest/accounting/recovery suite and a semantic multi-task device objective instead.
+4. For legacy-build regression only, open **Work Session**, select **Quality · 2K**, and paste the
+   archived payload below. Do not use it as the current reliability-convergence acceptance mission;
+   use the A–L suite and a semantic multi-task device objective instead.
 5. Press **START SCOPED RUN exactly once**. Do not press Resume unless Android or the
    controller explicitly pauses.
 6. Keep the Pixel externally cooled and the app visible for the first acceptance pass.
