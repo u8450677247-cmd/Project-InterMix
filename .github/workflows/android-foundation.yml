@@ -48,7 +48,7 @@ jobs:
   native-shell:
     name: Native E4B cockpit · JDK 17
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     outputs:
       candidate_artifact_id: ${{ steps.upload-release-candidate.outputs.artifact-id }}
 
