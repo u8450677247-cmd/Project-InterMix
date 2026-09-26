@@ -3673,7 +3673,7 @@ class MemoryMatrixRepository(private val context: Context) :
             if (createsVersion) {
                 db.execSQL(
                     "UPDATE artifact_versions SET status=? WHERE artifact_id=? AND version=?",
-                    arrayOf(ArtifactStatus.Superseded.name, artifactId, currentVersion),
+                    arrayOf<Any?>(ArtifactStatus.Superseded.name, artifactId, currentVersion),
                 )
                 db.insertOrThrow(
                     "artifact_versions",

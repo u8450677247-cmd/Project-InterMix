@@ -873,6 +873,7 @@ object MissionRecoveryRouter {
                 ControllerErrorCode.OUTSIDE_AUTHORITY,
                 ControllerErrorCode.SECURITY_VIOLATION,
             ) -> MissionRecoveryDisposition.SecurityStop
+            else -> MissionRecoveryDisposition.HumanRequired
         }
         return MissionRecoveryDecision(
             disposition = disposition,

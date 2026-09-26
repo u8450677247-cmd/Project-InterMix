@@ -2305,7 +2305,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         }
         return MissionInferenceStart(
             mission = updated,
-            identity = requireNotNull(updated.executionLedger.currentRunIdentity),
+            identity = requireNotNull(requireNotNull(updated.executionLedger).currentRunIdentity),
         )
     }
 
