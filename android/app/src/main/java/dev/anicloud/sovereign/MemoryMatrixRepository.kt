@@ -22,7 +22,6 @@ private const val RecentConversationCharacterBudget = 4_096
 private const val MaxMemoryValueCharacters = 4 * 1024
 private const val MaxActionContentCharacters = 64 * 1024
 private const val ActiveAgentMissionKey = "active_agent_mission"
-private const val MaxMissionObjectiveCharacters = 16 * 1024
 private const val SessionSummaryCharacterBudget = 2_000
 private const val SessionCheckpointEntryLimit = 12
 private const val MaxResonanceSnapshotCharacters = 128 * 1024
@@ -514,9 +513,7 @@ class MemoryMatrixRepository(private val context: Context) :
         activeBranch: String = "device-workspace",
     ): AgentMissionCheckpoint {
         val normalizedRoot = normalizeWorkspacePath(rootPath)
-        require(Regex("[A-Za-z0-9][A-Za-z0-9._/-]{0,511}").matches(normalizedRoot)) {
-            "Long-form mission roots use ASCII letters, numbers, dots, dashes, underscores, and slashes."
-        }
+        require(normalizedRoot.split('/').size <= 32) { "Long-form mission roots are limited to 32 segments." }
         require(objective.isNotBlank()) { "A long-form mission objective is required." }
         require(planKind in setOf(WorkspaceMissionKind, StoryForgeMissionKind, EvolutionForgeMissionKind)) {
             "Unknown controller mission plan."
@@ -530,7 +527,10 @@ class MemoryMatrixRepository(private val context: Context) :
             "Mission ${existing?.id} is still ${existing?.status?.name?.lowercase()}; resume or cancel it first."
         }
         val checkpointId = missionId(objective, planKind)
-        val boundedObjective = objective.replace("\u0000", "").trim().take(MaxMissionObjectiveCharacters)
+        val boundedObjective = objective.replace("\u0000", "").trim().take(MaximumMissionObjectiveCharacters)
+        require(boundedObjective == objective.replace("\u0000", "").trim()) {
+            "The mission objective exceeds the ${MaximumMissionObjectiveCharacters / 1024} KiB durable evidence limit."
+        }
         val boundedActions = maxActions.coerceIn(1, 120)
         val boundedWriteBytes = maxWriteBytes.coerceIn(64L * 1024L, 2L * 1024L * 1024L)
         val evolutionState = if (planKind == EvolutionForgeMissionKind) {
@@ -560,6 +560,19 @@ class MemoryMatrixRepository(private val context: Context) :
             planKind = planKind,
             planState = if (planKind == EvolutionForgeMissionKind) EvolutionStage.Inspect.name else "",
             evolutionState = evolutionState,
+            missionManifest = if (planKind == WorkspaceMissionKind) {
+                MissionManifestCompiler.compile(checkpointId, boundedObjective).let { compiled ->
+                    compiled.copy(
+                        tasks = compiled.tasks.mapIndexed { index, task ->
+                            task.copy(
+                                status = if (index == 0) MissionTaskStatus.InProgress else MissionTaskStatus.Pending,
+                            )
+                        },
+                    )
+                }
+            } else {
+                null
+            },
             updatedAt = now(),
         )
         persistAgentMission(checkpoint)
@@ -688,28 +701,59 @@ class MemoryMatrixRepository(private val context: Context) :
     }
 
     @Synchronized
+    fun recordAgentMissionToolOperation(
+        proposal: WorkspaceActionProposal,
+        result: WorkspaceActionResult,
+        succeeded: Boolean,
+    ): AgentMissionCheckpoint {
+        val current = activeAgentMission() ?: error("No long-form mission is active.")
+        val next = MissionProgressReducer.recordToolOperation(
+            current = current,
+            proposal = proposal,
+            result = result,
+            succeeded = succeeded,
+            updatedAt = now(),
+        )
+        persistAgentMission(next)
+        updateActiveSessionTask(next)
+        return next
+    }
+
+    /** Backward-compatible entry point; callers should pass explicit success to the tool ledger. */
+    @Deprecated("Use recordAgentMissionToolOperation with explicit success.")
     fun recordAgentMissionAction(
         proposal: WorkspaceActionProposal,
         result: WorkspaceActionResult,
+    ): AgentMissionCheckpoint = recordAgentMissionToolOperation(
+        proposal = proposal,
+        result = result,
+        succeeded = !result.detail.startsWith("FAILED:"),
+    )
+
+    @Synchronized
+    fun recordAgentMissionInferenceCycle(): AgentMissionCheckpoint {
+        val current = activeAgentMission() ?: error("No long-form mission is active.")
+        val next = MissionProgressReducer.recordInferenceCycle(current, now())
+        persistAgentMission(next)
+        return next
+    }
+
+    @Synchronized
+    fun recordAgentMissionRecovery(decision: MissionRecoveryDecision): AgentMissionCheckpoint {
+        val current = activeAgentMission() ?: error("No long-form mission is active.")
+        val next = MissionProgressReducer.recordRecovery(current, decision, now())
+        persistAgentMission(next)
+        updateActiveSessionTask(next)
+        return next
+    }
+
+    /** Advances logical progress only at a verified, explicit controller checkpoint. */
+    @Synchronized
+    fun recordAgentMissionCheckpoint(
+        proposal: MissionCheckpointProposal,
     ): AgentMissionCheckpoint {
         val current = activeAgentMission() ?: error("No long-form mission is active.")
-        require(current.status == AgentMissionStatus.Running) { "The long-form mission is not running." }
-        val writeBytes = when (proposal.kind) {
-            WorkspaceActionKind.CreateFile, WorkspaceActionKind.WriteFile ->
-                proposal.content.toByteArray(Charsets.UTF_8).size.toLong()
-            else -> 0L
-        }
-        val next = current.copy(
-            completedActions = current.completedActions + 1,
-            writtenBytes = current.writtenBytes + writeBytes,
-            actionTrail = (
-                current.actionTrail +
-                    "${proposal.kind.wireName}:${proposal.path}:${proposal.content.hashCode()}"
-                ).takeLast(120),
-            lastAction = "${proposal.kind.wireName} ${proposal.path}".take(700),
-            lastResult = result.detail.take(2_000),
-            updatedAt = now(),
-        )
+        val next = MissionProgressReducer.recordCheckpoint(current, proposal, now())
         persistAgentMission(next)
         updateActiveSessionTask(next)
         return next
@@ -784,6 +828,11 @@ class MemoryMatrixRepository(private val context: Context) :
             }
             return persistEvolutionForgeState(updated)
         }
+        if (current.planKind == WorkspaceMissionKind && status == AgentMissionStatus.Completed) {
+            require(current.missionManifest?.complete == true) {
+                "Mission ${current.id} cannot complete before every manifest task is verified."
+            }
+        }
         val next = current.copy(
             status = status,
             lastResult = cleanDetail,
@@ -826,15 +875,50 @@ class MemoryMatrixRepository(private val context: Context) :
         val recentEvents = recentMissionEvents(mission)
         val guidanceBlock = mission.guidance.joinToString("\n") { "- $it" }.take(2_400)
         val eventBlock = recentEvents.joinToString("\n") { "- $it" }.take(3_600)
+        val manifest = mission.missionManifest
         return buildString {
             appendLine("[CONTROLLER-OWNED ACTIVE WORK SESSION]")
             appendLine("Mission: ${mission.id}")
             appendLine("Status: ${mission.status.name.lowercase()}")
             appendLine("Authorized workspace root: ${mission.rootPath}")
-            appendLine("Progress: ${mission.completedActions}/${mission.maxActions} actions")
+            appendLine(
+                "Tasks: ${manifest?.completedTaskCount ?: 0}/${manifest?.expectedTaskCount ?: 0} · " +
+                    "logical agent steps: ${mission.logicalStepsCompleted}/${mission.maxActions}",
+            )
+            appendLine(
+                "Tool operations: ${mission.toolOperations}/${mission.maxToolOperations} · " +
+                    "failures: ${mission.toolFailures} · inference cycles: ${mission.inferenceCycles} · " +
+                    "automatic recoveries: ${mission.recoveries}",
+            )
             appendLine("Write budget: ${mission.writtenBytes}/${mission.maxWriteBytes} bytes")
-            appendLine("Objective (full text remains durable in the Matrix):")
-            appendLine(mission.objective.take(6_000))
+            manifest?.let { activeManifest ->
+                appendLine("Immutable objective SHA-256: ${activeManifest.originalObjectiveSha256}")
+                activeManifest.currentTask?.let { task ->
+                    appendLine("Current task: ${task.id} · ${task.displayLabel}")
+                }
+                if (mission.lastVerifiedCheckpoint.isNotBlank()) {
+                    appendLine("Last verified logical checkpoint: ${mission.lastVerifiedCheckpoint}")
+                }
+                if (activeManifest.globalConstraints.isNotBlank()) {
+                    appendLine("Global mission constraints:")
+                    appendLine(durableMissionSourceForPrompt(
+                        identity = "GLOBAL MISSION CONSTRAINTS",
+                        source = activeManifest.globalConstraints,
+                        characterLimit = 2_400,
+                    ))
+                }
+                appendLine("Manifest summary (controller-owned counts and status):")
+                activeManifest.tasks.forEach { task ->
+                    appendLine(
+                        "- ${task.id}:${task.status.name.first()} " +
+                            "${task.displayLabel.take(72)} " +
+                            "· artifacts=${task.artifactIds.size} · attempts=${task.attempts}",
+                    )
+                }
+            }
+            if (manifest == null && mission.lastVerifiedCheckpoint.isNotBlank()) {
+                appendLine("Last verified logical checkpoint: ${mission.lastVerifiedCheckpoint}")
+            }
             if (mission.lastAction.isNotBlank()) appendLine("Last action: ${mission.lastAction}")
             if (mission.lastResult.isNotBlank()) appendLine("Last verified result: ${mission.lastResult}")
             if (guidanceBlock.isNotBlank()) {
@@ -845,7 +929,7 @@ class MemoryMatrixRepository(private val context: Context) :
                 appendLine("Recent verified action ledger, oldest to newest:")
                 appendLine(eventBlock)
             }
-        }.take(13 * 1024)
+        }
     }
 
     @Synchronized
@@ -1887,8 +1971,37 @@ class MemoryMatrixRepository(private val context: Context) :
     }
 
     @Synchronized
-    fun executionAction(id: Long): PendingExecutionAction? =
-        pendingExecutionActions(100).firstOrNull { it.id == id }
+    fun executionAction(id: Long): PendingExecutionAction? = readableDatabase.rawQuery(
+        """
+        SELECT id,session_id,mission_id,kind,command,workdir,network_required,
+               dependencies_json,reason,timeout_seconds,status,created_at
+        FROM execution_actions WHERE id=? LIMIT 1
+        """.trimIndent(),
+        arrayOf(id.toString()),
+    ).use { cursor ->
+        if (!cursor.moveToFirst()) return@use null
+        val kind = ExecutionKind.fromWireName(cursor.getString(3)) ?: return@use null
+        val dependencyJson = runCatching { JSONArray(cursor.getString(7)) }.getOrDefault(JSONArray())
+        val dependencies = buildList {
+            for (index in 0 until dependencyJson.length()) {
+                dependencyJson.optString(index).trim().takeIf(String::isNotBlank)?.let(::add)
+            }
+        }
+        PendingExecutionAction(
+            id = cursor.getLong(0),
+            sessionId = cursor.getString(1),
+            missionId = cursor.getString(2),
+            kind = kind,
+            command = cursor.getString(4),
+            workdir = cursor.getString(5),
+            networkRequired = cursor.getInt(6) != 0,
+            dependencies = dependencies,
+            reason = cursor.getString(8),
+            timeoutSeconds = cursor.getInt(9),
+            status = cursor.getString(10),
+            createdAt = cursor.getString(11),
+        )
+    }
 
     private fun latestEvolutionTestEvidence(state: EvolutionForgeState): EvolutionTestEvidence? {
         val patch = state.currentPatch ?: return null
@@ -3064,71 +3177,15 @@ class MemoryMatrixRepository(private val context: Context) :
     }
 
     private fun persistAgentMission(mission: AgentMissionCheckpoint) {
-        val payload = JSONObject()
-            .put("id", mission.id)
-            .put("root_path", mission.rootPath)
-            .put("objective", mission.objective)
-            .put("mode", mission.mode.name)
-            .put("started_message_id", mission.startedMessageId)
-            .put("status", mission.status.name)
-            .put("completed_actions", mission.completedActions)
-            .put("max_actions", mission.maxActions)
-            .put("written_bytes", mission.writtenBytes)
-            .put("max_write_bytes", mission.maxWriteBytes)
-            .put("plan_kind", mission.planKind)
-            .put("plan_state", mission.planState)
-            .put("evolution_state", mission.evolutionState)
-            .put("guidance", JSONArray(mission.guidance))
-            .put("action_trail", JSONArray(mission.actionTrail))
-            .put("last_action", mission.lastAction)
-            .put("last_result", mission.lastResult)
-            .put("updated_at", mission.updatedAt)
+        val payload = AgentMissionCheckpointCodec.encode(mission)
         writableDatabase.execSQL(
             "INSERT OR REPLACE INTO settings(key,value,updated_at) VALUES(?,?,?)",
-            arrayOf(ActiveAgentMissionKey, payload.toString(), now()),
+            arrayOf(ActiveAgentMissionKey, payload, now()),
         )
     }
 
-    private fun missionFromJson(payload: JSONObject): AgentMissionCheckpoint = AgentMissionCheckpoint(
-        id = payload.optString("id").ifBlank { "LF-RECOVERED" },
-        rootPath = payload.getString("root_path"),
-        objective = payload.getString("objective").take(MaxMissionObjectiveCharacters),
-        mode = runCatching { AnswerMode.valueOf(payload.optString("mode")) }
-            .getOrDefault(AnswerMode.Quality),
-        startedMessageId = payload.optLong("started_message_id", 0L).coerceAtLeast(0L),
-        status = runCatching { AgentMissionStatus.valueOf(payload.optString("status")) }
-            .getOrDefault(AgentMissionStatus.Paused),
-        completedActions = payload.optInt("completed_actions", 0).coerceAtLeast(0),
-        maxActions = payload.optInt("max_actions", 120).coerceIn(1, 120),
-        writtenBytes = payload.optLong("written_bytes", 0L).coerceAtLeast(0L),
-        maxWriteBytes = payload.optLong("max_write_bytes", 1024L * 1024L)
-            .coerceIn(64L * 1024L, 2L * 1024L * 1024L),
-        planKind = payload.optString("plan_kind", WorkspaceMissionKind)
-            .takeIf { it in setOf(WorkspaceMissionKind, StoryForgeMissionKind, EvolutionForgeMissionKind) }
-            ?: WorkspaceMissionKind,
-        planState = payload.optString("plan_state").replace("\u0000", "").trim().take(1_200),
-        evolutionState = payload.optString("evolution_state").replace("\u0000", "").trim()
-            .take(512 * 1024),
-        guidance = buildList {
-            val entries = payload.optJSONArray("guidance") ?: JSONArray()
-            for (index in 0 until entries.length()) {
-                entries.optString(index).trim().takeIf(String::isNotBlank)?.let {
-                    add(it.take(2_000))
-                }
-            }
-        }.takeLast(12),
-        actionTrail = buildList {
-            val entries = payload.optJSONArray("action_trail") ?: JSONArray()
-            for (index in 0 until entries.length()) {
-                entries.optString(index).trim().takeIf(String::isNotBlank)?.let {
-                    add(it.take(800))
-                }
-            }
-        }.takeLast(120),
-        lastAction = payload.optString("last_action").take(700),
-        lastResult = payload.optString("last_result").take(2_000),
-        updatedAt = payload.optString("updated_at"),
-    )
+    private fun missionFromJson(payload: JSONObject): AgentMissionCheckpoint =
+        AgentMissionCheckpointCodec.decode(payload.toString())
 
     private fun updateActiveSessionTask(mission: AgentMissionCheckpoint) {
         val sessionId = activeSessionId(writableDatabase)

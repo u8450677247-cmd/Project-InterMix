@@ -30,7 +30,8 @@ class LongForgeShipBenchmarkTests(unittest.TestCase):
         manifest = document.split("EXACT ACTION MANIFEST", 1)[1].split("```", 1)[0]
         self.assertNotRegex(manifest, r"\b(delete|exec|install|network|shell)\b")
         self.assertNotIn("../", manifest)
-        self.assertIn("emit exactly one raw INTERMIX_ACTION", document)
+        self.assertIn("retained low-level compatibility fixture", document)
+        self.assertIn("120 means verified logical agent checkpoints", document)
         self.assertIn("Never claim that the site ran", document)
         self.assertIn("controller endurance proven; runtime functionality pending", document)
 

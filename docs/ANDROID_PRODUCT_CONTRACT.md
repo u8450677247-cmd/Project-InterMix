@@ -219,7 +219,18 @@ An explicitly launched agent may continue in an Android foreground service with
 a visible notification. It runs indefinitely only as a series of checkpointed,
 recoverable cycles until manually stopped.
 
+- The immutable request is compiled into a durable controller-owned Mission Manifest. Explicit
+  task counts, current task, artifact identities, and final completion are controller facts, not
+  model memory or narration.
+- Logical agent steps, low-level tool operations, inference cycles, automatic recoveries, failed
+  tool attempts, written bytes, and completed manifest tasks are separate counters. The 120-step
+  grant refers only to verified logical checkpoints; the separate bounded tool budget is 1,440.
+- A typed transaction contains two through eight validated workspace operations. Every operation
+  retains its own audit evidence, and partial failure cannot create a logical checkpoint or a false
+  completion claim.
 - Reads and writes stay inside user-selected Storage Access Framework scopes.
+- User-selected paths are NFC-normalized and Unicode-safe. Controls, NUL, absolute paths, parent
+  traversal, provider escape, and access outside the exact granted root still fail closed.
 - Writes create versioned snapshots automatically.
 - Deletion always requires confirmation.
 - Posts, messages, Discord changes, purchases, and other externally visible
@@ -227,6 +238,9 @@ recoverable cycles until manually stopped.
 - A foreground notification always provides status and STOP.
 - Crash, reboot, or process death resumes from a verified checkpoint, never a
   guessed intermediate state.
+- Routine controller disagreement retries automatically with bounded evidence. Human interruption
+  is reserved for authority expansion, consequential semantic ambiguity, security/integrity
+  boundaries, or exhausted recovery attempts.
 
 ## Thermal and background policy
 

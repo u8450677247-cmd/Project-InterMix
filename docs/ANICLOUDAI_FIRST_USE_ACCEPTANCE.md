@@ -133,7 +133,9 @@ Use **Balanced** unless a step names another mode.
 3. Press **Resume** once. The next marker must be new, consecutive, and not duplicated.
 4. Only after STOP/resume passes, run the complete
    [120-chapter Story Forge benchmark](ANICLOUDAI_120_CHAPTER_STORY_FORGE.md).
-5. Run the [120-action Long Forge benchmark](ANICLOUDAI_120_ACTION_FORGE_BENCHMARK.md) separately.
+5. Treat the [120-operation Long Forge fixture](ANICLOUDAI_120_ACTION_FORGE_BENCHMARK.md)
+   as a low-level audit regression only; the A–L manifest/accounting/recovery suite and a semantic
+   multi-task device mission are the current autonomy gate.
    A literary pass does not prove multi-file planning, and a coding pass does not prove story quality.
 
 ## Flight G — optional E2B/NPU candidate
@@ -191,7 +193,7 @@ Trash cancel / move / undo: PASS / FAIL
 Numeric Matrix: PASS / FAIL
 Story Forge STOP / resume: PASS / FAIL
 120-chapter controller gate: PASS / FAIL / NOT RUN
-120-action engineering gate: PASS / FAIL / NOT RUN
+120-operation legacy audit fixture: PASS / FAIL / NOT RUN
 E2B NPU flight: PASS / FAIL / NOT RUN
 Termux plugin flight: PASS / FAIL / NOT RUN
 Unexpected permission or data request:

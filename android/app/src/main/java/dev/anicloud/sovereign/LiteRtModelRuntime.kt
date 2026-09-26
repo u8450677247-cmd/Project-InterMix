@@ -184,14 +184,16 @@ class LiteRtModelRuntime(private val context: Context) {
                 "explanations, and planning. Those turns never require a tool. Do not emit, quote, " +
                 "imitate, or explain controller tags unless the current request genuinely requires " +
                 "the corresponding typed operation.\n\n" +
-                "When files must be inspected, append exactly one final private block: " +
+                "When files must be inspected in ordinary Chat, append exactly one final private block: " +
                 "$WorkspaceActionOpenMarker{\"kind\":\"list_files|read_file\",\"path\":\"relative/path\",\"reason\":\"why\"}" +
                 "$WorkspaceActionCloseMarker. Reads are limited to the connected workspace. " +
                 "When a file or directory should change, use kind create_file, write_file, or " +
                 "create_directory and include complete text in content. In ordinary Chat, these " +
                 "changes wait for visible user approval. A trusted CONTROLLER-OWNED ACTIVE WORK " +
                 "SESSION block is itself an explicit, bounded grant for changes inside its named " +
-                "root; continue within that grant without asking again. Never request deletion; " +
+                "root; its scoped protocol may additionally authorize one bounded typed transaction " +
+                "or one logical checkpoint. Continue within that grant without asking again. Never " +
+                "request deletion; " +
                 "it is unavailable.\n\n" +
                 "Only when the current user explicitly states a durable non-sensitive fact or " +
                 "preference, append a final private block: $MemoryUpdateOpenMarker" +

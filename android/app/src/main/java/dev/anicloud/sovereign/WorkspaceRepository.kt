@@ -12,8 +12,10 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.security.MessageDigest
+import java.text.Normalizer
 import java.util.ArrayDeque
 import java.util.Base64
+import java.util.Locale
 import java.util.concurrent.CancellationException
 
 private const val WorkspacePreferences = "anicloud_workspace"
@@ -56,6 +58,7 @@ data class WorkspaceActionResult(
     val toolContent: String = "",
     val beforeSha256: String? = null,
     val afterSha256: String? = null,
+    val artifactId: String? = null,
 )
 
 data class WorkspaceActionReconciliation(
@@ -779,6 +782,7 @@ class WorkspaceRepository(
             detail = "Listed ${entries.size} exact entries in ${displayPath(path)}" +
                 if (artifactRegistry == null) "." else "; stable artifact ids registered.",
             toolContent = body,
+            artifactId = directoryIdentity?.artifactId,
         )
     }
 
@@ -805,6 +809,7 @@ class WorkspaceRepository(
                 append(suffix)
             },
             afterSha256 = contentHash,
+            artifactId = identity?.artifactId,
         )
     }
 
@@ -823,6 +828,7 @@ class WorkspaceRepository(
             toolContent = identity?.let { "Artifact ID: ${it.artifactId}" }.orEmpty(),
             beforeSha256 = snapshot.beforeSha256,
             afterSha256 = snapshot.afterSha256,
+            artifactId = identity?.artifactId,
         )
     }
 
@@ -862,6 +868,7 @@ class WorkspaceRepository(
             detail = "Created and verified $path (${bytes.size} bytes).",
             toolContent = identity?.let { "Artifact ID: ${it.artifactId}" }.orEmpty(),
             afterSha256 = contentHash,
+            artifactId = identity?.artifactId,
         )
     }
 
@@ -888,6 +895,7 @@ class WorkspaceRepository(
         return WorkspaceActionResult(
             detail = "Created directory $path.",
             toolContent = identity?.let { "Artifact ID: ${it.artifactId}" }.orEmpty(),
+            artifactId = identity?.artifactId,
         )
     }
 
@@ -1284,15 +1292,19 @@ fun isEditableWorkspaceText(entry: WorkspaceEntry): Boolean {
 
 /** Pure validation shared by the visible editor and the agent controller. */
 fun normalizeWorkspacePath(raw: String, allowRoot: Boolean = false): String {
-    val candidate = raw.trim().replace('\\', '/')
+    val candidate = Normalizer.normalize(raw.trim().replace('\\', '/'), Normalizer.Form.NFC)
     require(!candidate.startsWith('/')) { "Absolute paths are outside the connected workspace." }
     require(!Regex("^[A-Za-z]:").containsMatchIn(candidate)) {
         "Drive-qualified paths are outside the connected workspace."
     }
     val segments = candidate.split('/').filter { it.isNotBlank() && it != "." }
     require(segments.none { it == ".." }) { "Parent traversal is outside the connected workspace." }
-    require(segments.none { '\u0000' in it || it.length > 255 }) { "The workspace path is invalid." }
+    require(segments.none { segment ->
+        segment.any { it == '\u0000' || it.code < 0x20 || it.code == 0x7f } ||
+            segment.toByteArray(Charsets.UTF_8).size > 255
+    }) { "The workspace path contains a control character or oversized Unicode segment." }
     val normalized = segments.joinToString("/")
+    require(normalized.toByteArray(Charsets.UTF_8).size <= 4_096) { "The workspace path is too long." }
     require(allowRoot || normalized.isNotBlank()) { "A workspace-relative path is required." }
     return normalized
 }
@@ -1313,11 +1325,11 @@ fun scopeWorkspaceMissionPath(rawPath: String, rawRootPath: String): String {
     while (relative.take(rootSegments.size) == rootSegments) {
         relative = relative.drop(rootSegments.size)
     }
-    val canonicalRootLeaf = rootSegments.last().filter { it.isLetterOrDigit() }.lowercase()
+    val canonicalRootLeaf = rootSegments.last().filter { it.isLetterOrDigit() }.lowercase(Locale.ROOT)
     if (
         relative.isNotEmpty() &&
         proposedSegments.take(rootSegments.size) != rootSegments &&
-        relative.first().filter { it.isLetterOrDigit() }.lowercase() == canonicalRootLeaf
+        relative.first().filter { it.isLetterOrDigit() }.lowercase(Locale.ROOT) == canonicalRootLeaf
     ) {
         error(
             "Mission path repeats or resembles the immutable root without its exact canonical " +
@@ -1329,12 +1341,12 @@ fun scopeWorkspaceMissionPath(rawPath: String, rawRootPath: String): String {
 
 /** A user-entered file or folder name is one leaf, never a path or controller instruction. */
 fun normalizeWorkspaceLeafName(raw: String): String {
-    val name = raw.replace("\u0000", "").trim()
+    val name = Normalizer.normalize(raw.trim(), Normalizer.Form.NFC)
     require(name.isNotBlank()) { "Enter a file or folder name." }
     require(name !in setOf(".", "..")) { "Choose a normal file or folder name." }
     require('/' !in name && '\\' !in name) { "Names cannot contain path separators." }
-    require(name.length <= 120) { "Names are limited to 120 characters." }
-    require(name.none { it.code < 0x20 || it.code == 0x7f }) {
+    require(name.toByteArray(Charsets.UTF_8).size <= 255) { "Names are limited to 255 UTF-8 bytes." }
+    require(name.none { it == '\u0000' || it.code < 0x20 || it.code == 0x7f }) {
         "Names cannot contain control characters."
     }
     return name

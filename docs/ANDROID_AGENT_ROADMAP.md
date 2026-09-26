@@ -12,11 +12,21 @@ continuity but never grants authority.
 `0.8.12-release-origin` separates ordinary Chat from long-running project work,
 adds non-destructive fresh/reopen conversation controls, and turns one explicit start tap into
 a bounded filesystem grant. A work session has a
-complete objective, one ASCII workspace root, a selected model posture, a durable Matrix
+complete immutable objective, one Unicode-safe workspace root, a selected model posture, a durable Matrix
 checkpoint, and a visible foreground STOP path.
 
-- A single launch may execute at most 120 verified `list_files`, `read_file`, `create_directory`,
-  `create_file`, or `write_file` actions.
+- Android compiles explicit work items once into a durable Mission Manifest. The manifest owns task
+  identity, order, source instructions, current task, artifact ids, attempts, and exact completion;
+  the model never owns or reconstructs the task count.
+- The 120-step grant now means 120 verified **logical agent checkpoints**, not 120 filesystem calls.
+  Mechanical work is counted separately and bounded at 1,440 tool operations. Inference cycles,
+  failed tool attempts, automatic recoveries, written bytes, and completed manifest tasks also have
+  separate durable counters.
+- A read, list, create, or write never advances logical progress by itself. Failed tool attempts are
+  audited and consume tool-operation capacity, but never consume a completed logical step.
+- One model response may request a typed transaction of two through eight workspace operations.
+  Android prevalidates the whole bundle, executes and audits every operation separately, and accepts
+  an optional logical checkpoint only after every required operation succeeds.
 - The grant covers at most 1 MiB of generated write content inside the exact mission root.
 - Android creates or verifies the mission root before inference. Within that root, create,
   write, and directory actions run without per-file approval prompts; execution, dependency,
@@ -24,16 +34,24 @@ checkpoint, and a visible foreground STOP path.
 - Replacements retain a private pre-write snapshot. Model-generated delete, code execution,
   package installation, network access, and paths outside the mission root are unavailable.
   Human IDE removal is a separate confirmed move into recoverable project-local trash.
-- The controller recreates native conversation state and rebuilds a bounded,
-  lane-specific Matrix pack before every action. It injects the objective, newest
-  guidance, last verified result, and recent action signatures instead of
-  accumulating 120 actions in hidden model state.
-- Repeated action sequences, immediate duplicate actions, malformed paths, self-repeating path
-  segments, excessive path depth, native stream corruption, severe thermal pressure, and process
-  death pause the mission safely.
-- A single in-scope filesystem miss is returned to the model for correction; three consecutive
-  tool failures pause the run. Failed attempts still consume the action and write budgets, so
-  recovery cannot become an unbounded retry loop.
+- The controller recreates native conversation state and rebuilds a bounded, lane-specific Matrix
+  pack before every inference. It injects global constraints, the manifest summary, the exact current
+  task source, newest guidance, and the last verified checkpoint instead of arbitrary prefixes of the
+  original request or accumulated hidden model state. The complete original objective remains durable
+  provenance and is integrity-bound to the manifest by SHA-256.
+- Android derives deterministic ASCII-safe storage names for semantic deliverables while preserving
+  the original Unicode display label. Existing artifacts use exact stable `WA-…` identities. User
+  paths accept normalized Unicode, spaces, and apostrophes while still rejecting controls, absolute
+  paths, traversal, oversized segments, and any access outside the granted SAF tree.
+- A controller-owned Recovery Router handles malformed envelopes, operation-kind disagreement,
+  stale/missing targets, repeated reparable requests, benign filesystem races, and test/compiler
+  failure evidence without a Resume click. It preserves the last logical checkpoint, records the
+  failure, applies deterministic repair where possible, otherwise returns a compact recovery packet,
+  and stops after a small bounded set of attempts.
+- Human interruption remains reserved for authority expansion, consequential semantic ambiguity,
+  security/integrity boundaries, or recovery exhaustion. Process restart resumes a mission whose
+  status was Running from its durable manifest cursor; a completed approved Termux test/build also
+  returns automatically to the mission, whether the command passed or failed.
 - Guidance is appended to the checkpoint. It does not replace the original objective.
 - Guidance entered while generation is active is queued durably and injected at the next safe
   controller boundary instead of discarding partial work or replacing the objective.
@@ -47,8 +65,8 @@ checkpoint, and a visible foreground STOP path.
 - If the model proposes `write_file` for a target Android has verified does not exist, the
   controller transparently reconciles that proposal to `create_file`. It never performs the
   inverse conversion, so an accidental create cannot overwrite an existing file.
-- Work expected to exceed six actions maintains `PROJECT_STATE.md` in the project so architecture,
-  decisions, validation, blockers, and the next action remain inspectable outside the database.
+- Project-authored state files remain useful deliverables, but they are never the canonical mission
+  cursor. The Matrix manifest and controller evidence ledger remain authoritative across restart.
 
 Primary endurance acceptance uses the
 [`120-chapter Story Forge benchmark`](ANICLOUDAI_120_CHAPTER_STORY_FORGE.md). Android owns every
@@ -57,9 +75,10 @@ only the next unnumbered scene. The reviewed folder, full premise, and Quality p
 filled from the Work Session preset without launching; the user still starts the run explicitly.
 Restored Chat and Work Session transcripts initially reveal their true tail, expose a visible
 centered `↓` return control, and stop auto-following after deliberate upward reader motion. The separate
-[`120-action Long Forge benchmark`](ANICLOUDAI_120_ACTION_FORGE_BENCHMARK.md) remains the adversarial
-multi-file engineering gate. Closing the process must convert an in-flight mission to Paused;
-explicit Resume must continue from verified state.
+[`120-operation Long Forge fixture`](ANICLOUDAI_120_ACTION_FORGE_BENCHMARK.md) remains a legacy
+low-level audit/endurance case; it is no longer the definition of 120 logical steps. Closing or
+losing the process must preserve the cursor and automatically continue a previously Running mission
+from verified state once its reviewed model and workspace authority are available.
 
 ## 2. Native IDE execution — first candidate
 

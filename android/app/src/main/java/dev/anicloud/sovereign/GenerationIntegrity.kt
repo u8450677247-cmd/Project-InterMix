@@ -34,7 +34,7 @@ object GenerationIntegrityGuard {
         }
         if (
             Regex(
-                "(?i)</?\\s*(?:INTERMIX[_\\s-]*(?:ACTION|EXEC|CALC|STORY|EVOLUTION)|" +
+                "(?i)</?\\s*(?:INTERMIX[_\\s-]*(?:ACTION|TRANSACTION|CHECKPOINT|EXEC|CALC|STORY|EVOLUTION)|" +
                     "INTERACTION|MEMORY[_\\s-]*UPDATE|PROFILE[_\\s-]*UPDATE)\\b",
             ).containsMatchIn(text)
         ) {
@@ -138,19 +138,31 @@ data class AgentMissionCheckpoint(
     val status: AgentMissionStatus = AgentMissionStatus.Running,
     val completedActions: Int = 0,
     val maxActions: Int = 120,
+    val toolOperations: Int = 0,
+    val maxToolOperations: Int = DefaultMissionToolOperationBudget,
+    val toolFailures: Int = 0,
+    val inferenceCycles: Int = 0,
+    val recoveries: Int = 0,
+    val toolOperationsAtLastCheckpoint: Int = 0,
+    val lastToolSucceeded: Boolean = false,
     val writtenBytes: Long = 0L,
     val maxWriteBytes: Long = 1024L * 1024L,
     val planKind: String = WorkspaceMissionKind,
     val planState: String = "",
     val evolutionState: String = "",
+    val missionManifest: MissionManifest? = null,
     val guidance: List<String> = emptyList(),
     val actionTrail: List<String> = emptyList(),
+    val recoveryTrail: List<String> = emptyList(),
+    val lastVerifiedCheckpoint: String = "",
     val lastAction: String = "",
     val lastResult: String = "",
     val updatedAt: String = "",
 ) {
     val active: Boolean
         get() = status == AgentMissionStatus.Running || status == AgentMissionStatus.Paused
+
+    val logicalStepsCompleted: Int get() = completedActions
 }
 
 /** Detects a one-to-six-action sequence rehearsed three times at the end of a mission trail. */

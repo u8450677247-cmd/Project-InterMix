@@ -54,9 +54,9 @@ while preserving neutral long-form reading surfaces.
 - a phone-specific Chat composer that fits every answer mode, removes desktop-only explanatory
   bulk, preserves transcript space, and collapses around the visible keyboard/input row;
 - a dedicated Long Forge workspace session that accepts one complete
-  objective, up to 120 scoped controller actions, queued mid-run guidance,
-  fresh per-action Matrix context rebuilding, recursive-loop detection, and durable
-  pause/resume checkpoints;
+  objective, a durable Mission Manifest, up to 120 logical checkpoints plus 1,440
+  separately audited tool operations, queued mid-run guidance, bounded transactions,
+  fresh per-inference Matrix context rebuilding, recovery routing, and restart continuation;
 - automatic correction of up to four narration-only mission responses before a
   pause, plus mission-relative controller paths that remain inside the exact grant;
 - append-only controller-cycle messages and safe interrupted Work Session drafts
@@ -109,7 +109,8 @@ Choosing an Internal Storage folder grants reach only within that tree. In
 ordinary Chat, reads can be controller-executed while file creation,
 replacement, and directory creation must be approved in Agents. Starting a
 Long Forge work session visibly grants those three mutation types inside one
-named subdirectory for at most 120 actions and 1 MiB of attempted write content.
+named subdirectory for at most 120 logical checkpoints, 1,440 low-level tool operations,
+and 1 MiB of attempted write content.
 Model-generated deletion remains disabled. A human can review a specific file or
 folder, confirm a reversible move into `.anicloud-trash` within the same granted
 tree, and undo the latest move. Provider refusal fails closed without widening
@@ -255,8 +256,8 @@ below remains the minimum E4B engine check.
 11. Run the exact
     [`120-chapter Story Forge benchmark`](../docs/ANICLOUDAI_120_CHAPTER_STORY_FORGE.md)
     as the single-file one-click endurance gate. Then run the separate
-    [`120-action Long Forge benchmark`](../docs/ANICLOUDAI_120_ACTION_FORGE_BENCHMARK.md)
-    for multi-file engineering, scope checks, and artifact verification.
+    [`120-operation Long Forge fixture`](../docs/ANICLOUDAI_120_ACTION_FORGE_BENCHMARK.md)
+    for low-level ordering, scope, and artifact-audit regression only.
 
 Do not import a live Termux SQLite database. The execution bridge exchanges only
 reviewed commands and bounded result records; a future memory bridge must use a

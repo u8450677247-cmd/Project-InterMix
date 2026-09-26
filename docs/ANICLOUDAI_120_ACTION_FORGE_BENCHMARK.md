@@ -1,6 +1,14 @@
-# AniCloudAI 120-Action Long Forge Benchmark
+# AniCloudAI 120-Operation Long Forge Legacy Fixture
 
-This is the deterministic endurance test for AniCloudAI `0.8.5-ship-hardening`.
+Status: retained low-level compatibility fixture from `0.8.5-ship-hardening`.
+
+This document is no longer the product definition of a 120-step autonomous mission. In the
+reliability-convergence engine, **120 means verified logical agent checkpoints**; reads and writes
+are separately audited tool operations under a 1,440-operation ceiling. The fixed sequence below
+remains useful for parser, order, containment, and audit regression tests, but it must not be used to
+make `completedActions` synonymous with filesystem calls again.
+
+The historical fixture deliberately stays inside narrow local authority:
 It deliberately stays inside the capabilities that are locally available today:
 
 - one user-selected Storage Access Framework tree;
@@ -11,23 +19,28 @@ It deliberately stays inside the capabilities that are locally available today:
 
 The test separates two questions that must never be conflated:
 
-1. **Controller endurance:** Can one click carry a durable mission through exactly 120
-   ordered, bounded, visible actions without forgetting, leaving scope, or erasing prose?
+1. **Tool-ledger endurance:** Can the controller audit exactly 120 ordered, bounded workspace
+   operations without forgetting, leaving scope, or erasing prose?
 2. **Product verification:** Does the resulting offline site actually work in a browser?
    That is checked manually after the controller run and later by the Termux execution gate.
 
-## Clean-room setup
+## Historical clean-room setup (legacy builds only)
 
 1. Install the signed `0.8.5-ship-hardening` dogfood APK.
 2. In **Workspace**, connect a disposable parent folder.
 3. Confirm that `forge-120-signal-lab` does not already exist. If it does, rename it or
    move it to AniCloudAI's recoverable trash first.
-4. Open **Work Session**, select **Quality · 2K**, and paste the entire command below.
+4. Do not use this legacy payload as the current reliability-convergence acceptance mission. Use
+   the A–L manifest/accounting/recovery suite and a semantic multi-task device objective instead.
 5. Press **START SCOPED RUN exactly once**. Do not press Resume unless Android or the
    controller explicitly pauses.
 6. Keep the Pixel externally cooled and the app visible for the first acceptance pass.
 
-## Copy-ready benchmark command
+## Archived benchmark payload
+
+The payload is preserved verbatim as a regression corpus. Its one-action protocol and root-creation
+step predate controller-prepared roots, bounded transactions, Mission Manifests, and explicit logical
+checkpoints.
 
 ```text
 /mission run forge-120-signal-lab :: Build a dependency-free, responsive, offline-first web product named Sovereign Signal Lab. It is a polished cyan/violet/magenta project-status cockpit where a user can add, edit, archive, search, filter, import, and export local status cards. State persists in localStorage. The product must use semantic HTML, keyboard navigation, visible focus, an ARIA live region, reduced-motion support, responsive phone/desktop layouts, a manifest, and a service worker. It must use no CDN, package manager, remote font, remote image, network request, telemetry, API, shell, execution tool, delete operation, absolute path, or parent traversal.
@@ -177,7 +190,7 @@ EXACT ACTION MANIFEST
 120 read_file PROJECT_STATE.md
 ```
 
-## Controller acceptance rubric
+## Legacy controller acceptance rubric
 
 The run passes only when all of these are true:
 
@@ -189,7 +202,8 @@ The run passes only when all of these are true:
 - no completed message disappears when an `[INFO]`, `[ACTION]`, or System Lens node appears;
 - scrolling upward remains under user control while generation continues;
 - the mission remains scoped to `forge-120-signal-lab`;
-- `completedActions` ends at exactly 120 and never reaches 121;
+- the tool-operation ledger ends at exactly 120 and never presents those operations as 120 logical
+  agent steps;
 - no action uses execution, network, install, delete, an absolute path, or `..`;
 - every write stays within the 1 MiB aggregate limit and creates a pre-write snapshot;
 - the final response is a durable Core message after action 120, not a transient stream;

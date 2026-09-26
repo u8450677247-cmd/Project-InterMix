@@ -1,9 +1,15 @@
 package dev.anicloud.sovereign.prototype
 
+import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
 
 const val WorkspaceActionOpenMarker = "<INTERMIX_ACTION>"
 const val WorkspaceActionCloseMarker = "</INTERMIX_ACTION>"
+const val WorkspaceTransactionOpenMarker = "<INTERMIX_TRANSACTION>"
+const val WorkspaceTransactionCloseMarker = "</INTERMIX_TRANSACTION>"
+const val MissionCheckpointOpenMarker = "<INTERMIX_CHECKPOINT>"
+const val MissionCheckpointCloseMarker = "</INTERMIX_CHECKPOINT>"
 const val MemoryUpdateOpenMarker = "<MEMORY_UPDATE>"
 const val MemoryUpdateCloseMarker = "</MEMORY_UPDATE>"
 const val ProfileUpdateOpenMarker = "<PROFILE_UPDATE>"
@@ -36,7 +42,7 @@ enum class WorkspaceActionKind(
 
     companion object {
         fun fromWireName(raw: String): WorkspaceActionKind? = entries.firstOrNull {
-            it.wireName == raw.trim().lowercase()
+            it.wireName == raw.trim().lowercase(Locale.ROOT)
         }
     }
 }
@@ -47,11 +53,28 @@ data class WorkspaceActionProposal(
     val content: String = "",
     val reason: String = "",
     val artifactId: String = "",
+    val taskId: String = "",
+    val artifactType: String = "",
+    val displayName: String = "",
 )
+
+data class WorkspaceActionTransaction(
+    val operations: List<WorkspaceActionProposal>,
+    val checkpoint: MissionCheckpointProposal? = null,
+    val reason: String = "",
+) {
+    init {
+        require(operations.size in 2..MaximumMissionTransactionOperations) {
+            "A workspace transaction requires 2..$MaximumMissionTransactionOperations operations."
+        }
+    }
+}
 
 data class ControllerProtocolResult(
     val visibleText: String,
     val workspaceAction: WorkspaceActionProposal? = null,
+    val workspaceTransaction: WorkspaceActionTransaction? = null,
+    val missionCheckpoint: MissionCheckpointProposal? = null,
     val executionAction: ExecutionProposal? = null,
     val calculationAction: NumericCalculationProposal? = null,
     val storyChapter: StoryChapterProposal? = null,
@@ -78,6 +101,8 @@ object ControllerProtocol {
     )
     private val openMarkers = listOf(
         WorkspaceActionOpenMarker,
+        WorkspaceTransactionOpenMarker,
+        MissionCheckpointOpenMarker,
         ExecutionActionOpenMarker,
         CalculationOpenMarker,
         StoryOpenMarker,
@@ -86,13 +111,15 @@ object ControllerProtocol {
         ProfileUpdateOpenMarker,
     )
     private val protocolLikeStartPattern = Regex(
-        "<\\s*/?\\s*(?:INTERMIX(?:[_\\s-]*(?:ACTION|EXEC|CALC|STORY|EVOLUTION))?|" +
+        "<\\s*/?\\s*(?:INTERMIX(?:[_\\s-]*(?:ACTION|TRANSACTION|CHECKPOINT|EXEC|CALC|STORY|EVOLUTION))?|" +
             "INTERACTION|MEMORY[_\\s-]*UPDATE|PROFILE[_\\s-]*UPDATE)" +
             "(?=\\s|>|\\{|\\[|$)",
         RegexOption.IGNORE_CASE,
     )
     private val protocolCanonicalNames = listOf(
         "INTERMIXACTION",
+        "INTERMIXTRANSACTION",
+        "INTERMIXCHECKPOINT",
         "INTERACTION",
         "INTERMIXEXEC",
         "INTERMIXCALC",
@@ -207,10 +234,14 @@ object ControllerProtocol {
         Markdown. Never emit HTML, terminal escapes, or raw palette values.
     """.trimIndent()
 
-    /** One-action contract for the bounded, controller-owned workspace lane. */
+    /** Typed transaction and checkpoint contract for the bounded controller-owned workspace lane. */
     fun workspaceMissionPromptContract(): String = """
         [SCOPED WORKSPACE CONTROLLER PROTOCOL]
-        Emit exactly one raw <INTERMIX_ACTION> JSON block per response and no speculative result.
+        Emit exactly one private payload per response and no speculative result. Use one
+        <INTERMIX_ACTION> for a single operation, or one bounded <INTERMIX_TRANSACTION> with 2..8
+        operations that serve one coherent reasoning step. Android prevalidates the complete
+        transaction, executes and audits each operation separately, and checkpoints only after every
+        required operation succeeds. Never use a transaction as an unrestricted script.
         Kinds: list_files, read_file, create_file, write_file, create_directory. Paths stay inside
         the authorized mission root, which Android prepares before inference; do not recreate that root.
         Verified results may include a stable artifact_id. Reuse that exact id for an existing file
@@ -220,15 +251,26 @@ object ControllerProtocol {
         proposals contain complete, non-empty final content; never create an empty placeholder or split
         create-then-fill into separate actions. For a nested creation, emit the final target directly;
         Android may create up to eight verified missing parent directories as one ordered, audited bundle.
+        For a new manifest deliverable, prefer controller naming instead of inventing a path:
+        <INTERMIX_ACTION>{"kind":"create_file","task_id":"TASK-001","artifact_type":"cover_letter","display_name":"Human-facing Unicode label","content":"complete text"}</INTERMIX_ACTION>
+        Android derives the stable ASCII-safe directory and filename while preserving display labels.
+        A transaction has this shape:
+        <INTERMIX_TRANSACTION>{"reason":"one coherent step","operations":[{"kind":"read_file","artifact_id":"WA-0123456789ABCDEF0123456789ABCDEF"},{"kind":"read_file","path":"verified/other.md"}]}</INTERMIX_TRANSACTION>
         After a successful mutation, verify it with read_file rather than repeating the mutation. This
         active mission is the bounded approval grant; Android executes, audits, checkpoints, and returns
         the consolidated result without per-file approval clicks.
+        Reads, writes, and transactions are tool operations, not logical progress. After new successful
+        evidence reaches a meaningful boundary, emit exactly one checkpoint instead of another tool:
+        <INTERMIX_CHECKPOINT>{"kind":"logical_step","task_id":"TASK-001","summary":"verified boundary","artifact_ids":["WA-0123456789ABCDEF0123456789ABCDEF"]}</INTERMIX_CHECKPOINT>
+        Use kind task_complete only when the current manifest task has at least one verified artifact and
+        all of its required work is reviewable. Android alone advances task counts and the final stop.
         Use <INTERMIX_CALC>{"expression":"decimal expression","reason":"why"}</INTERMIX_CALC> for
         derived arithmetic. Use <INTERMIX_EXEC> only when a separate Termux approval is genuinely
         required; include kind, command, relative workdir, network_required, dependencies, reason,
         and timeout_seconds. Never delete, traverse upward, escalate privileges, forge results, or
-        emit more than one controller action. Return [MISSION_COMPLETE] only after verified work and
-        checks are finished; return [BLOCKED] only when human input is essential.
+        emit more than one private payload. Never claim MISSION_COMPLETE; Android reports completion only
+        after every manifest task is controller-verified. Return [BLOCKED] only for genuine human authority,
+        consequential ambiguity, security/integrity boundaries, or bounded recovery exhaustion.
     """.trimIndent()
 
     /** Private prose-only contract for one checkpointed Story Forge segment. */
@@ -281,6 +323,16 @@ object ControllerProtocol {
         val firstMarker = firstProtocolMarkerIndex(raw)
         val visible = (firstMarker?.let { raw.substring(0, it) } ?: raw).trim()
         val workspaceAction = extractWorkspaceJson(raw)?.let(::parseWorkspaceAction)
+        val workspaceTransaction = extractJson(
+            raw,
+            WorkspaceTransactionOpenMarker,
+            WorkspaceTransactionCloseMarker,
+        )?.let(::parseWorkspaceTransaction)
+        val missionCheckpoint = extractJson(
+            raw,
+            MissionCheckpointOpenMarker,
+            MissionCheckpointCloseMarker,
+        )?.let(::parseMissionCheckpoint)
         val executionAction = extractJson(raw, ExecutionActionOpenMarker, ExecutionActionCloseMarker)
             ?.let(::parseExecutionAction)
         val calculationAction = extractJson(raw, CalculationOpenMarker, CalculationCloseMarker)
@@ -289,12 +341,15 @@ object ControllerProtocol {
         val evolutionProposal = runCatching { EvolutionForgeProtocol.parse(raw).proposal }.getOrNull()
         val memoryPayload = extractJson(raw, MemoryUpdateOpenMarker, MemoryUpdateCloseMarker)
         val profilePayload = extractJson(raw, ProfileUpdateOpenMarker, ProfileUpdateCloseMarker)
-        val parsedPayload = workspaceAction != null || executionAction != null ||
+        val parsedPayload = workspaceAction != null || workspaceTransaction != null ||
+            missionCheckpoint != null || executionAction != null ||
             calculationAction != null || storyChapter != null || evolutionProposal != null || memoryPayload != null ||
             profilePayload != null
         return ControllerProtocolResult(
             visibleText = visible,
             workspaceAction = workspaceAction,
+            workspaceTransaction = workspaceTransaction,
+            missionCheckpoint = missionCheckpoint,
             executionAction = executionAction,
             calculationAction = calculationAction,
             storyChapter = storyChapter,
@@ -345,6 +400,16 @@ object ControllerProtocol {
             if (raw.isBlank()) "" else runCatching { normalizeWorkspaceArtifactId(raw) }.getOrNull()
                 ?: return null
         }
+        val taskId = payload.optString("task_id").trim()
+        val artifactType = payload.optString("artifact_type").trim().lowercase(Locale.ROOT)
+        val displayName = payload.optString("display_name").replace("\u0000", "").trim().take(240)
+        val semanticArtifact = taskId.isNotBlank() || artifactType.isNotBlank()
+        if (semanticArtifact && (
+                kind != WorkspaceActionKind.CreateFile ||
+                    !Regex("^TASK-[0-9]{3}$").matches(taskId) ||
+                    !Regex("^[a-z][a-z0-9_-]{0,63}$").matches(artifactType)
+                )
+        ) return null
         if (
             kind in setOf(WorkspaceActionKind.CreateFile, WorkspaceActionKind.CreateDirectory) &&
             artifactId.isNotBlank()
@@ -352,7 +417,8 @@ object ControllerProtocol {
         if (
             kind != WorkspaceActionKind.ListFiles &&
             path.isBlank() &&
-            artifactId.isBlank()
+            artifactId.isBlank() &&
+            !semanticArtifact
         ) return null
         val content = payload.optString("content").take(64 * 1024)
         if (
@@ -365,7 +431,50 @@ object ControllerProtocol {
             content = content,
             reason = payload.optString("reason").trim().take(280),
             artifactId = artifactId,
+            taskId = taskId,
+            artifactType = artifactType,
+            displayName = displayName,
         )
+    }
+
+    private fun parseWorkspaceTransaction(payload: JSONObject): WorkspaceActionTransaction? {
+        val operationsPayload = payload.optJSONArray("operations") ?: return null
+        if (operationsPayload.length() !in 2..MaximumMissionTransactionOperations) return null
+        val operations = buildList {
+            for (index in 0 until operationsPayload.length()) {
+                val operation = operationsPayload.optJSONObject(index)?.let(::parseWorkspaceAction)
+                    ?: return null
+                add(operation)
+            }
+        }
+        val checkpointPayload = payload.optJSONObject("checkpoint")
+        val checkpoint = checkpointPayload?.let(::parseMissionCheckpoint)
+        if (payload.has("checkpoint") && (checkpointPayload == null || checkpoint == null)) return null
+        return runCatching {
+            WorkspaceActionTransaction(
+                operations = operations,
+                checkpoint = checkpoint,
+                reason = payload.optString("reason").replace("\u0000", "").trim().take(280),
+            )
+        }.getOrNull()
+    }
+
+    private fun parseMissionCheckpoint(payload: JSONObject): MissionCheckpointProposal? {
+        val kind = MissionCheckpointKind.fromWireName(payload.optString("kind")) ?: return null
+        val taskId = payload.optString("task_id").trim()
+        if (!Regex("^TASK-[0-9]{3}$").matches(taskId)) return null
+        val summary = payload.optString("summary").replace("\u0000", "").trim().take(2_000)
+        if (summary.isBlank()) return null
+        val artifactPayload = payload.optJSONArray("artifact_ids") ?: JSONArray()
+        val artifactIds = buildList {
+            for (index in 0 until artifactPayload.length()) {
+                val artifactId = runCatching {
+                    normalizeWorkspaceArtifactId(artifactPayload.optString(index))
+                }.getOrNull() ?: return null
+                add(artifactId)
+            }
+        }.distinct()
+        return MissionCheckpointProposal(kind, taskId, summary, artifactIds)
     }
 
     private fun parseExecutionAction(payload: JSONObject): ExecutionProposal? {

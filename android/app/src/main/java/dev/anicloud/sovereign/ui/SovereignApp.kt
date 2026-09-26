@@ -140,6 +140,7 @@ import dev.anicloud.sovereign.prototype.StoryForgeBenchmarkPremise
 import dev.anicloud.sovereign.prototype.StoryForgeMissionKind
 import dev.anicloud.sovereign.prototype.TermuxRunCommandPermission
 import dev.anicloud.sovereign.prototype.WorkspaceEntry
+import dev.anicloud.sovereign.prototype.WorkspaceMissionKind
 import dev.anicloud.sovereign.prototype.WorkspaceState
 import dev.anicloud.sovereign.prototype.WorkspaceViewModel
 import dev.anicloud.sovereign.prototype.allowsAmbientMotion
@@ -2726,7 +2727,7 @@ private fun WorkSessionControlPanel(
                     onValueChange = onRootPath,
                     label = { Text("MISSION FOLDER") },
                     placeholder = { Text("sovereign-studio-lf01") },
-                    supportingText = { Text("Relative to the connected project; ASCII paths only") },
+                    supportingText = { Text("Relative to the connected project; Unicode-safe and root-contained") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -2882,7 +2883,9 @@ private fun WorkSessionControlPanel(
                     Text(mission.mode.label.uppercase(), color = SoftViolet, fontSize = 10.sp)
                 }
                 Text(
-                    mission.objective,
+                    mission.missionManifest?.currentTask?.let {
+                        "${it.id} · ${it.displayLabel}"
+                    } ?: mission.objective,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 4,
                     overflow = TextOverflow.Ellipsis,
@@ -2890,7 +2893,7 @@ private fun WorkSessionControlPanel(
                 )
                 Text(
                     "SCOPE ${mission.rootPath} · " +
-                        "${if (mission.planKind == StoryForgeMissionKind) "CHAPTERS" else "ACTIONS"} " +
+                        "${if (mission.planKind == StoryForgeMissionKind) "CHAPTERS" else "AGENT STEPS"} " +
                         "${mission.completedActions}/${mission.maxActions}",
                     color = MutedText,
                     fontFamily = FontFamily.Monospace,
@@ -2921,7 +2924,15 @@ private fun WorkSessionControlPanel(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Text(
-                    "WRITE ${formatBytes(mission.writtenBytes)} / ${formatBytes(mission.maxWriteBytes)}",
+                    if (mission.planKind == WorkspaceMissionKind) {
+                        val manifest = mission.missionManifest
+                        "TASKS ${manifest?.completedTaskCount ?: 0}/${manifest?.expectedTaskCount ?: 0} · " +
+                            "TOOL OPS ${mission.toolOperations}/${mission.maxToolOperations} · " +
+                            "FAILURES ${mission.toolFailures} · RECOVERIES ${mission.recoveries}\n" +
+                            "WRITE ${formatBytes(mission.writtenBytes)} / ${formatBytes(mission.maxWriteBytes)}"
+                    } else {
+                        "WRITE ${formatBytes(mission.writtenBytes)} / ${formatBytes(mission.maxWriteBytes)}"
+                    },
                     color = MutedText,
                     fontFamily = FontFamily.Monospace,
                     fontSize = 10.sp,
@@ -3007,7 +3018,8 @@ private fun WorkSessionControlPanel(
                     EvolutionForgeMissionKind ->
                         "EVOLUTION GRANT · DURABLE STAGES · VERIFIED WRITES/TESTS · PATCH REVIEW · EXEC/NET NEED AGENTS APPROVAL"
                     else ->
-                        "GRANT · 120 ACTIONS · MATRIX OFFLOAD · RECURSION GUARD · 1 MiB WRITES · AGENT DELETE OFF · EXEC/NET NEED AGENTS APPROVAL"
+                        "GRANT · 120 LOGICAL STEPS · 1440 TOOL OPS · MANIFEST CHECKPOINTS · " +
+                            "1 MiB WRITES · AGENT DELETE OFF · EXEC/NET NEED AGENTS APPROVAL"
                 },
                 color = ResonanceMint,
                 fontFamily = FontFamily.Monospace,

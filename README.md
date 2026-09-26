@@ -173,10 +173,10 @@ boundary.
 
 Long Forge turns Workspace Lens into more than a file viewer. The user provides
 one complete objective and one exact subdirectory. That starts a durable work
-session with up to **120 controller actions** and **1 MiB of generated write
-content**. The single start tap is the file-operation approval for that exact
-scope; Android prepares the directory, then validates and executes one model
-proposal at a time without another click per file.
+session with up to **120 verified logical checkpoints**, a separate **1,440 tool-operation
+budget**, and **1 MiB of generated write content**. Android compiles explicit work items into a
+durable Mission Manifest, prepares the directory, then validates single operations or typed bundles
+of two through eight operations without another click per file.
 
 - `list_files` and `read_file` may run automatically inside the connected tree.
 - `create_directory`, `create_file`, and `write_file` are allowed autonomously
@@ -188,23 +188,26 @@ proposal at a time without another click per file.
 - Replacing a file creates a private pre-write snapshot. Generated deletion stays
   disabled; a human can separately review and confirm a recoverable move into
   project-local `.anicloud-trash`, then undo it.
-- Objective, action count, write budget, last verified result, project-event
-  ledger, and mid-run guidance are checkpointed so Android process death becomes
-  a visible pause rather than fabricated success.
-- Recursive action patterns, repeated actions, malformed paths, deep path loops,
-  three consecutive tool failures, severe thermal pressure, and corrupted model
-  output stop or pause the mission deterministically.
+- The immutable objective, manifest cursor, logical steps, tool operations, inference cycles,
+  failures, recoveries, write budget, last verified result, project-event ledger, and mid-run
+  guidance are checkpointed. Android process death resumes from the last verified cursor.
+- Reads/writes never count as logical progress by themselves. Failed tool attempts are audited but
+  add zero completed logical steps; a transaction checkpoints only after every required operation
+  succeeds.
+- A bounded Recovery Router corrects ordinary path, envelope, operation-kind, filesystem, and
+  compiler/test disagreement automatically. It pauses only for authority expansion, consequential
+  ambiguity, a security/integrity boundary, or exhausted recovery.
 - Mission paths are now interpreted relative to the granted root. A proposal for
   `index.html` in a `forge-ui-smoke-test` mission becomes
   `forge-ui-smoke-test/index.html`; it is not rejected as an accidental request
   against the workspace root and cannot escape the grant.
-- A narration-only reply receives up to four automatic controller corrections.
-  Long Forge therefore asks the model for the promised next action without making
-  the user press **RESUME** after every sentence. Genuine completion still needs
-  `[MISSION_COMPLETE]`; a real human dependency still needs `[BLOCKED]`.
-- For longer work, `PROJECT_STATE.md` becomes a user-readable ledger for the plan,
-  decisions, verification, blockers, and next action instead of hiding all state
-  inside model context.
+- A narration-only or malformed private reply receives bounded automatic correction without making
+  the user press **RESUME**. The model cannot declare completion: Android reports it only after the
+  exact manifest reaches its verified final task.
+- Unicode user paths remain representable and NFC-normalized. Controller-generated deliverables use
+  deterministic ASCII-safe storage names plus stable artifact ids while preserving human labels.
+- Project state files may remain useful deliverables, but the Matrix manifest—not model-authored
+  prose—is the authoritative plan and restart cursor.
 
 Story Forge is the cleaner endurance lane. One tap asks the model for unnumbered prose
 installments while Android alone owns the chapter cursor, pre-write snapshot, append,
@@ -275,7 +278,7 @@ Long Forge's file-write grant never implies command authority.
 | Responsive phone, free-form, split-screen, and desktop cockpit | **Device-proven** | Polish and accessibility work continue |
 | SQLite sessions, Matrix, profile, append-only transcript, bounded lane-specific context, context telemetry, and latest-first reopening | **Device-observed in 0.8.9** | Labelled capture and recall passed; force-close/process-death recovery remains an explicit gate |
 | SAF workspace, editor, Up/back navigation, copy, recoverable trash, approval queue, and snapshots | **Device-observed in 0.8.6** | Destructive recovery and compact-layout acceptance remain active work |
-| Long Forge 120-action work sessions | **Implemented** | Must complete the adversarial multi-file benchmark without repetitive manual resume |
+| Long Forge 120-logical-step work sessions | **Implemented** | 1,440 separately audited tool ops; A–L manifest/recovery tests plus device acceptance remain required |
 | E2B Tensor G5 NPU routing | **Fingerprint-locked / implemented** | Requires clean device proof of dispatcher discovery, NPU initialization, route switching, and recovery |
 | Termux scripts, tests, builds, and dependencies | **Implemented** | Requires end-to-end permission, execution, STOP, and result-return dogfood proof |
 | Persistent signed APK updates | **CI-proven** | Private dogfood channel; no public store release yet |
@@ -311,8 +314,8 @@ Long Forge's file-write grant never implies command authority.
 The primary one-click endurance gate is the
 [120-chapter Story Forge benchmark](docs/ANICLOUDAI_120_CHAPTER_STORY_FORGE.md).
 The adversarial
-[120-action Long Forge benchmark](docs/ANICLOUDAI_120_ACTION_FORGE_BENCHMARK.md)
-remains the separate multi-file engineering gate.
+[120-operation Long Forge fixture](docs/ANICLOUDAI_120_ACTION_FORGE_BENCHMARK.md)
+remains a low-level audit regression corpus, not the definition of logical steps.
 Start with the
 [first-use acceptance flight](docs/ANICLOUDAI_FIRST_USE_ACCEPTANCE.md), which
 explains every Android prompt and picker, tests safe denial and retry, and walks
@@ -333,7 +336,7 @@ The detailed contracts live in [the native Android module](android/README.md),
 - **Truth before fluency:** volatile questions can trigger web research; weak evidence produces an error or limitation instead of a confident invention.
 - **Adaptive grounding:** difficult lookups use one controller-planned primary query and, only when needed, one bounded parallel follow-up round for corroboration, implementation detail, and limitations.
 - **Bounded autonomy:** the Core may read, write, and test inside one fixed workspace. Deletions require explicit review and hash revalidation.
-- **Long Forge work sessions:** one scoped objective can continue for up to 120 controller actions with foreground STOP, Matrix checkpoints, recursive-loop detection, and restart-safe pause/resume.
+- **Long Forge work sessions:** one scoped objective can continue for up to 120 logical checkpoints and 1,440 separately audited tool operations with a durable task manifest, bounded recovery, foreground STOP, and automatic restart continuation.
 - **Resource awareness:** a resident LiteRT-LM engine is reused while memory permits, then unloaded under pressure or sustained inactivity.
 - **Optional dual-model routing:** a smaller E2B librarian can handle ordinary conversation and prepare bounded context for E4B reasoning while only one model stays resident.
 - **Recoverable generation:** the phone UI stays interactive during inference, exposes STOP, caps native output, and quarantines mechanically corrupted or interrupted replies before memory or voice.
