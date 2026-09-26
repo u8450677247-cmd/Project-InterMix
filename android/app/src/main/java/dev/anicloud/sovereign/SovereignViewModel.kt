@@ -4281,6 +4281,8 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
             backendPreference = RuntimeBackendPreference.GpuThenCpu,
             label = "E4B · ${mode.label}",
             reason = detail,
+            providerId = "litert.reasoning",
+            capabilities = localLiteRtProvider(fallback, npu = false).capabilities,
         )
         _state.update {
             it.copy(

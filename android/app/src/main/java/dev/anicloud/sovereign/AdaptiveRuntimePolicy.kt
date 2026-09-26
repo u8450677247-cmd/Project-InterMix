@@ -28,6 +28,8 @@ data class AdaptiveModelRoute(
     val backendPreference: RuntimeBackendPreference,
     val label: String,
     val reason: String,
+    val providerId: String,
+    val capabilities: CognitionCapabilities,
 )
 
 /** Controller-owned routing; generated model text can never select a backend. */
@@ -102,39 +104,63 @@ object AdaptiveRuntimePolicy {
             AnswerMode.Adaptive -> memoryFirst || !needsReasoning
         }
 
-        if (preferConversation && npu.eligible && conversationModel != null) {
+        val candidates = buildList {
+            if (conversationModel != null && npu.eligible) {
+                add(CognitionCandidate(localLiteRtProvider(conversationModel, npu = true), conversationModel))
+            }
+            if (reasoningModel != null) {
+                add(CognitionCandidate(localLiteRtProvider(reasoningModel, npu = false), reasoningModel))
+            }
+        }
+        val preferred = if (preferConversation) {
+            listOf("litert.conversation", "litert.reasoning")
+        } else {
+            listOf("litert.reasoning", "litert.conversation")
+        }
+        val selected = CognitionRoutingPolicy.select(
+            candidates = candidates,
+            request = CognitionRequest(
+                toolCalling = needsReasoning,
+                minimumContextCapacity = ContextPhysicalTokens,
+                minimumCodingStrength = if (needsReasoning) {
+                    CognitionStrength.General
+                } else {
+                    CognitionStrength.Minimal
+                },
+                allowedLocalities = setOf(CognitionLocality.Device),
+                maximumPrivacyClass = CognitionPrivacyClass.DevicePrivate,
+                offline = true,
+                preferredProviderIds = preferred,
+            ),
+        ) ?: return null
+        val selectedModel = selected.payload
+        if (selectedModel.role == ModelRole.Conversation) {
             return AdaptiveModelRoute(
-                model = conversationModel,
+                model = selectedModel,
                 backendPreference = RuntimeBackendPreference.NpuOnly,
                 label = "E2B · NPU",
                 reason = when {
+                    reasoningModel == null -> "Only verified local model available"
                     memoryFirst -> "Memory/librarian turn routed to E2B"
                     mode == AnswerMode.Performance -> "Short mode prefers conversational E2B"
                     else -> "Balanced mode selected conversational E2B"
                 },
+                providerId = selected.provider.id,
+                capabilities = selected.provider.capabilities,
             )
         }
-        if (reasoningModel != null) {
-            val fallback = if (preferConversation && !npu.eligible) " · ${npu.detail}" else ""
-            return AdaptiveModelRoute(
-                model = reasoningModel,
-                backendPreference = RuntimeBackendPreference.GpuThenCpu,
-                label = "E4B · ${mode.label}",
-                reason = when {
-                    mode == AnswerMode.Quality -> "Quality mode selected reasoning E4B"
-                    needsReasoning -> "Technical/long-form request selected reasoning E4B"
-                    else -> "E4B fallback$fallback"
-                },
-            )
-        }
-        if (npu.eligible && conversationModel != null) {
-            return AdaptiveModelRoute(
-                model = conversationModel,
-                backendPreference = RuntimeBackendPreference.NpuOnly,
-                label = "E2B · NPU",
-                reason = "Only verified local model available",
-            )
-        }
-        return null
+        val fallback = if (preferConversation && !npu.eligible) " · ${npu.detail}" else ""
+        return AdaptiveModelRoute(
+            model = selectedModel,
+            backendPreference = RuntimeBackendPreference.GpuThenCpu,
+            label = "E4B · ${mode.label}",
+            reason = when {
+                mode == AnswerMode.Quality -> "Quality mode selected reasoning E4B"
+                needsReasoning -> "Technical/long-form request selected reasoning E4B"
+                else -> "E4B fallback$fallback"
+            },
+            providerId = selected.provider.id,
+            capabilities = selected.provider.capabilities,
+        )
     }
 }
