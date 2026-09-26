@@ -338,6 +338,14 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                 val controllerLimit = if (mission == null) MaxControllerCycles else MaxMissionControllerCycles
                 while (controllerCycle < controllerLimit) {
                     if (inferenceCycle > 0) runtime.resetConversation()
+                    val runIdentity = if (mission?.status == AgentMissionStatus.Running) {
+                        mission = withContext(Dispatchers.IO) {
+                            memoryMatrix.recordAgentMissionInferenceCycle()
+                        }
+                        requireNotNull(mission?.executionLedger?.currentRunIdentity)
+                    } else {
+                        null
+                    }
                     val inferenceRequest = if (inferenceCycle > 0 && mission == null) {
                         buildString {
                             appendLine(request)
@@ -357,9 +365,24 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                         measureFirstToken = inferenceCycle == 0,
                     )
                     inferenceCycle++
-                    if (mission?.status == AgentMissionStatus.Running) {
-                        mission = withContext(Dispatchers.IO) {
-                            memoryMatrix.recordAgentMissionInferenceCycle()
+                    if (runIdentity != null) {
+                        val admission = withContext(Dispatchers.IO) {
+                            memoryMatrix.recordAgentMissionRunResult(runIdentity)
+                        }
+                        mission = admission.mission
+                        if (!admission.accepted) {
+                            controllerCycle++
+                            commitMessage(
+                                ChatSpeaker.System,
+                                if (admission.duplicate) {
+                                    "[DUPLICATE RUN RESULT] ${runIdentity.runId} was already admitted; ignored."
+                                } else {
+                                    "[STALE RUN RESULT] ${runIdentity.runId} no longer owns the current step; ignored."
+                                },
+                                source = "mission",
+                            )
+                            refreshRuntimeState()
+                            continue
                         }
                     }
                     val parsed = ControllerProtocol.parse(raw)
@@ -3015,8 +3038,14 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         require(startingMission.writtenBytes + transactionWriteBytes <= startingMission.maxWriteBytes) {
             "The transaction exceeds the remaining write-byte budget."
         }
-        val prepared = transaction.operations.map { operation ->
-            runCatching { prepareWorkspaceAction(operation, startingMission) }.getOrElse { failure ->
+        val transactionLease = withContext(Dispatchers.IO) {
+            memoryMatrix.beginAgentMissionTransaction(
+                operationCount = transaction.operations.size,
+                explicitBundle = true,
+            )
+        }
+        val prepared = transaction.operations.mapIndexed { index, operation ->
+            runCatching { prepareWorkspaceAction(operation, transactionLease.mission) }.getOrElse { failure ->
                 val failedResult = WorkspaceActionResult(detail = "FAILED: ${safeFailure(failure)}")
                 withContext(Dispatchers.IO) {
                     memoryMatrix.recordProjectEvent(
@@ -3028,6 +3057,7 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                         operation,
                         failedResult,
                         succeeded = false,
+                        identity = transactionLease.operations[index],
                     )
                 }
                 throw MissionTransactionFailure(operation, emptyList(), failure)
@@ -3048,15 +3078,16 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         require(transactionSignatures.distinct().size == transactionSignatures.size) {
             "One transaction cannot repeat the same controller operation."
         }
-        require(!hasRecursiveActionTail(startingMission.actionTrail + transactionSignatures)) {
+        require(!hasRecursiveActionTail(transactionLease.mission.actionTrail + transactionSignatures)) {
             "The transaction would continue a recursive controller-operation pattern."
         }
 
-        var mission = startingMission
+        var mission = transactionLease.mission
         val completed = mutableListOf<Pair<WorkspaceActionProposal, WorkspaceActionResult>>()
-        for (preparedAction in prepared) {
+        for ((index, preparedAction) in prepared.withIndex()) {
             val reconciliation = preparedAction.reconciliation
             val proposal = reconciliation.proposal
+            val operationIdentity = transactionLease.operations[index]
             var auditActionId: Long? = null
             val result = runCatching {
                 if (proposal.kind.requiresApproval) {
@@ -3086,7 +3117,12 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                         proposal.path,
                         failedResult,
                     )
-                    memoryMatrix.recordAgentMissionToolOperation(proposal, failedResult, succeeded = false)
+                    memoryMatrix.recordAgentMissionToolOperation(
+                        proposal,
+                        failedResult,
+                        succeeded = false,
+                        identity = operationIdentity,
+                    )
                 }
                 throw MissionTransactionFailure(proposal, completed.toList(), failure)
             }
@@ -3100,7 +3136,12 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                         "Executed by bounded mission transaction. ${verified.detail}",
                     )
                 }
-                memoryMatrix.recordAgentMissionToolOperation(proposal, verified, succeeded = true)
+                memoryMatrix.recordAgentMissionToolOperation(
+                    proposal,
+                    verified,
+                    succeeded = true,
+                    identity = operationIdentity,
+                )
             }
             completed += proposal to verified
         }

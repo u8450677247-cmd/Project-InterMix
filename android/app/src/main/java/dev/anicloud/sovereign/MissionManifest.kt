@@ -376,6 +376,10 @@ object AgentMissionCheckpointCodec {
             mission.missionManifest?.let { JSONObject(MissionManifestCodec.encode(it)) }
                 ?: JSONObject.NULL,
         )
+        .put(
+            "execution_ledger",
+            mission.executionLedger?.let(AgentExecutionLedgerCodec::encode) ?: JSONObject.NULL,
+        )
         .put("manifest_tasks_completed", mission.missionManifest?.completedTaskCount ?: 0)
         .put("guidance", JSONArray(mission.guidance))
         .put("action_trail", JSONArray(mission.actionTrail))
@@ -505,6 +509,21 @@ object AgentMissionCheckpointCodec {
         require(status != AgentMissionStatus.Completed || planKind != WorkspaceMissionKind || manifest?.complete == true) {
             "A recovered manifest mission cannot be complete before all tasks are verified."
         }
+        val executionLedger = payload.optJSONObject("execution_ledger")?.let(
+            AgentExecutionLedgerCodec::decode,
+        ) ?: AgentExecutionController.initial(
+            missionId = id,
+            taskId = manifest?.currentTaskId.orEmpty(),
+            logicalStepsCompleted = completedActions,
+        )
+        require(executionLedger.missionId == id) {
+            "Recovered execution ledger belongs to another mission."
+        }
+        if (manifest?.complete != true) {
+            require(executionLedger.currentTaskId == manifest?.currentTaskId || planKind != WorkspaceMissionKind) {
+                "Recovered execution ledger task does not match the manifest cursor."
+            }
+        }
         return AgentMissionCheckpoint(
             id = id,
             rootPath = normalizeWorkspacePath(payload.getString("root_path")),
@@ -529,6 +548,7 @@ object AgentMissionCheckpointCodec {
             evolutionState = payload.optString("evolution_state").replace("\u0000", "").trim()
                 .take(512 * 1024),
             missionManifest = manifest,
+            executionLedger = executionLedger,
             guidance = payload.stringList("guidance", 12, 2_000),
             actionTrail = payload.stringList("action_trail", 240, 800),
             recoveryTrail = payload.stringList("recovery_trail", 24, 32),
@@ -559,10 +579,49 @@ object MissionProgressReducer {
         result: WorkspaceActionResult,
         succeeded: Boolean,
         updatedAt: String,
+        identity: AgentOperationIdentity? = null,
     ): AgentMissionCheckpoint {
-        require(current.status == AgentMissionStatus.Running) { "The long-form mission is not running." }
-        require(current.toolOperations < current.maxToolOperations) {
-            "The mission exhausted its ${current.maxToolOperations}-operation controller budget."
+        var working = current
+        var ledger = working.executionLedger ?: AgentExecutionController.initial(
+            missionId = working.id,
+            taskId = working.missionManifest?.currentTaskId.orEmpty(),
+            logicalStepsCompleted = working.logicalStepsCompleted,
+        )
+        if (identity == null && (ledger.currentRunId.isBlank() || ledger.currentRunId !in ledger.admittedRunIds)) {
+            ledger = AgentExecutionController.beginRun(
+                ledger = ledger,
+                taskId = working.missionManifest?.currentTaskId.orEmpty(),
+                logicalStepsCompleted = working.logicalStepsCompleted,
+            )
+            val runIdentity = requireNotNull(ledger.currentRunIdentity)
+            ledger = AgentExecutionController.admitRunResult(ledger, runIdentity).ledger
+        }
+        val operationIdentity = identity ?: AgentExecutionController.beginTransaction(
+            ledger = ledger,
+            operationCount = 1,
+            explicitBundle = false,
+            updatedAt = updatedAt,
+        ).also { lease -> ledger = lease.ledger }.operations.single()
+        val admission = AgentExecutionController.admitOperationResult(
+            ledger = ledger,
+            identity = operationIdentity,
+            succeeded = succeeded,
+            evidence = result.detail,
+            updatedAt = updatedAt,
+        )
+        working = working.copy(executionLedger = admission.ledger)
+        if (!admission.accepted) {
+            return working.copy(
+                lastResult = when {
+                    admission.duplicate -> "Duplicate ${operationIdentity.toolCallId} ignored."
+                    else -> "Stale ${operationIdentity.toolCallId} retained as evidence and ignored."
+                },
+                updatedAt = updatedAt,
+            )
+        }
+        require(working.status == AgentMissionStatus.Running) { "The long-form mission is not running." }
+        require(working.toolOperations < working.maxToolOperations) {
+            "The mission exhausted its ${working.maxToolOperations}-operation controller budget."
         }
         val writeBytes = when {
             !succeeded -> 0L
@@ -570,10 +629,10 @@ object MissionProgressReducer {
                 proposal.content.toByteArray(Charsets.UTF_8).size.toLong()
             else -> 0L
         }
-        require(current.writtenBytes + writeBytes <= current.maxWriteBytes) {
-            "The mission exhausted its ${current.maxWriteBytes}-byte write grant."
+        require(working.writtenBytes + writeBytes <= working.maxWriteBytes) {
+            "The mission exhausted its ${working.maxWriteBytes}-byte write grant."
         }
-        val updatedManifest = current.missionManifest?.let { manifest ->
+        val updatedManifest = working.missionManifest?.let { manifest ->
             val artifactId = result.artifactId
                 ?.takeIf { succeeded }
                 ?.takeIf {
@@ -593,14 +652,14 @@ object MissionProgressReducer {
                 })
             }
         }
-        return current.copy(
-            toolOperations = current.toolOperations + 1,
-            toolFailures = current.toolFailures + if (succeeded) 0 else 1,
+        return working.copy(
+            toolOperations = working.toolOperations + 1,
+            toolFailures = working.toolFailures + if (succeeded) 0 else 1,
             lastToolSucceeded = succeeded,
-            writtenBytes = current.writtenBytes + writeBytes,
+            writtenBytes = working.writtenBytes + writeBytes,
             missionManifest = updatedManifest,
             actionTrail = (
-                current.actionTrail +
+                working.actionTrail +
                     "${proposal.kind.wireName}:${proposal.path}:${proposal.content.hashCode()}"
                 ).takeLast(240),
             lastAction = "${proposal.kind.wireName} ${proposal.path}".take(700),
@@ -614,7 +673,20 @@ object MissionProgressReducer {
         updatedAt: String,
     ): AgentMissionCheckpoint {
         require(current.status == AgentMissionStatus.Running) { "The long-form mission is not running." }
-        return current.copy(inferenceCycles = current.inferenceCycles + 1, updatedAt = updatedAt)
+        val ledger = AgentExecutionController.beginRun(
+            ledger = current.executionLedger ?: AgentExecutionController.initial(
+                missionId = current.id,
+                taskId = current.missionManifest?.currentTaskId.orEmpty(),
+                logicalStepsCompleted = current.logicalStepsCompleted,
+            ),
+            taskId = current.missionManifest?.currentTaskId.orEmpty(),
+            logicalStepsCompleted = current.logicalStepsCompleted,
+        )
+        return current.copy(
+            inferenceCycles = current.inferenceCycles + 1,
+            executionLedger = ledger,
+            updatedAt = updatedAt,
+        )
     }
 
     fun recordRecovery(
@@ -697,11 +769,22 @@ object MissionProgressReducer {
             tasks = nextTasks,
             currentTaskId = nextTask?.id.orEmpty(),
         )
+        val nextCompletedActions = current.completedActions + 1
+        val nextExecutionLedger = AgentExecutionController.afterCheckpoint(
+            ledger = current.executionLedger ?: AgentExecutionController.initial(
+                missionId = current.id,
+                taskId = manifest.currentTaskId,
+                logicalStepsCompleted = current.logicalStepsCompleted,
+            ),
+            nextTaskId = nextManifest.currentTaskId,
+            logicalStepsCompleted = nextCompletedActions,
+        )
         return current.copy(
             status = if (nextManifest.complete) AgentMissionStatus.Completed else AgentMissionStatus.Running,
-            completedActions = current.completedActions + 1,
+            completedActions = nextCompletedActions,
             toolOperationsAtLastCheckpoint = current.toolOperations,
             missionManifest = nextManifest,
+            executionLedger = nextExecutionLedger,
             recoveryTrail = emptyList(),
             lastVerifiedCheckpoint = proposal.summary,
             lastAction = "${proposal.kind.wireName} ${proposal.taskId}".take(700),

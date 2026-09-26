@@ -579,6 +579,10 @@ class MemoryMatrixRepository(private val context: Context) :
             planState = if (planKind == EvolutionForgeMissionKind) EvolutionStage.Inspect.name else "",
             evolutionState = evolutionState,
             missionManifest = missionManifest,
+            executionLedger = AgentExecutionController.initial(
+                missionId = checkpointId,
+                taskId = missionManifest?.currentTaskId.orEmpty(),
+            ),
             updatedAt = now(),
         )
         persistAgentMission(checkpoint)
@@ -711,6 +715,7 @@ class MemoryMatrixRepository(private val context: Context) :
         proposal: WorkspaceActionProposal,
         result: WorkspaceActionResult,
         succeeded: Boolean,
+        identity: AgentOperationIdentity? = null,
     ): AgentMissionCheckpoint {
         val current = activeAgentMission() ?: error("No long-form mission is active.")
         val next = MissionProgressReducer.recordToolOperation(
@@ -719,6 +724,7 @@ class MemoryMatrixRepository(private val context: Context) :
             result = result,
             succeeded = succeeded,
             updatedAt = now(),
+            identity = identity,
         )
         persistAgentMission(next)
         updateActiveSessionTask(next)
@@ -742,6 +748,48 @@ class MemoryMatrixRepository(private val context: Context) :
         val next = MissionProgressReducer.recordInferenceCycle(current, now())
         persistAgentMission(next)
         return next
+    }
+
+    @Synchronized
+    fun recordAgentMissionRunResult(identity: AgentRunIdentity): AgentMissionRunAdmission {
+        val current = activeAgentMission() ?: error("No long-form mission is active.")
+        val ledger = requireNotNull(current.executionLedger) {
+            "The active mission has no execution ledger."
+        }
+        val admission = AgentExecutionController.admitRunResult(ledger, identity)
+        val next = current.copy(executionLedger = admission.ledger, updatedAt = now())
+        persistAgentMission(next)
+        return AgentMissionRunAdmission(
+            mission = next,
+            accepted = admission.accepted,
+            stale = admission.stale,
+            duplicate = admission.duplicate,
+        )
+    }
+
+    @Synchronized
+    fun beginAgentMissionTransaction(
+        operationCount: Int,
+        explicitBundle: Boolean,
+    ): AgentMissionTransactionLease {
+        val current = activeAgentMission() ?: error("No long-form mission is active.")
+        val ledger = requireNotNull(current.executionLedger) {
+            "The active mission has no execution ledger."
+        }
+        val timestamp = now()
+        val lease = AgentExecutionController.beginTransaction(
+            ledger = ledger,
+            operationCount = operationCount,
+            explicitBundle = explicitBundle,
+            updatedAt = timestamp,
+        )
+        val next = current.copy(executionLedger = lease.ledger, updatedAt = timestamp)
+        persistAgentMission(next)
+        return AgentMissionTransactionLease(
+            mission = next,
+            transactionId = lease.transactionId,
+            operations = lease.operations,
+        )
     }
 
     @Synchronized

@@ -151,6 +151,7 @@ data class AgentMissionCheckpoint(
     val planState: String = "",
     val evolutionState: String = "",
     val missionManifest: MissionManifest? = null,
+    val executionLedger: AgentExecutionLedger? = null,
     val guidance: List<String> = emptyList(),
     val actionTrail: List<String> = emptyList(),
     val recoveryTrail: List<String> = emptyList(),
