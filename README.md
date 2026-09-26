@@ -215,14 +215,14 @@ idempotency marker, checkpoint, and exact stop. Every committed installment rema
 the Work Session transcript and in one `story.md`; the model never has to count to pass.
 This separates sustained generation and continuity from the harder multi-file coding gate.
 
-### Approval-gated scripts and dependency installation
+### Bounded execution grants and approval-gated expansion
 
 AniCloudAI does not embed an unrestricted shell. Its optional Termux bridge uses
 Termux's official `RUN_COMMAND` service and remains disabled until the user
 completes every boundary: install/visibility check, Android permission, explicit
 project root, and `/exec on`.
 
-The controller can prepare five typed requests:
+The controller can prepare six typed requests:
 
 | Request | Intended use |
 |---|---|
@@ -230,13 +230,19 @@ The controller can prepare five typed requests:
 | `run` | Execute one exact, inspectable project command. |
 | `test` | Run the project's selected validation command and return bounded evidence. |
 | `build` | Produce a project build after its command and working directory are reviewed. |
+| `lint` | Run a bounded project lint/static-analysis command and return terminal evidence. |
 | `install_dependencies` | Propose named packages after inspecting the relevant manifest or lockfile; network use must be declared separately. |
 
 Every request appears in Agents with the exact command, working directory,
 reason, timeout, declared dependencies, and network requirement. Nothing runs
-until **APPROVE & RUN** is pressed. Jobs run one at a time, can be stopped, and
-return bounded, sanitized stdout/stderr plus exit metadata to the durable ledger.
-Long Forge's file-write grant never implies command authority.
+until **APPROVE & RUN** is pressed unless the user has issued an active mission-scoped
+`/exec grant`; that grant accepts only fixed offline inspect/build/test/lint command
+prefixes with execution, wall-time, output, and expiry budgets. Network, dependency,
+destructive, chained, piped, and redirected proposals stay outside the grant. Jobs
+run one at a time, can be stopped, and return bounded, sanitized stdout/stderr plus
+exit metadata to the durable ledger. These are controller constraints, not an OS
+sandbox: trusted project code still executes with the Termux app's reach. Long
+Forge's file-write grant never implies command authority.
 
 ### What the Pixel 10 Pro dogfood work taught us
 
@@ -285,7 +291,7 @@ Long Forge's file-write grant never implies command authority.
 | Online web grounding inside AniCloudAI | **Not shipped** | Available in the established Termux cockpit only |
 | Kokoro/Resonance voice inside AniCloudAI | **Not shipped** | Existing optional bridge remains separate |
 | Live terminal streaming and in-process sandbox | **Not shipped** | Final command results are bounded; no unrestricted shell is claimed |
-| Unattended scheduling or silent background autonomy | **Not shipped** | Foreground, user-visible control remains mandatory |
+| Durable scheduler and process-loss reconciliation | **Implemented** | WorkManager persists typed wait/run states and can recover granted Termux dispatch; fully headless model inference is not claimed |
 
 ### What remains before a native public preview
 

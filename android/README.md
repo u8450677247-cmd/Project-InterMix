@@ -73,18 +73,23 @@ while preserving neutral long-form reading surfaces.
   folder, full continuity premise, and Quality mode before a separately explicit launch;
 - a decimal128 Numeric Matrix that computes arithmetic outside the language model
   and stores expression/result/engine provenance;
-- an optional developer-plugin Termux RUN_COMMAND bridge for typed inspect/run/test/build and
+- an optional developer-plugin Termux RUN_COMMAND bridge for typed inspect/run/test/build/lint and
   dependency-install plans, with exact command previews, declared packages and
-  network use, one-at-a-time dispatch, timeouts, bounded results, and STOP;
+  network use, one-at-a-time dispatch, timeouts, bounded results, STOP, and
+  user-issued mission grants for a fixed offline command allowlist;
+- a durable WorkManager reconciliation loop with typed runnable, resource-wait,
+  authority-wait, execution-wait, reconciliation, paused, and terminal states;
 - a real Agents approval queue plus pin/forget controls in the Matrix surface;
 - custom destination icons that preserve the cyan-purple cockpit language;
 - actual Android `MemAvailable` and categorical thermal-pressure signals; and
 - thermal-aware visual motion and model initialization.
 
 The app still has no online grounding, Android provider vault, Kokoro voice,
-in-process code sandbox, live terminal streaming, or unattended scheduler. Its
+in-process code sandbox, live terminal streaming, or fully headless model-inference service. Its
 execution lane is an explicit external Termux boundary, not unrestricted shell
-access. E2B has a
+access. WorkManager can durably reconcile state and recover a stranded granted
+Termux dispatch after process loss; model inference resumes when the live native
+controller is available. E2B has a
 fingerprint-locked Tensor G5 import and NPU route, but remains device-evidence
 gated rather than a general fallback. The dispatcher is extracted into Android's
 native-library directory, and E4B is released before the final NPU memory gate.
@@ -142,8 +147,11 @@ Workspace (often beneath `$HOME/storage/shared`) and enable the bridge:
 ```
 
 Sovereign Core can then inspect project manifests and propose a run, test,
-build, or dependency action. Every proposal remains inert until **APPROVE & RUN**
-is tapped in Agents. Dependency proposals must list packages and declare network
+build, lint, or dependency action. By default every proposal remains inert until
+**APPROVE & RUN** is tapped in Agents. During an active bounded mission, `/exec grant`
+can explicitly authorize only the displayed offline inspect/build/test/lint allowlist;
+`/exec grant revoke` closes that authority and denies queued work. Dependency proposals
+always remain separately approved, must list packages, and must declare network
 use. Results return to the originating conversation/Work Session only after the
 process exits; stdout and stderr are sanitized, marked untrusted, and retained
 with 32 KiB controller ceilings. This bridge never opens the Termux Matrix
