@@ -37,6 +37,17 @@ private data class MissionTransactionOutcome(
     val results: List<Pair<WorkspaceActionProposal, WorkspaceActionResult>>,
 )
 
+private data class PreparedGeneration(
+    val userMessage: ChatMessage,
+    val continuityCapture: ContinuityCaptureResult,
+    val mission: AgentMissionCheckpoint?,
+    val effectivePrompt: String,
+    val effectiveMode: AnswerMode,
+    val requestedRoute: AdaptiveModelRoute,
+    val explicitProfileAdjustments: List<ProfileAdjustment>,
+    val explicitProfileResult: ProfileUpdateResult,
+)
+
 private class MissionTransactionFailure(
     val failedProposal: WorkspaceActionProposal,
     val completedResults: List<Pair<WorkspaceActionProposal, WorkspaceActionResult>>,
@@ -280,377 +291,25 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
         }
         val serial = ++generationSerial
         generationJob = viewModelScope.launch {
-            val parsedSessionCommand = parseSessionTransitionCommand(prompt)
-            val parsedMissionCommand = parseMissionCommand(prompt)
-            val userMessage = commitMessage(
-                if (controllerInitiated) ChatSpeaker.System else ChatSpeaker.User,
-                if (controllerInitiated) {
-                    "[AUTONOMOUS RECOVERY] Android resumed the active mission from its durable checkpoint."
-                } else {
-                    prompt
-                },
-                source = when {
-                    controllerInitiated -> "mission-recovery"
-                    parsedSessionCommand != null -> "controller"
-                    parsedMissionCommand != null -> "mission"
-                    else -> "chat"
-                },
+            val prepared = prepareGeneration(
+                prompt = prompt,
+                mode = mode,
+                controllerInitiated = controllerInitiated,
+                serial = serial,
             )
-            if (serial != generationSerial) return@launch
-            val continuityCapture = if (parsedSessionCommand == null && !controllerInitiated) {
-                withContext(Dispatchers.IO) {
-                    runCatching {
-                        memoryMatrix.captureExplicitContinuity(prompt, userMessage.id)
-                    }.getOrDefault(ContinuityCaptureResult())
-                }
-            } else {
-                ContinuityCaptureResult()
-            }
-
-            if (parsedSessionCommand != null) {
-                handleSessionTransition(parsedSessionCommand, serial)
-                generationJob = null
+            if (prepared == null) {
+                if (serial == generationSerial) generationJob = null
                 return@launch
             }
-
-            var mission: AgentMissionCheckpoint? = null
-            var effectivePrompt = prompt
-            var effectiveMode = mode
-            when (val command = parsedMissionCommand) {
-                is MissionCommand.Run -> {
-                    val started = runCatching {
-                        withContext(Dispatchers.IO) {
-                            memoryMatrix.startAgentMission(
-                                command.rootPath,
-                                command.objective,
-                                mode,
-                                startedMessageId = userMessage.id,
-                            )
-                        }
-                    }.getOrElse { failure ->
-                        completeControllerResponse("[BLOCKED] ${safeFailure(failure)}")
-                        generationJob = null
-                        return@launch
-                    }
-                    val prepared = runCatching {
-                        workspaceRepository.prepareWorkspaceMission(started.rootPath)
-                    }.getOrElse { failure ->
-                        withContext(Dispatchers.IO) {
-                            memoryMatrix.setAgentMissionStatus(
-                                AgentMissionStatus.Failed,
-                                "Work Session setup failed safely: ${safeFailure(failure)}",
-                            )
-                        }
-                        completeControllerResponse(
-                            "[BLOCKED] Work Session setup stopped safely: ${safeFailure(failure)}",
-                        )
-                        generationJob = null
-                        return@launch
-                    }
-                    withContext(Dispatchers.IO) {
-                        memoryMatrix.recordProjectEvent(
-                            "prepare_workspace_mission",
-                            started.rootPath,
-                            prepared,
-                        )
-                    }
-                    mission = started
-                    effectivePrompt = started.objective
-                    effectiveMode = started.mode
-                    refreshRuntimeState()
-                }
-
-                is MissionCommand.Evolve -> {
-                    val started = runCatching {
-                        withContext(Dispatchers.IO) {
-                            memoryMatrix.startAgentMission(
-                                rootPath = command.rootPath,
-                                objective = command.objective,
-                                mode = mode,
-                                startedMessageId = userMessage.id,
-                                planKind = EvolutionForgeMissionKind,
-                                activeBranch = "device-workspace",
-                            )
-                        }
-                    }.getOrElse { failure ->
-                        completeControllerResponse("[BLOCKED] ${safeFailure(failure)}")
-                        generationJob = null
-                        return@launch
-                    }
-                    val prepared = runCatching {
-                        workspaceRepository.prepareWorkspaceMission(started.rootPath)
-                    }.getOrElse { failure ->
-                        withContext(Dispatchers.IO) {
-                            memoryMatrix.setAgentMissionStatus(
-                                AgentMissionStatus.Failed,
-                                "Evolution Forge setup failed safely: ${safeFailure(failure)}",
-                            )
-                        }
-                        completeControllerResponse(
-                            "[BLOCKED] Evolution Forge setup stopped safely: ${safeFailure(failure)}",
-                        )
-                        generationJob = null
-                        return@launch
-                    }
-                    withContext(Dispatchers.IO) {
-                        memoryMatrix.recordProjectEvent(
-                            "prepare_evolution_forge",
-                            started.rootPath,
-                            prepared,
-                        )
-                    }
-                    mission = started
-                    effectivePrompt = started.objective
-                    effectiveMode = started.mode
-                    refreshRuntimeState()
-                }
-
-                is MissionCommand.Story -> {
-                    val started = runCatching {
-                        withContext(Dispatchers.IO) {
-                            memoryMatrix.startAgentMission(
-                                rootPath = command.rootPath,
-                                objective = command.premise,
-                                mode = mode,
-                                startedMessageId = userMessage.id,
-                                maxActions = StoryForgeTargetChapters,
-                                maxWriteBytes = 2L * 1024L * 1024L,
-                                planKind = StoryForgeMissionKind,
-                            )
-                        }
-                    }.getOrElse { failure ->
-                        completeControllerResponse("[BLOCKED] ${safeFailure(failure)}")
-                        generationJob = null
-                        return@launch
-                    }
-                    val prepared = runCatching {
-                        workspaceRepository.prepareStoryForge(started.rootPath, started.objective)
-                    }.getOrElse { failure ->
-                        withContext(Dispatchers.IO) {
-                            memoryMatrix.setAgentMissionStatus(
-                                AgentMissionStatus.Failed,
-                                "Story Forge setup failed safely: ${safeFailure(failure)}",
-                            )
-                        }
-                        completeControllerResponse("[BLOCKED] Story Forge setup stopped safely: ${safeFailure(failure)}")
-                        generationJob = null
-                        return@launch
-                    }
-                    withContext(Dispatchers.IO) {
-                        memoryMatrix.recordProjectEvent(
-                            "prepare_story_forge",
-                            "${started.rootPath}/story.md",
-                            prepared,
-                        )
-                    }
-                    mission = started
-                    effectivePrompt = started.objective
-                    effectiveMode = started.mode
-                    refreshRuntimeState()
-                }
-
-                MissionCommand.Resume -> {
-                    val resumed = runCatching {
-                        withContext(Dispatchers.IO) { memoryMatrix.resumeAgentMission() }
-                    }.getOrElse { failure ->
-                        completeControllerResponse("[BLOCKED] ${safeFailure(failure)}")
-                        generationJob = null
-                        return@launch
-                    }
-                    mission = resumed
-                    if (resumed.planKind == StoryForgeMissionKind) {
-                        val preparation = runCatching {
-                            workspaceRepository.prepareStoryForge(
-                                resumed.rootPath,
-                                resumed.objective,
-                                allowCommittedChapters = true,
-                            )
-                        }.getOrElse { failure ->
-                            withContext(Dispatchers.IO) {
-                                memoryMatrix.setAgentMissionStatus(
-                                    AgentMissionStatus.Paused,
-                                    "Story Forge recovery stopped safely: ${safeFailure(failure)}",
-                                )
-                            }
-                            completeControllerResponse(
-                                "[BLOCKED] Story Forge recovery stopped safely: ${safeFailure(failure)}",
-                            )
-                            generationJob = null
-                            return@launch
-                        }
-                        withContext(Dispatchers.IO) {
-                            memoryMatrix.recordProjectEvent(
-                                "recover_story_forge",
-                                "${resumed.rootPath}/story.md",
-                                preparation,
-                            )
-                        }
-                    } else {
-                        val preparation = runCatching {
-                            workspaceRepository.prepareWorkspaceMission(resumed.rootPath)
-                        }.getOrElse { failure ->
-                            withContext(Dispatchers.IO) {
-                                memoryMatrix.setAgentMissionStatus(
-                                    AgentMissionStatus.Paused,
-                                    "Work Session recovery stopped safely: ${safeFailure(failure)}",
-                                )
-                            }
-                            completeControllerResponse(
-                                "[BLOCKED] Work Session recovery stopped safely: ${safeFailure(failure)}",
-                            )
-                            generationJob = null
-                            return@launch
-                        }
-                        withContext(Dispatchers.IO) {
-                            memoryMatrix.recordProjectEvent(
-                                "recover_workspace_mission",
-                                resumed.rootPath,
-                                preparation,
-                            )
-                        }
-                    }
-                    effectivePrompt = "Resume ${resumed.id} from its controller-owned checkpoint. " +
-                        "Verify the last result and continue until complete or genuinely blocked."
-                    effectiveMode = resumed.mode
-                    refreshRuntimeState()
-                }
-
-                is MissionCommand.Guide -> {
-                    val guided = runCatching {
-                        withContext(Dispatchers.IO) {
-                            memoryMatrix.guideAgentMission(command.instruction)
-                        }
-                    }.getOrElse { failure ->
-                        completeControllerResponse("[BLOCKED] ${safeFailure(failure)}")
-                        generationJob = null
-                        return@launch
-                    }
-                    val continued = if (
-                        guided.planKind == EvolutionForgeMissionKind &&
-                        guided.status == AgentMissionStatus.Paused
-                    ) {
-                        runCatching {
-                            withContext(Dispatchers.IO) { memoryMatrix.resumeAgentMission() }
-                        }.getOrElse { failure ->
-                            completeControllerResponse(
-                                "[PAUSED] Guidance was saved for ${guided.id}. ${safeFailure(failure)}",
-                            )
-                            generationJob = null
-                            return@launch
-                        }
-                    } else {
-                        guided
-                    }
-                    mission = continued
-                    effectivePrompt = "Apply this user guidance without losing ${continued.id}: " +
-                        "${command.instruction}\nThen continue the durable mission until complete or genuinely blocked."
-                    effectiveMode = continued.mode
-                    refreshRuntimeState()
-                }
-
-                MissionCommand.Status -> {
-                    completeControllerResponse(agentMissionReport(memoryMatrix.activeAgentMission()))
-                    generationJob = null
-                    return@launch
-                }
-
-                MissionCommand.Pause -> {
-                    val paused = withContext(Dispatchers.IO) {
-                        memoryMatrix.setAgentMissionStatus(
-                            AgentMissionStatus.Paused,
-                            "Paused explicitly by the user.",
-                        )
-                    }
-                    completeControllerResponse(agentMissionReport(paused))
-                    generationJob = null
-                    return@launch
-                }
-
-                MissionCommand.Cancel -> {
-                    val cancelled = withContext(Dispatchers.IO) {
-                        memoryMatrix.setAgentMissionStatus(
-                            AgentMissionStatus.Cancelled,
-                            "Cancelled explicitly by the user. Existing files were retained.",
-                        )
-                    }
-                    completeControllerResponse(agentMissionReport(cancelled))
-                    generationJob = null
-                    return@launch
-                }
-
-                is MissionCommand.Invalid -> {
-                    completeControllerResponse("[BLOCKED] ${command.detail}\n\n${missionUsage()}")
-                    generationJob = null
-                    return@launch
-                }
-
-                null -> Unit
-            }
-
-            if (handleLocalCommand(effectivePrompt, userMessage.id, serial)) {
-                generationJob = null
-                return@launch
-            }
-
-            val resonanceCues = ResonanceCueDetector.detect(effectivePrompt)
-            val resonanceChanged = withContext(Dispatchers.IO) {
-                var changed = false
-                resonanceCues.feedback.forEach { action ->
-                    changed = memoryMatrix.applyResonanceFeedback(
-                        action = action,
-                        sourceMessageId = userMessage.id,
-                    ).changed || changed
-                }
-                if (resonanceCues.sessionModes.isNotEmpty()) {
-                    val currentModes = memoryMatrix.resonanceSnapshot().sessionModes
-                    changed = memoryMatrix.setResonanceSessionModes(
-                        currentModes + resonanceCues.sessionModes,
-                        sourceMessageId = userMessage.id,
-                    ).changed || changed
-                }
-                changed
-            }
-            if (resonanceChanged) refreshRuntimeState()
-
-            val requestedRoute = selectRoute(effectiveMode, effectivePrompt) ?: run {
-                _state.update {
-                    it.copy(
-                        stage = ModelStage.Error,
-                        detail = "No usable model route. Import E4B, or the exact Tensor G5 E2B package.",
-                    )
-                }
-                generationJob = null
-                return@launch
-            }
+            val userMessage = prepared.userMessage
+            val continuityCapture = prepared.continuityCapture
+            var mission = prepared.mission
+            val effectivePrompt = prepared.effectivePrompt
+            val effectiveMode = prepared.effectiveMode
+            val requestedRoute = prepared.requestedRoute
             val route = requestedRoute.label
-            _state.update {
-                it.copy(
-                    stage = ModelStage.Generating,
-                    detail = "$route · assembling verified context",
-                    routeLabel = route,
-                    routeReason = requestedRoute.reason,
-                    streamText = "",
-                )
-            }
-
-            val explicitProfileAdjustments = InteractionProfilePolicy.detectExplicitAdjustments(effectivePrompt)
-            val explicitProfileResult = withContext(Dispatchers.IO) {
-                memoryMatrix.applyExplicitProfileAdjustments(
-                    explicitProfileAdjustments,
-                    userMessage.id,
-                )
-            }
-            if (explicitProfileResult.changed) refreshRuntimeState()
-
-            runCatching {
-                InferenceForegroundService.begin(getApplication()) {
-                    stopGeneration("Stopped from the Android generation notification.")
-                }
-            }.onFailure { failure ->
-                _state.update {
-                    it.copy(detail = "$route · foreground notice unavailable: ${safeFailure(failure)}")
-                }
-            }
+            val explicitProfileAdjustments = prepared.explicitProfileAdjustments
+            val explicitProfileResult = prepared.explicitProfileResult
 
             val startedAt = SystemClock.elapsedRealtime()
             try {
@@ -1864,6 +1523,378 @@ class SovereignViewModel(application: Application) : AndroidViewModel(applicatio
                 }
             }
         }
+    }
+
+    private suspend fun prepareGeneration(
+        prompt: String,
+        mode: AnswerMode,
+        controllerInitiated: Boolean,
+        serial: Long,
+    ): PreparedGeneration? {
+        val parsedSessionCommand = parseSessionTransitionCommand(prompt)
+        val parsedMissionCommand = parseMissionCommand(prompt)
+        val userMessage = commitMessage(
+            if (controllerInitiated) ChatSpeaker.System else ChatSpeaker.User,
+            if (controllerInitiated) {
+                "[AUTONOMOUS RECOVERY] Android resumed the active mission from its durable checkpoint."
+            } else {
+                prompt
+            },
+            source = when {
+                controllerInitiated -> "mission-recovery"
+                parsedSessionCommand != null -> "controller"
+                parsedMissionCommand != null -> "mission"
+                else -> "chat"
+            },
+        )
+        if (serial != generationSerial) return null
+        val continuityCapture = if (parsedSessionCommand == null && !controllerInitiated) {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    memoryMatrix.captureExplicitContinuity(prompt, userMessage.id)
+                }.getOrDefault(ContinuityCaptureResult())
+            }
+        } else {
+            ContinuityCaptureResult()
+        }
+
+        if (parsedSessionCommand != null) {
+            handleSessionTransition(parsedSessionCommand, serial)
+            return null
+        }
+
+        var mission: AgentMissionCheckpoint? = null
+        var effectivePrompt = prompt
+        var effectiveMode = mode
+        when (val command = parsedMissionCommand) {
+            is MissionCommand.Run -> {
+                val started = runCatching {
+                    withContext(Dispatchers.IO) {
+                        memoryMatrix.startAgentMission(
+                            command.rootPath,
+                            command.objective,
+                            mode,
+                            startedMessageId = userMessage.id,
+                        )
+                    }
+                }.getOrElse { failure ->
+                    completeControllerResponse("[BLOCKED] ${safeFailure(failure)}")
+                    return null
+                }
+                val prepared = runCatching {
+                    workspaceRepository.prepareWorkspaceMission(started.rootPath)
+                }.getOrElse { failure ->
+                    withContext(Dispatchers.IO) {
+                        memoryMatrix.setAgentMissionStatus(
+                            AgentMissionStatus.Failed,
+                            "Work Session setup failed safely: ${safeFailure(failure)}",
+                        )
+                    }
+                    completeControllerResponse(
+                        "[BLOCKED] Work Session setup stopped safely: ${safeFailure(failure)}",
+                    )
+                    return null
+                }
+                withContext(Dispatchers.IO) {
+                    memoryMatrix.recordProjectEvent(
+                        "prepare_workspace_mission",
+                        started.rootPath,
+                        prepared,
+                    )
+                }
+                mission = started
+                effectivePrompt = started.objective
+                effectiveMode = started.mode
+                refreshRuntimeState()
+            }
+
+            is MissionCommand.Evolve -> {
+                val started = runCatching {
+                    withContext(Dispatchers.IO) {
+                        memoryMatrix.startAgentMission(
+                            rootPath = command.rootPath,
+                            objective = command.objective,
+                            mode = mode,
+                            startedMessageId = userMessage.id,
+                            planKind = EvolutionForgeMissionKind,
+                            activeBranch = "device-workspace",
+                        )
+                    }
+                }.getOrElse { failure ->
+                    completeControllerResponse("[BLOCKED] ${safeFailure(failure)}")
+                    return null
+                }
+                val prepared = runCatching {
+                    workspaceRepository.prepareWorkspaceMission(started.rootPath)
+                }.getOrElse { failure ->
+                    withContext(Dispatchers.IO) {
+                        memoryMatrix.setAgentMissionStatus(
+                            AgentMissionStatus.Failed,
+                            "Evolution Forge setup failed safely: ${safeFailure(failure)}",
+                        )
+                    }
+                    completeControllerResponse(
+                        "[BLOCKED] Evolution Forge setup stopped safely: ${safeFailure(failure)}",
+                    )
+                    return null
+                }
+                withContext(Dispatchers.IO) {
+                    memoryMatrix.recordProjectEvent(
+                        "prepare_evolution_forge",
+                        started.rootPath,
+                        prepared,
+                    )
+                }
+                mission = started
+                effectivePrompt = started.objective
+                effectiveMode = started.mode
+                refreshRuntimeState()
+            }
+
+            is MissionCommand.Story -> {
+                val started = runCatching {
+                    withContext(Dispatchers.IO) {
+                        memoryMatrix.startAgentMission(
+                            rootPath = command.rootPath,
+                            objective = command.premise,
+                            mode = mode,
+                            startedMessageId = userMessage.id,
+                            maxActions = StoryForgeTargetChapters,
+                            maxWriteBytes = 2L * 1024L * 1024L,
+                            planKind = StoryForgeMissionKind,
+                        )
+                    }
+                }.getOrElse { failure ->
+                    completeControllerResponse("[BLOCKED] ${safeFailure(failure)}")
+                    return null
+                }
+                val prepared = runCatching {
+                    workspaceRepository.prepareStoryForge(started.rootPath, started.objective)
+                }.getOrElse { failure ->
+                    withContext(Dispatchers.IO) {
+                        memoryMatrix.setAgentMissionStatus(
+                            AgentMissionStatus.Failed,
+                            "Story Forge setup failed safely: ${safeFailure(failure)}",
+                        )
+                    }
+                    completeControllerResponse("[BLOCKED] Story Forge setup stopped safely: ${safeFailure(failure)}")
+                    return null
+                }
+                withContext(Dispatchers.IO) {
+                    memoryMatrix.recordProjectEvent(
+                        "prepare_story_forge",
+                        "${started.rootPath}/story.md",
+                        prepared,
+                    )
+                }
+                mission = started
+                effectivePrompt = started.objective
+                effectiveMode = started.mode
+                refreshRuntimeState()
+            }
+
+            MissionCommand.Resume -> {
+                val resumed = runCatching {
+                    withContext(Dispatchers.IO) { memoryMatrix.resumeAgentMission() }
+                }.getOrElse { failure ->
+                    completeControllerResponse("[BLOCKED] ${safeFailure(failure)}")
+                    return null
+                }
+                mission = resumed
+                if (resumed.planKind == StoryForgeMissionKind) {
+                    val preparation = runCatching {
+                        workspaceRepository.prepareStoryForge(
+                            resumed.rootPath,
+                            resumed.objective,
+                            allowCommittedChapters = true,
+                        )
+                    }.getOrElse { failure ->
+                        withContext(Dispatchers.IO) {
+                            memoryMatrix.setAgentMissionStatus(
+                                AgentMissionStatus.Paused,
+                                "Story Forge recovery stopped safely: ${safeFailure(failure)}",
+                            )
+                        }
+                        completeControllerResponse(
+                            "[BLOCKED] Story Forge recovery stopped safely: ${safeFailure(failure)}",
+                        )
+                        return null
+                    }
+                    withContext(Dispatchers.IO) {
+                        memoryMatrix.recordProjectEvent(
+                            "recover_story_forge",
+                            "${resumed.rootPath}/story.md",
+                            preparation,
+                        )
+                    }
+                } else {
+                    val preparation = runCatching {
+                        workspaceRepository.prepareWorkspaceMission(resumed.rootPath)
+                    }.getOrElse { failure ->
+                        withContext(Dispatchers.IO) {
+                            memoryMatrix.setAgentMissionStatus(
+                                AgentMissionStatus.Paused,
+                                "Work Session recovery stopped safely: ${safeFailure(failure)}",
+                            )
+                        }
+                        completeControllerResponse(
+                            "[BLOCKED] Work Session recovery stopped safely: ${safeFailure(failure)}",
+                        )
+                        return null
+                    }
+                    withContext(Dispatchers.IO) {
+                        memoryMatrix.recordProjectEvent(
+                            "recover_workspace_mission",
+                            resumed.rootPath,
+                            preparation,
+                        )
+                    }
+                }
+                effectivePrompt = "Resume ${resumed.id} from its controller-owned checkpoint. " +
+                    "Verify the last result and continue until complete or genuinely blocked."
+                effectiveMode = resumed.mode
+                refreshRuntimeState()
+            }
+
+            is MissionCommand.Guide -> {
+                val guided = runCatching {
+                    withContext(Dispatchers.IO) {
+                        memoryMatrix.guideAgentMission(command.instruction)
+                    }
+                }.getOrElse { failure ->
+                    completeControllerResponse("[BLOCKED] ${safeFailure(failure)}")
+                    return null
+                }
+                val continued = if (
+                    guided.planKind == EvolutionForgeMissionKind &&
+                    guided.status == AgentMissionStatus.Paused
+                ) {
+                    runCatching {
+                        withContext(Dispatchers.IO) { memoryMatrix.resumeAgentMission() }
+                    }.getOrElse { failure ->
+                        completeControllerResponse(
+                            "[PAUSED] Guidance was saved for ${guided.id}. ${safeFailure(failure)}",
+                        )
+                        return null
+                    }
+                } else {
+                    guided
+                }
+                mission = continued
+                effectivePrompt = "Apply this user guidance without losing ${continued.id}: " +
+                    "${command.instruction}\nThen continue the durable mission until complete or genuinely blocked."
+                effectiveMode = continued.mode
+                refreshRuntimeState()
+            }
+
+            MissionCommand.Status -> {
+                completeControllerResponse(agentMissionReport(memoryMatrix.activeAgentMission()))
+                return null
+            }
+
+            MissionCommand.Pause -> {
+                val paused = withContext(Dispatchers.IO) {
+                    memoryMatrix.setAgentMissionStatus(
+                        AgentMissionStatus.Paused,
+                        "Paused explicitly by the user.",
+                    )
+                }
+                completeControllerResponse(agentMissionReport(paused))
+                return null
+            }
+
+            MissionCommand.Cancel -> {
+                val cancelled = withContext(Dispatchers.IO) {
+                    memoryMatrix.setAgentMissionStatus(
+                        AgentMissionStatus.Cancelled,
+                        "Cancelled explicitly by the user. Existing files were retained.",
+                    )
+                }
+                completeControllerResponse(agentMissionReport(cancelled))
+                return null
+            }
+
+            is MissionCommand.Invalid -> {
+                completeControllerResponse("[BLOCKED] ${command.detail}\n\n${missionUsage()}")
+                return null
+            }
+
+            null -> Unit
+        }
+
+        if (handleLocalCommand(effectivePrompt, userMessage.id, serial)) {
+            return null
+        }
+
+        val resonanceCues = ResonanceCueDetector.detect(effectivePrompt)
+        val resonanceChanged = withContext(Dispatchers.IO) {
+            var changed = false
+            resonanceCues.feedback.forEach { action ->
+                changed = memoryMatrix.applyResonanceFeedback(
+                    action = action,
+                    sourceMessageId = userMessage.id,
+                ).changed || changed
+            }
+            if (resonanceCues.sessionModes.isNotEmpty()) {
+                val currentModes = memoryMatrix.resonanceSnapshot().sessionModes
+                changed = memoryMatrix.setResonanceSessionModes(
+                    currentModes + resonanceCues.sessionModes,
+                    sourceMessageId = userMessage.id,
+                ).changed || changed
+            }
+            changed
+        }
+        if (resonanceChanged) refreshRuntimeState()
+
+        val requestedRoute = selectRoute(effectiveMode, effectivePrompt) ?: run {
+            _state.update {
+                it.copy(
+                    stage = ModelStage.Error,
+                    detail = "No usable model route. Import E4B, or the exact Tensor G5 E2B package.",
+                )
+            }
+            return null
+        }
+        val route = requestedRoute.label
+        _state.update {
+            it.copy(
+                stage = ModelStage.Generating,
+                detail = "$route · assembling verified context",
+                routeLabel = route,
+                routeReason = requestedRoute.reason,
+                streamText = "",
+            )
+        }
+
+        val explicitProfileAdjustments = InteractionProfilePolicy.detectExplicitAdjustments(effectivePrompt)
+        val explicitProfileResult = withContext(Dispatchers.IO) {
+            memoryMatrix.applyExplicitProfileAdjustments(
+                explicitProfileAdjustments,
+                userMessage.id,
+            )
+        }
+        if (explicitProfileResult.changed) refreshRuntimeState()
+
+        runCatching {
+            InferenceForegroundService.begin(getApplication()) {
+                stopGeneration("Stopped from the Android generation notification.")
+            }
+        }.onFailure { failure ->
+            _state.update {
+                it.copy(detail = "$route · foreground notice unavailable: ${safeFailure(failure)}")
+            }
+        }
+
+        return PreparedGeneration(
+            userMessage = userMessage,
+            continuityCapture = continuityCapture,
+            mission = mission,
+            effectivePrompt = effectivePrompt,
+            effectiveMode = effectiveMode,
+            requestedRoute = requestedRoute,
+            explicitProfileAdjustments = explicitProfileAdjustments,
+            explicitProfileResult = explicitProfileResult,
+        )
     }
 
     fun approveWorkspaceAction(id: Long) {

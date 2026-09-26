@@ -606,6 +606,14 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("recordAgentMissionToolOperation", view_model)
         self.assertIn("resumeRecoveredMissionIfReady", view_model)
         self.assertIn("controllerInitiated = true", view_model)
+        begin_send = view_model.split("private fun beginSend", 1)[1].split(
+            "private suspend fun prepareGeneration", 1
+        )[0]
+        self.assertIn("val prepared = prepareGeneration(", begin_send)
+        self.assertNotIn(
+            "val parsedMissionCommand = parseMissionCommand(prompt)", begin_send
+        )
+        self.assertIn("data class PreparedGeneration", view_model)
         self.assertNotIn("task.instructions.take(3_600)", view_model)
         self.assertNotIn("recordAgentMissionAction(", view_model)
         for prefix in "abcdefghijkl":
