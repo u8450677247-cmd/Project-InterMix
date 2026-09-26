@@ -1,6 +1,8 @@
 package dev.anicloud.sovereign.prototype
 
+import android.app.ActivityManager
 import android.content.Context
+import android.os.Build
 import android.os.PowerManager
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
@@ -11,9 +13,11 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 data class AgentRunWake(val missionId: String, val state: AgentRunState)
@@ -27,13 +31,18 @@ class AgentRunSchedulerWorker(
     parameters: WorkerParameters,
 ) : CoroutineWorker(appContext, parameters) {
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
-        runCatching {
+        try {
             MemoryMatrixRepository(applicationContext).use { repository ->
                 val mission = repository.activeAgentMission() ?: return@use
                 recoverGrantedExecution(repository, mission)
                 val modelRepository = ModelRepository(applicationContext)
-                val runtimeAvailable = modelRepository.installedModel(ModelRole.Reasoning) != null ||
-                    modelRepository.installedModel(ModelRole.Conversation) != null
+                val runtimeAvailable = AdaptiveRuntimePolicy.select(
+                    mode = mission.mode,
+                    prompt = mission.objective,
+                    conversationModel = modelRepository.installedModel(ModelRole.Conversation),
+                    reasoningModel = modelRepository.installedModel(ModelRole.Reasoning),
+                    facts = deviceRuntimeFacts(),
+                ) != null
                 val powerManager = applicationContext.getSystemService(PowerManager::class.java)
                 val schedule = repository.reconcileAgentRunSchedule(
                     runtimeAvailable = runtimeAvailable,
@@ -41,10 +50,28 @@ class AgentRunSchedulerWorker(
                     thermalAvailable = powerManager.currentThermalStatus < PowerManager.THERMAL_STATUS_SEVERE,
                 ) ?: return@use
                 AgentRunSchedulerEvents.wake.tryEmit(AgentRunWake(schedule.missionId, schedule.state))
+                AgentRunScheduler.scheduleNext(applicationContext, schedule)
             }
-        }.fold(
-            onSuccess = { Result.success() },
-            onFailure = { Result.retry() },
+            Result.success()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
+            Result.retry()
+        }
+    }
+
+    private fun deviceRuntimeFacts(): DeviceRuntimeFacts {
+        val activityManager = applicationContext.getSystemService(ActivityManager::class.java)
+        val memory = ActivityManager.MemoryInfo().also(activityManager::getMemoryInfo)
+        val dispatcher = File(
+            applicationContext.applicationInfo.nativeLibraryDir,
+            AdaptiveRuntimePolicy.GoogleTensorDispatcher,
+        )
+        return DeviceRuntimeFacts(
+            socModel = Build.SOC_MODEL.orEmpty(),
+            hardware = Build.HARDWARE.orEmpty(),
+            dispatcherAvailable = dispatcher.isFile && dispatcher.length() > 0L,
+            availableMemoryBytes = memory.availMem,
         )
     }
 
@@ -88,6 +115,7 @@ class AgentRunSchedulerWorker(
 object AgentRunScheduler {
     private const val PeriodicWork = "anicloud-agent-reconcile-v1"
     private const val ImmediateWork = "anicloud-agent-kick-v1"
+    private const val DelayedWork = "anicloud-agent-delayed-v1"
 
     private fun constraints(): Constraints = Constraints.Builder()
         .setRequiresBatteryNotLow(true)
@@ -114,6 +142,32 @@ object AgentRunScheduler {
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(
             ImmediateWork,
+            ExistingWorkPolicy.REPLACE,
+            request,
+        )
+    }
+
+    fun scheduleNext(context: Context, schedule: AgentRunSchedule) {
+        val delayMillis = schedule.nextRunAtEpochMillis - System.currentTimeMillis()
+        if (delayMillis <= 0L || schedule.state in setOf(
+                AgentRunState.Runnable,
+                AgentRunState.Reconciling,
+                AgentRunState.WaitingAuthority,
+                AgentRunState.Paused,
+                AgentRunState.Completed,
+                AgentRunState.Failed,
+            )
+        ) {
+            WorkManager.getInstance(context).cancelUniqueWork(DelayedWork)
+            return
+        }
+        val request = OneTimeWorkRequestBuilder<AgentRunSchedulerWorker>()
+            .setInitialDelay(delayMillis, TimeUnit.MILLISECONDS)
+            .setConstraints(constraints())
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+            .build()
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            DelayedWork,
             ExistingWorkPolicy.REPLACE,
             request,
         )

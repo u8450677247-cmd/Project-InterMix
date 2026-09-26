@@ -476,6 +476,8 @@ class AndroidFoundationTests(unittest.TestCase):
         self.assertIn("setRequiresBatteryNotLow(true)", worker)
         self.assertIn("setRequiresStorageNotLow(true)", worker)
         self.assertIn("recoverGrantedExecution", worker)
+        self.assertIn("fun scheduleNext", worker)
+        self.assertIn("setInitialDelay(delayMillis", worker)
         self.assertIn("AgentRunScheduler.schedule(this)", application)
 
     def test_work_session_is_one_scoped_grant_with_controller_owned_path_recovery(self):
