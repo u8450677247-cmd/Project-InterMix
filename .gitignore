@@ -66,6 +66,10 @@ android/.gradle/
 android/.kotlin/
 android/local.properties
 android/**/build/
+anytime/.gradle/
+anytime/.kotlin/
+anytime/local.properties
+anytime/**/build/
 *.apk
 *.aab
 *.jks

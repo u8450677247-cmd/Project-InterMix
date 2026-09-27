@@ -1,5 +1,9 @@
 # Threshold calendar product contract
 
+> Historical foundation. The active product is **Anytime**, implemented in
+> [`anytime/`](../anytime/README.md). This v0.1 contract remains for lineage;
+> the executable implementation and its documented limits are authoritative.
+
 Status: foundation proposal, version 0.1. Threshold is a standalone, local-first
 Android calendar and lifecycle companion designed to interoperate with AniCloudAI
 without sharing a live database or silently granting its model authority.
