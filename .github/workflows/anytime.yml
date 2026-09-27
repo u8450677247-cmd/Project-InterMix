@@ -1,0 +1,50 @@
+name: anytime-android
+
+on:
+  push:
+    branches: ["feature/anytime-*"]
+    paths: ["anytime/**", ".github/workflows/anytime.yml"]
+  pull_request:
+    paths: ["anytime/**", ".github/workflows/anytime.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: anytime-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "9.4.1"
+      - name: Install Android API 36
+        shell: bash
+        run: |
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          sdkmanager_dir="$sdk_root/cmdline-tools/latest/bin"
+          test -x "$sdkmanager_dir/sdkmanager"
+          echo "$sdkmanager_dir" >> "$GITHUB_PATH"
+          yes 2>/dev/null | "$sdkmanager_dir/sdkmanager" --licenses >/dev/null
+          "$sdkmanager_dir/sdkmanager" "platforms;android-36" "build-tools;36.0.0"
+      - name: Public source audit
+        run: python tools/public_release_audit.py .
+      - name: Domain, Android unit tests and debug APK
+        run: gradle -p anytime :calendar-domain:test :app:testDebugUnitTest :app:assembleDebug --no-daemon --stacktrace
+      - name: Retain installable Anytime APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: Anytime-standalone-debug
+          path: anytime/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
