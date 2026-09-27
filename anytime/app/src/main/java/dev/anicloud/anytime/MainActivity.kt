@@ -111,7 +111,8 @@ private fun AnytimeApp(store: AnytimeStore) {
         } catch (e: Exception) { error = e.message ?: "Export failed" }
     }
 
-    BoxWithConstraints(Modifier.fillMaxSize().background(Ink)) {
+    val background = if (store.flag("oled", true)) Ink else Color(0xFF0A0812)
+    BoxWithConstraints(Modifier.fillMaxSize().background(background)) {
         val wide = maxWidth >= 980.dp
         val medium = maxWidth >= 670.dp
         val content: @Composable () -> Unit = {
@@ -663,7 +664,9 @@ private fun SettingsPage(store: AnytimeStore, update: (() -> Unit) -> Unit, expo
             OutlinedTextField(presentLat, { presentLat = it }, label = { Text("Present latitude") })
             Button(onClick = {
                 try {
-                    require(listOf(originLat, presentLat).all { it.isBlank() || (it.toDoubleOrNull() in -90.0..90.0) }) {
+                    require(listOf(originLat, presentLat).all { raw ->
+                        raw.isBlank() || raw.toDoubleOrNull()?.let { it in -90.0..90.0 } == true
+                    }) {
                         "Latitude must be between −90 and 90"
                     }
                     update { store.set("originLatitude", originLat.trim()); store.set("presentLatitude", presentLat.trim()) }
