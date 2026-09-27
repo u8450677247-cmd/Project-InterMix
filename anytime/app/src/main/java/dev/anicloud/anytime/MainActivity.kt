@@ -87,7 +87,7 @@ private fun AnytimeApp(store: AnytimeStore) {
     var page by remember { mutableStateOf("Today") }
     var revision by remember { mutableIntStateOf(0) }
     var moment by remember { mutableStateOf(Instant.now()) }
-    var selected by remember { mutableStateOf(LocalDate.now()) }
+    var selected by remember { mutableStateOf(store.calendar().fromInstant(Instant.now()).civilDate()) }
     var onboarding by remember { mutableStateOf(!store.flag("onboarded")) }
     var error by remember { mutableStateOf("") }
     var pendingImport by remember { mutableStateOf<Pair<String, AnytimeStore.ImportPreview>?>(null) }
@@ -171,7 +171,8 @@ private fun AnytimeApp(store: AnytimeStore) {
                 "Events" -> EventsPage(store, calendar, events, selected, notificationAllowed,
                     { if (Build.VERSION.SDK_INT >= 33) requestNotifications.launch(Manifest.permission.POST_NOTIFICATIONS) },
                     { update(it) })
-                "Cycles" -> CyclesPage(store, cycles, selected, { update(it) })
+                "Cycles" -> CyclesPage(store, cycles, moment.atZone(ZoneId.systemDefault()).toLocalDate(),
+                    { update(it) })
                 "Journal" -> JournalPage(store, calendar, entries, { update(it) })
                 else -> SettingsPage(store, { update(it) }, { export.launch("Anytime-export.json") },
                     { importDocument.launch(arrayOf("application/json", "text/plain")) })
