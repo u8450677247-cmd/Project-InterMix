@@ -38,10 +38,13 @@ estimates, not local horizon observations.
 ## Data and limitations
 
 Events, reflections, cycles and settings are local. Journal text, event bodies,
-and a configured birthday are encrypted using an Android Keystore AES-GCM key.
+and optional birth date, time, zone, place and outside-time anniversary are
+encrypted using an Android Keystore AES-GCM key. Complete, unambiguous birth
+instants can display a calculated natal Moon; the place is a manual label and
+the app does not infer coordinates or astrology from it.
 No automatic cloud backup, no analytics, and no AniCloud database access are
 included. User-selected JSON export is readable plaintext; guard its destination.
-The `anytime.export.v1` archive contains calendar and display settings, events,
+The `anytime.export.v1` archive contains calendar and display settings, profile, events,
 reflections and cycles. Import previews and atomically merges new records;
 identical records are skipped. It intentionally keeps the receiving device's
 profile and calendar settings, so imported Anytime recurrences use that origin.

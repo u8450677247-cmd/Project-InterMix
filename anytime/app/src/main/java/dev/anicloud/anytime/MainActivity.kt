@@ -718,6 +718,13 @@ private fun CyclesPage(store: AnytimeStore, cycles: List<AnytimeCycle>, day: Loc
 private fun SettingsPage(store: AnytimeStore, update: (() -> Unit) -> Boolean,
                          export: () -> Unit, importArchive: () -> Unit) {
     val context = LocalContext.current
+    val originalProfile = remember(store) { store.birthProfile() }
+    var profileDate by remember { mutableStateOf(originalProfile.date?.toString() ?: "") }
+    var profileTime by remember { mutableStateOf(originalProfile.time?.toString() ?: "") }
+    var profileZone by remember { mutableStateOf(originalProfile.zone?.id ?: "") }
+    var profilePlace by remember { mutableStateOf(originalProfile.place) }
+    var useProfileAsOutside by remember { mutableStateOf(false) }
+    var profileIssue by remember { mutableStateOf("") }
     var origin by remember { mutableStateOf(store.string("originZone", ZoneId.systemDefault().id)) }
     var birth by remember { mutableStateOf(store.birthMonthDay()?.let {
         "%02d-%02d".format(it.monthValue, it.dayOfMonth)
@@ -744,6 +751,54 @@ private fun SettingsPage(store: AnytimeStore, update: (() -> Unit) -> Boolean,
                 color = Muted, fontSize = 11.sp)
         }
         GlassPanel {
+            Section("Your origin story", "PRIVATE PROFILE · OPTIONAL")
+            Text("A birth moment needs a date, a local time and an IANA zone. Place is your own label; it is not geocoded.",
+                color = Muted, fontSize = 12.sp)
+            OutlinedTextField(profileDate, { profileDate = it }, label = { Text("Birth date · YYYY-MM-DD") })
+            OutlinedTextField(profileTime, { profileTime = it }, label = { Text("Local birth time · HH:mm") })
+            OutlinedTextField(profileZone, { profileZone = it }, label = { Text("Birth IANA zone") },
+                supportingText = { Text("For example: America/Santo_Domingo") })
+            OutlinedTextField(profilePlace, { profilePlace = it }, label = { Text("Birthplace · optional") })
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(useProfileAsOutside, { useProfileAsOutside = it })
+                Text("Use this birth date as my Day Outside Time", color = Lunar)
+            }
+            Button(onClick = {
+                try {
+                    val date = profileDate.trim().takeIf(String::isNotBlank)?.let(LocalDate::parse)
+                    val time = profileTime.trim().takeIf(String::isNotBlank)?.let(LocalTime::parse)
+                    val zone = profileZone.trim().takeIf(String::isNotBlank)?.let(ZoneId::of)
+                    require(!useProfileAsOutside || date != null) { "Enter a birth date to choose its anniversary" }
+                    if (update {
+                        store.setBirthProfile(BirthProfile(date, time, zone, profilePlace))
+                        if (useProfileAsOutside) {
+                            store.setBirthMonthDay(MonthDay.from(requireNotNull(date)))
+                            ReminderScheduler.reschedule(context, store)
+                        }
+                    }) {
+                        if (useProfileAsOutside) birth = "%02d-%02d".format(date!!.monthValue, date.dayOfMonth)
+                        profileIssue = ""
+                    }
+                } catch (e: Exception) { profileIssue = e.message ?: "Check your birth details" }
+            }) { Text("Save private profile") }
+            val profileInstant = runCatching {
+                val date = profileDate.trim().takeIf(String::isNotBlank)?.let(LocalDate::parse)
+                val time = profileTime.trim().takeIf(String::isNotBlank)?.let(LocalTime::parse)
+                val zone = profileZone.trim().takeIf(String::isNotBlank)?.let(ZoneId::of)
+                if (date != null && date.year in 1800..2200)
+                    BirthProfile(date, time, zone, profilePlace).instant() else null
+            }.getOrNull()
+            if (profileInstant != null) {
+                val natalMoon = remember(profileInstant) { MoonCalculator.at(profileInstant) }
+                Text("Natal Moon · ${natalMoon.phase().name.replace('_', ' ')} · " +
+                    "~%.0f%% illuminated".format(natalMoon.illumination() * 100), color = Cyan)
+                Text("Astronomical estimate for the entered birth instant, not an astrological reading.",
+                    color = Muted, fontSize = 11.sp)
+            } else Text("Exact natal Moon needs a complete, unambiguous date, time and zone (1800–2200).",
+                color = Muted, fontSize = 11.sp)
+            if (profileIssue.isNotBlank()) Text(profileIssue, color = Magenta)
+        }
+        GlassPanel {
             Section("Where your year begins", "ORIGIN & BOUNDARY")
             OutlinedTextField(origin, { origin = it }, label = { Text("Origin IANA zone") },
                 supportingText = { Text("For example: Europe/Vienna") })
@@ -765,13 +820,12 @@ private fun SettingsPage(store: AnytimeStore, update: (() -> Unit) -> Boolean,
                     val validFixed = MonthDay.parse("--${fixed.trim()}")
                     require(validFixed != MonthDay.of(2, 29)) { "Choose a fixed date other than February 29" }
                     val validBirthday = birth.trim().takeIf(String::isNotBlank)?.let { MonthDay.parse("--$it") }
-                    update {
+                    if (update {
                         store.set("originZone", validZone.id)
                         store.set("fixedBoundary", validFixed.toString())
                         store.setBirthMonthDay(validBirthday)
                         ReminderScheduler.reschedule(context, store)
-                    }
-                    issue = ""
+                    }) issue = ""
                 } catch (e: Exception) { issue = e.message ?: "Check your date and time zone" }
             }) { Text("Save origin") }
             if (issue.isNotBlank()) Text(issue, color = Magenta)
@@ -802,7 +856,7 @@ private fun SettingsPage(store: AnytimeStore, update: (() -> Unit) -> Boolean,
         }
         GlassPanel {
             Section("Take your time with you", "DATA & PRIVACY")
-            Text("Export a readable JSON archive to a location you select. It contains plaintext events, reflections and any birth date you provided.",
+            Text("Export a readable JSON archive to a location you select. It contains plaintext events, reflections and any birth details you provided.",
                 color = Muted)
             Button(onClick = export) { Text("Export my data") }
             Text("Import an Anytime JSON archive to merge events, reflections and cycles. " +

@@ -25,8 +25,16 @@ data class AnytimeEvent(
 )
 data class AnytimeEntry(val id: Long, val instant: Instant, val text: String, val tags: String)
 data class AnytimeCycle(val id: Long, val title: String, val origin: LocalDate, val period: Int)
+data class BirthProfile(val date: LocalDate?, val time: LocalTime?, val zone: ZoneId?, val place: String) {
+    /** Avoid assigning a false instant to a nonexistent or ambiguous DST wall time. */
+    fun instant(): Instant? {
+        val wallTime = if (date != null && time != null) LocalDateTime.of(date, time) else return null
+        val offsets = zone?.rules?.getValidOffsets(wallTime) ?: return null
+        return offsets.singleOrNull()?.let { wallTime.atOffset(it).toInstant() }
+    }
+}
 
-/** All data is app-private. Journal bodies and profile birth dates use Keystore AES-GCM. */
+/** All data is app-private. Journal, event bodies and birth fields use Keystore AES-GCM. */
 class AnytimeStore(context: Context) : SQLiteOpenHelper(context, "anytime.db", null, 2) {
     private val prefs = context.getSharedPreferences("anytime-settings", Context.MODE_PRIVATE)
     private val cipher = PrivateCipher()
@@ -58,6 +66,22 @@ class AnytimeStore(context: Context) : SQLiteOpenHelper(context, "anytime.db", n
         ?.let { MonthDay.parse(cipher.decrypt(it)) }
     fun setBirthMonthDay(value: MonthDay?) {
         set("birthEncrypted", value?.let { cipher.encrypt(it.toString()) } ?: "")
+    }
+    fun birthProfile(): BirthProfile {
+        fun read(field: String): String = string(field).takeIf(String::isNotBlank)?.let(cipher::decrypt) ?: ""
+        return BirthProfile(read("birthDateEncrypted").takeIf(String::isNotBlank)?.let(LocalDate::parse),
+            read("birthTimeEncrypted").takeIf(String::isNotBlank)?.let(LocalTime::parse),
+            read("birthZoneEncrypted").takeIf(String::isNotBlank)?.let(ZoneId::of), read("birthPlaceEncrypted"))
+    }
+    fun setBirthProfile(profile: BirthProfile) {
+        require(profile.place.length <= 140) { "Birthplace is too long" }
+        fun encoded(value: String) = value.takeIf(String::isNotBlank)?.let(cipher::encrypt) ?: ""
+        check(prefs.edit()
+            .putString("birthDateEncrypted", encoded(profile.date?.toString() ?: ""))
+            .putString("birthTimeEncrypted", encoded(profile.time?.toString() ?: ""))
+            .putString("birthZoneEncrypted", encoded(profile.zone?.id ?: ""))
+            .putString("birthPlaceEncrypted", encoded(profile.place.trim()))
+            .commit())
     }
     fun calendar(): AnytimeCalendar {
         val zone = ZoneId.of(string("originZone", ZoneId.systemDefault().id))
@@ -128,6 +152,11 @@ class AnytimeStore(context: Context) : SQLiteOpenHelper(context, "anytime.db", n
             for (key in listOf("oled", "moon", "personal", "numerology"))
                 put(key, flag(key, key != "numerology"))
             put("birthMonthDay", birthMonthDay()?.toString())
+            val profile = birthProfile()
+            put("birthDate", profile.date?.toString() ?: "")
+            put("birthTime", profile.time?.toString() ?: "")
+            put("birthZone", profile.zone?.id ?: "")
+            put("birthPlace", profile.place)
         })
         put("events", JSONArray().apply { events().forEach { e -> put(JSONObject().apply {
             put("title", e.title); put("description", e.description); put("instant", e.instant.toString())
