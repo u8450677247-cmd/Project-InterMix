@@ -20,13 +20,14 @@ import javax.crypto.spec.GCMParameterSpec
 
 data class AnytimeEvent(
     val id: Long, val title: String, val description: String, val instant: Instant,
-    val zone: ZoneId, val allDay: Boolean, val recurrence: Recurrence.Rule
+    val zone: ZoneId, val allDay: Boolean, val recurrence: Recurrence.Rule,
+    val reminderMinutes: Int
 )
 data class AnytimeEntry(val id: Long, val instant: Instant, val text: String, val tags: String)
 data class AnytimeCycle(val id: Long, val title: String, val origin: LocalDate, val period: Int)
 
 /** All data is app-private. Journal bodies and profile birth dates use Keystore AES-GCM. */
-class AnytimeStore(context: Context) : SQLiteOpenHelper(context, "anytime.db", null, 1) {
+class AnytimeStore(context: Context) : SQLiteOpenHelper(context, "anytime.db", null, 2) {
     private val prefs = context.getSharedPreferences("anytime-settings", Context.MODE_PRIVATE)
     private val cipher = PrivateCipher()
 
@@ -35,15 +36,18 @@ class AnytimeStore(context: Context) : SQLiteOpenHelper(context, "anytime.db", n
         db.setForeignKeyConstraintsEnabled(true)
     }
     override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL("CREATE TABLE events(id INTEGER PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, instant INTEGER NOT NULL, zone TEXT NOT NULL, all_day INTEGER NOT NULL, recurrence TEXT NOT NULL)")
+        db.execSQL("CREATE TABLE events(id INTEGER PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, instant INTEGER NOT NULL, zone TEXT NOT NULL, all_day INTEGER NOT NULL, recurrence TEXT NOT NULL, remind_minutes INTEGER NOT NULL DEFAULT 0)")
         db.execSQL("CREATE TABLE journal(id INTEGER PRIMARY KEY, instant INTEGER NOT NULL, body TEXT NOT NULL, tags TEXT NOT NULL)")
         db.execSQL("CREATE TABLE cycles(id INTEGER PRIMARY KEY, title TEXT NOT NULL, origin TEXT NOT NULL, period INTEGER NOT NULL)")
         db.execSQL("CREATE INDEX journal_by_time ON journal(instant DESC)")
         db.execSQL("CREATE INDEX events_by_time ON events(instant)")
     }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // Versioned, additive migrations will be introduced with later schemas.
-        check(oldVersion == newVersion) { "Migration missing: $oldVersion → $newVersion" }
+        if (oldVersion == 1 && newVersion == 2) {
+            db.execSQL("ALTER TABLE events ADD COLUMN remind_minutes INTEGER NOT NULL DEFAULT 0")
+            return
+        }
+        error("Migration missing: $oldVersion → $newVersion")
     }
 
     fun string(key: String, fallback: String = ""): String = prefs.getString(key, fallback) ?: fallback
@@ -63,8 +67,9 @@ class AnytimeStore(context: Context) : SQLiteOpenHelper(context, "anytime.db", n
         return AnytimeCalendar(AnytimeCalendar.Rules(zone, boundary, fixed, birthMonthDay(), leap))
     }
     fun addEvent(title: String, description: String, at: ZonedDateTime, allDay: Boolean,
-                 rule: Recurrence.Rule): Long {
+                 rule: Recurrence.Rule, reminderMinutes: Int = 0): Long {
         require(title.isNotBlank() && title.length <= 140 && description.length <= 16000)
+        require(reminderMinutes in listOf(0, 10, 30, 60, 1440))
         val day = calendar().fromInstant(at.toInstant())
         require(rule != Recurrence.Rule.ANYTIME_MONTHLY && rule != Recurrence.Rule.ANYTIME_YEARLY || day.counted()) {
             "Outside-time events need civil recurrence"
@@ -73,14 +78,15 @@ class AnytimeStore(context: Context) : SQLiteOpenHelper(context, "anytime.db", n
             put("title", title.trim()); put("body", cipher.encrypt(description))
             put("instant", at.toInstant().toEpochMilli()); put("zone", at.zone.id)
             put("all_day", if (allDay) 1 else 0); put("recurrence", rule.name)
+            put("remind_minutes", reminderMinutes)
         }
         return writableDatabase.insertOrThrow("events", null, values)
     }
     fun events(): List<AnytimeEvent> = buildList {
-        readableDatabase.rawQuery("SELECT id,title,body,instant,zone,all_day,recurrence FROM events ORDER BY instant", null).use { c ->
+        readableDatabase.rawQuery("SELECT id,title,body,instant,zone,all_day,recurrence,remind_minutes FROM events ORDER BY instant", null).use { c ->
             while (c.moveToNext()) add(AnytimeEvent(c.getLong(0), c.getString(1), cipher.decrypt(c.getString(2)),
                 Instant.ofEpochMilli(c.getLong(3)), ZoneId.of(c.getString(4)), c.getInt(5) != 0,
-                Recurrence.Rule.valueOf(c.getString(6))))
+                Recurrence.Rule.valueOf(c.getString(6)), c.getInt(7)))
         }
     }
     fun removeEvent(id: Long) { writableDatabase.delete("events", "id=?", arrayOf(id.toString())) }
@@ -116,14 +122,17 @@ class AnytimeStore(context: Context) : SQLiteOpenHelper(context, "anytime.db", n
         put("createdAt", Instant.now().toString())
         put("settings", JSONObject().apply {
             for (key in listOf("primary", "originZone", "boundary", "fixedBoundary", "leapBirthday",
-                "motion", "oled", "moon", "personal", "numerology", "originLatitude", "presentLatitude")) {
+                "motion", "originLatitude", "presentLatitude")) {
                 put(key, string(key))
             }
+            for (key in listOf("oled", "moon", "personal", "numerology"))
+                put(key, flag(key, key != "numerology"))
             put("birthMonthDay", birthMonthDay()?.toString())
         })
         put("events", JSONArray().apply { events().forEach { e -> put(JSONObject().apply {
             put("title", e.title); put("description", e.description); put("instant", e.instant)
             put("zone", e.zone.id); put("allDay", e.allDay); put("recurrence", e.recurrence.name)
+            put("reminderMinutes", e.reminderMinutes)
         }) } })
         put("journal", JSONArray().apply { entries().forEach { e -> put(JSONObject().apply {
             put("instant", e.instant); put("text", e.text); put("tags", e.tags)

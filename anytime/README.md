@@ -14,8 +14,11 @@ gradle -p anytime :calendar-domain:test :app:testDebugUnitTest :app:assembleDebu
 ```
 
 The GitHub Actions `anytime-android` workflow retains the debug APK under
-`Anytime-standalone-debug`. It is signed by CI's temporary debug certificate;
-do not treat it as an update-compatible release key.
+`Anytime-standalone-debug`. It is signed by CI's temporary debug certificate.
+If the repository's private dogfood key is configured, a separate
+`Anytime-standalone-dogfood` artifact uses a persistent signature for updates.
+Install one signing line and keep using it; a debug build cannot replace a
+dogfood-signed build.
 
 ## Calendar policy
 
@@ -39,9 +42,10 @@ and a configured birthday are encrypted using an Android Keystore AES-GCM key.
 No automatic cloud backup, no analytics, and no AniCloud database access are
 included. User-selected JSON export is readable plaintext; guard its destination.
 
-The first APK contains local event creation and custom monthly/annual recurrence,
+The first APK contains local event creation, inexact opt-in reminders with
+Android notification permission, and custom monthly/annual recurrence,
 journal, personal cycles, a Moon page, radial and accessible grid year views,
-dual season frames, settings and onboarding. Reminders, editable entries,
+dual season frames, settings and onboarding. Editable entries,
 location permissions, astronomical rise/set, `.ics` exchange, full encrypted
 backup/import, widgets, and a live AniCloud bridge are not implemented yet.
 No agent is required to use the app.

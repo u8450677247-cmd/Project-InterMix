@@ -18,6 +18,12 @@ Project Intermix runs the language model, inference controller, SQLite memory, T
 
 This repository is a developer preview with a functional native Android dogfood APK and the established Termux cockpit. It is not a stable store release. The reference path is owner-tested on one Pixel 10 Pro; every other device remains a candidate until a reproducible community report says otherwise.
 
+**Anytime** is a separate native Android personal-time app under
+[`anytime/`](anytime/README.md). It runs without AniCloudAI or a resident model;
+the historical Threshold contract remains as design lineage. The standalone
+13×28 calendar, offline Moon layer, personal cycles and local journal have a
+separate APK workflow and a distinct Android application ID.
+
 ## AniCloudAI — Project Intermix becomes a native Android cockpit
 
 <p align="center">

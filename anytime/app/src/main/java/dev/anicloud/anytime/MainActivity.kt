@@ -1,5 +1,8 @@
 package dev.anicloud.anytime
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -44,6 +47,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.anicloud.anytime.domain.AnytimeCalendar
 import dev.anicloud.anytime.domain.MoonCalculator
 import dev.anicloud.anytime.domain.Numerology
+import dev.anicloud.anytime.domain.OccurrenceResolver
 import dev.anicloud.anytime.domain.Recurrence
 import dev.anicloud.anytime.domain.SolarCalculator
 import kotlinx.coroutines.delay
@@ -63,6 +67,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val store = AnytimeStore(this)
+        ReminderScheduler.reschedule(this, store)
         setContent { MaterialTheme(colorScheme = darkColorScheme(
             primary = Cyan, secondary = Violet, tertiary = Magenta,
             background = Ink, surface = Smoke, onBackground = Lunar, onSurface = Lunar
@@ -79,6 +84,13 @@ private fun AnytimeApp(store: AnytimeStore) {
     var selected by remember { mutableStateOf(LocalDate.now()) }
     var onboarding by remember { mutableStateOf(!store.flag("onboarded")) }
     var error by remember { mutableStateOf("") }
+    var notificationAllowed by remember { mutableStateOf(Build.VERSION.SDK_INT < 33 ||
+        context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) }
+    val requestNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        granted ->
+        notificationAllowed = granted
+        if (granted) ReminderScheduler.reschedule(context, store)
+    }
     val lifecycle = LocalLifecycleOwner.current
     var resumed by remember { mutableStateOf(lifecycle.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
     DisposableEffect(lifecycle) {
@@ -121,7 +133,9 @@ private fun AnytimeApp(store: AnytimeStore) {
                     selected, { selected = it; page = "Year" }, { page = it }, resumed)
                 "Year" -> YearPage(calendar, selected, { selected = it })
                 "Moon" -> MoonPage(moon, moment, entries)
-                "Events" -> EventsPage(store, calendar, events, selected, { update(it) })
+                "Events" -> EventsPage(store, calendar, events, selected, notificationAllowed,
+                    { if (Build.VERSION.SDK_INT >= 33) requestNotifications.launch(Manifest.permission.POST_NOTIFICATIONS) },
+                    { update(it) })
                 "Cycles" -> CyclesPage(store, cycles, selected, { update(it) })
                 "Journal" -> JournalPage(store, calendar, entries, { update(it) })
                 else -> SettingsPage(store, { update(it) }, { export.launch("Anytime-export.json") })
@@ -206,13 +220,14 @@ private fun TodayPage(store: AnytimeStore, calendar: AnytimeCalendar, day: Anyti
         GlassPanel {
             Section("Coming into view", "EVENTS")
             val upcoming = events.mapNotNull { event ->
-                val initial = event.instant.atZone(event.zone).toLocalDate()
-                val next = Recurrence.nextAfter(initial, local.minusDays(1), event.recurrence, calendar)
+                val next = OccurrenceResolver.nextAfter(event.instant, event.zone, event.recurrence,
+                    calendar, moment.minusSeconds(1))
                 if (next == null) null else next to event
             }.sortedBy { it.first }.take(3)
-            if (upcoming.isEmpty()) Text("Your timeline begins here.", color = Muted)
-            upcoming.forEach { (date, event) ->
-                Text("${date}  ·  ${event.title}", color = Lunar, modifier = Modifier.padding(vertical = 6.dp))
+            if (upcoming.isEmpty()) Text("No upcoming events yet.", color = Muted)
+            upcoming.forEach { (instant, event) ->
+                Text("${instant.atZone(event.zone).toLocalDate()}  ·  ${event.title}", color = Lunar,
+                    modifier = Modifier.padding(vertical = 6.dp))
             }
             TextButton(onClick = { go("Events") }) { Text("Plan an event →") }
         }
@@ -442,7 +457,9 @@ private fun AmbientParticles(motion: String, resumed: Boolean, modifier: Modifie
 
 @Composable
 private fun EventsPage(store: AnytimeStore, calendar: AnytimeCalendar, events: List<AnytimeEvent>,
-                       selected: LocalDate, update: (() -> Unit) -> Unit) {
+                       selected: LocalDate, notificationAllowed: Boolean, askPermission: () -> Unit,
+                       update: (() -> Unit) -> Unit) {
+    val context = LocalContext.current
     var editing by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf<AnytimeEvent?>(null) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp),
@@ -459,29 +476,35 @@ private fun EventsPage(store: AnytimeStore, calendar: AnytimeCalendar, events: L
                 Text("${civil} · ${if (event.allDay) "all day" else event.instant.atZone(event.zone).toLocalTime()} · ${event.zone.id}",
                     color = Cyan, fontSize = 12.sp)
                 Text("${dayLabel(sacred)} · ${event.recurrence.name.replace('_', ' ')}", color = Muted, fontSize = 12.sp)
+                if (event.reminderMinutes > 0) Text("Reminder · ${event.reminderMinutes} minutes before (inexact)",
+                    color = Muted, fontSize = 12.sp)
                 if (event.description.isNotBlank()) Text(event.description, color = Lunar)
                 TextButton(onClick = { removing = event }) { Text("Remove", color = Magenta) }
             }
         }
     }
-    if (editing) EventDialog(store, selected, { editing = false }, update)
+    if (editing) EventDialog(store, selected, notificationAllowed, askPermission,
+        { editing = false }, update)
     removing?.let { target -> AlertDialog(onDismissRequest = { removing = null },
         title = { Text("Remove event?") }, text = { Text(target.title) },
         confirmButton = { TextButton(onClick = {
-            update { store.removeEvent(target.id) }; removing = null
+            update { ReminderScheduler.cancel(context, target.id); store.removeEvent(target.id) }; removing = null
         }) { Text("Remove") } },
         dismissButton = { TextButton(onClick = { removing = null }) { Text("Keep") } }) }
 }
 
 @Composable
-private fun EventDialog(store: AnytimeStore, selected: LocalDate, close: () -> Unit,
+private fun EventDialog(store: AnytimeStore, selected: LocalDate, notificationAllowed: Boolean,
+                        askPermission: () -> Unit, close: () -> Unit,
                         update: (() -> Unit) -> Unit) {
+    val context = LocalContext.current
     var title by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
     var date by remember { mutableStateOf(selected.toString()) }
     var time by remember { mutableStateOf("18:00") }
     var allDay by remember { mutableStateOf(false) }
     var rule by remember { mutableStateOf(Recurrence.Rule.NONE) }
+    var reminder by remember { mutableIntStateOf(0) }
     var problem by remember { mutableStateOf("") }
     AlertDialog(onDismissRequest = close, title = { Text("New event") },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -500,14 +523,26 @@ private fun EventDialog(store: AnytimeStore, selected: LocalDate, close: () -> U
                     Text("${if (rule == item) "◉" else "○"}  ${item.name.replace('_', ' ')}")
                 }
             }
+            Text("Reminder · may be delayed by Android battery policy", color = Muted)
+            OptionRow(listOf("None", "10 min", "30 min", "1 hour", "1 day"),
+                when (reminder) { 10 -> "10 min"; 30 -> "30 min"; 60 -> "1 hour";
+                    1440 -> "1 day"; else -> "None" }) { option ->
+                reminder = when (option) { "10 min" -> 10; "30 min" -> 30;
+                    "1 hour" -> 60; "1 day" -> 1440; else -> 0 }
+                if (reminder > 0 && !notificationAllowed) askPermission()
+            }
             if (problem.isNotBlank()) Text(problem, color = Magenta)
         } },
         confirmButton = { TextButton(onClick = {
             try {
+                require(reminder == 0 || notificationAllowed) { "Allow notifications or select no reminder" }
                 val zone = ZoneId.systemDefault()
                 val day = LocalDate.parse(date)
                 val clock = if (allDay) LocalTime.NOON else LocalTime.parse(time)
-                update { store.addEvent(title, description, day.atTime(clock).atZone(zone), allDay, rule) }
+                update {
+                    store.addEvent(title, description, day.atTime(clock).atZone(zone), allDay, rule, reminder)
+                    ReminderScheduler.reschedule(context, store)
+                }
                 close()
             } catch (e: Exception) { problem = e.message ?: "Check the date and time" }
         }) { Text("Save event") } },
@@ -716,6 +751,9 @@ private fun Onboarding(store: AnytimeStore, update: (() -> Unit) -> Unit, finish
     var moon by remember { mutableStateOf(true) }
     var personal by remember { mutableStateOf(true) }
     var symbolic by remember { mutableStateOf(false) }
+    var origin by remember { mutableStateOf(ZoneId.systemDefault().id) }
+    var outside by remember { mutableStateOf("") }
+    var issue by remember { mutableStateOf("") }
     AlertDialog(onDismissRequest = {}, title = { Text("ANYTIME", color = Lunar, letterSpacing = 3.sp) },
         text = { Column(Modifier.verticalScroll(rememberScrollState())) {
             Text("Your time.", color = Cyan, fontSize = 24.sp)
@@ -731,13 +769,27 @@ private fun Onboarding(store: AnytimeStore, update: (() -> Unit) -> Unit, finish
             ToggleSetting("Personal cycles", personal) { personal = it }
             ToggleSetting("Date digit reduction · symbolic", symbolic) { symbolic = it }
             Text("Gregorian dates remain available for appointments and export.", color = Muted, fontSize = 12.sp)
+            Spacer(Modifier.height(10.dp))
+            Text("YOUR ORIGIN · OPTIONAL", color = Magenta, letterSpacing = 2.sp)
+            OutlinedTextField(origin, { origin = it }, label = { Text("Origin time zone") },
+                supportingText = { Text("An IANA zone, such as Europe/London") })
+            OutlinedTextField(outside, { outside = it }, label = { Text("Day Outside Time · MM-DD") },
+                supportingText = { Text("Leave blank and choose later; stored encrypted on device.") })
+            if (issue.isNotBlank()) Text(issue, color = Magenta)
         } },
         confirmButton = { TextButton(onClick = {
-            update {
-                store.set("primary", primary); store.set("moon", moon)
-                store.set("personal", personal); store.set("numerology", symbolic)
-                store.set("onboarded", true)
+            try {
+                val zone = ZoneId.of(origin.trim())
+                val day = outside.trim().takeIf(String::isNotBlank)?.let { MonthDay.parse("--$it") }
+                update {
+                    store.set("originZone", zone.id); store.setBirthMonthDay(day)
+                    store.set("primary", primary); store.set("moon", moon)
+                    store.set("personal", personal); store.set("numerology", symbolic)
+                    store.set("onboarded", true)
+                }
+                finish()
+            } catch (e: Exception) {
+                issue = e.message ?: "Check the origin zone and date"
             }
-            finish()
         }) { Text("Begin →") } })
 }

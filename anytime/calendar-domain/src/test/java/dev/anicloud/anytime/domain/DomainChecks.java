@@ -76,6 +76,14 @@ public final class DomainChecks {
         if (nextChamber <= 13) check(Recurrence.nextAfter(c.toCivil(2026, 1, 1), threshold,
             Recurrence.Rule.ANYTIME_MONTHLY, c).equals(c.toCivil(2026, nextChamber, 1)),
             "monthly recurrence across outside day");
+        ZoneId presentZone = ZoneId.of("Europe/Vienna");
+        Instant crossZoneAnchor = LocalDate.of(2026, 8, 9).atTime(1, 30).atZone(presentZone).toInstant();
+        Instant crossZoneNext = OccurrenceResolver.nextAfter(crossZoneAnchor, presentZone,
+            Recurrence.Rule.ANYTIME_MONTHLY, c, crossZoneAnchor);
+        AnytimeCalendar.Day anchorDay = c.fromInstant(crossZoneAnchor);
+        AnytimeCalendar.Day nextDay = c.fromInstant(crossZoneNext);
+        check(nextDay.day() == anchorDay.day() && nextDay.chamber() == anchorDay.chamber() + 1,
+            "custom recurrence honors origin date across zones");
         check(SolarCalculator.daylightHours(0, Instant.parse("2026-03-20T14:46:00Z")) > 12,
             "equinox daylight estimate");
         check(Numerology.civilDateDigitReduction(LocalDate.of(2026, 9, 27)).value() == 1,
