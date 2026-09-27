@@ -20,10 +20,14 @@ object ReminderScheduler {
     private const val eventId = "eventId"
 
     fun reschedule(context: Context, store: AnytimeStore) {
+        val alarm = context.getSystemService(AlarmManager::class.java)
         store.events().forEach { event ->
             if (event.reminderMinutes == 0) return@forEach
-            val next = nextAlert(event, store, Instant.now()) ?: return@forEach
-            val alarm = context.getSystemService(AlarmManager::class.java)
+            alarm.cancel(pending(context, event.id))
+            // A changed calendar origin can place an older custom anchor outside time.
+            // Keep the event visible, but do not schedule a misleading reminder.
+            val next = try { nextAlert(event, store, Instant.now()) }
+                catch (_: IllegalArgumentException) { null } ?: return@forEach
             alarm.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, next.toEpochMilli(), pending(context, event.id))
         }
     }

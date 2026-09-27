@@ -130,17 +130,114 @@ class AnytimeStore(context: Context) : SQLiteOpenHelper(context, "anytime.db", n
             put("birthMonthDay", birthMonthDay()?.toString())
         })
         put("events", JSONArray().apply { events().forEach { e -> put(JSONObject().apply {
-            put("title", e.title); put("description", e.description); put("instant", e.instant)
+            put("title", e.title); put("description", e.description); put("instant", e.instant.toString())
             put("zone", e.zone.id); put("allDay", e.allDay); put("recurrence", e.recurrence.name)
             put("reminderMinutes", e.reminderMinutes)
         }) } })
         put("journal", JSONArray().apply { entries().forEach { e -> put(JSONObject().apply {
-            put("instant", e.instant); put("text", e.text); put("tags", e.tags)
+            put("instant", e.instant.toString()); put("text", e.text); put("tags", e.tags)
         }) } })
         put("cycles", JSONArray().apply { cycles().forEach { c -> put(JSONObject().apply {
             put("title", c.title); put("origin", c.origin); put("period", c.period)
         }) } })
     }.toString(2)
+
+    data class ImportPreview(val events: Int, val reflections: Int, val cycles: Int)
+    private data class ImportData(val events: List<AnytimeEvent>, val entries: List<AnytimeEntry>,
+                                  val cycles: List<AnytimeCycle>) {
+        fun summary() = ImportPreview(events.size, entries.size, cycles.size)
+    }
+
+    fun previewImport(json: String): ImportPreview = parseImport(json).summary()
+
+    /** Merges records atomically, skipping identical records. Profile/settings remain private to this install. */
+    fun importJson(json: String): ImportPreview {
+        val incoming = parseImport(json)
+        val existingEvents = events().map { listOf(it.title, it.description, it.instant, it.zone,
+            it.allDay, it.recurrence, it.reminderMinutes) }.toHashSet()
+        val existingEntries = entries().map { listOf(it.instant, it.text, it.tags) }.toHashSet()
+        val existingCycles = cycles().map { listOf(it.title, it.origin, it.period) }.toHashSet()
+        var addedEvents = 0; var addedEntries = 0; var addedCycles = 0
+        val database = writableDatabase
+        database.beginTransaction()
+        try {
+            incoming.events.forEach { e ->
+                if (existingEvents.add(listOf(e.title, e.description, e.instant, e.zone,
+                    e.allDay, e.recurrence, e.reminderMinutes))) {
+                    database.insertOrThrow("events", null, ContentValues().apply {
+                        put("title", e.title); put("body", cipher.encrypt(e.description))
+                        put("instant", e.instant.toEpochMilli()); put("zone", e.zone.id)
+                        put("all_day", if (e.allDay) 1 else 0); put("recurrence", e.recurrence.name)
+                        put("remind_minutes", e.reminderMinutes)
+                    }); addedEvents++
+                }
+            }
+            incoming.entries.forEach { e ->
+                if (existingEntries.add(listOf(e.instant, e.text, e.tags))) {
+                    database.insertOrThrow("journal", null, ContentValues().apply {
+                        put("instant", e.instant.toEpochMilli()); put("body", cipher.encrypt(e.text))
+                        put("tags", e.tags)
+                    }); addedEntries++
+                }
+            }
+            incoming.cycles.forEach { c ->
+                if (existingCycles.add(listOf(c.title, c.origin, c.period))) {
+                    database.insertOrThrow("cycles", null, ContentValues().apply {
+                        put("title", c.title); put("origin", c.origin.toString()); put("period", c.period)
+                    }); addedCycles++
+                }
+            }
+            database.setTransactionSuccessful()
+        } finally { database.endTransaction() }
+        return ImportPreview(addedEvents, addedEntries, addedCycles)
+    }
+
+    private fun parseImport(json: String): ImportData {
+        require(json.toByteArray(Charsets.UTF_8).size <= 5_000_000) { "Archive is larger than 5 MB" }
+        val root = JSONObject(json)
+        require(root.getString("schema") == "anytime.export.v1") { "Unsupported Anytime archive" }
+        val eventArray = root.getJSONArray("events")
+        val journalArray = root.getJSONArray("journal")
+        val cycleArray = root.getJSONArray("cycles")
+        require(eventArray.length() <= 5000 && journalArray.length() <= 5000 && cycleArray.length() <= 5000) {
+            "Archive contains too many records"
+        }
+        val targetCalendar = calendar()
+        val importedEvents = (0 until eventArray.length()).map { i ->
+            val e = eventArray.getJSONObject(i)
+            val title = e.getString("title"); val body = e.getString("description")
+            val minutes = if (e.has("reminderMinutes")) e.getInt("reminderMinutes") else 0
+            require(title.isNotBlank() && title.length <= 140 && body.length <= 16000 &&
+                minutes in listOf(0, 10, 30, 60, 1440)) { "Invalid event in archive" }
+            val instant = Instant.parse(e.getString("instant"))
+            val rule = Recurrence.Rule.valueOf(e.getString("recurrence"))
+            val day = targetCalendar.fromInstant(instant)
+            if (rule == Recurrence.Rule.ANYTIME_MONTHLY || rule == Recurrence.Rule.ANYTIME_YEARLY) {
+                require(day.counted()) {
+                    "A recurring Anytime event falls outside this device's calendar year; align your origin settings first"
+                }
+            }
+            AnytimeEvent(0, title, body, instant, ZoneId.of(e.getString("zone")),
+                e.getBoolean("allDay"), rule, minutes)
+        }
+        val importedEntries = (0 until journalArray.length()).map { i ->
+            val e = journalArray.getJSONObject(i)
+            val body = e.getString("text"); val tags = e.getString("tags")
+            require(body.isNotBlank() && body.length <= 32000 && tags.length <= 280) { "Invalid reflection in archive" }
+            val instant = Instant.parse(e.getString("instant"))
+            targetCalendar.fromInstant(instant)
+            AnytimeEntry(0, instant, body, tags)
+        }
+        val importedCycles = (0 until cycleArray.length()).map { i ->
+            val c = cycleArray.getJSONObject(i)
+            val title = c.getString("title"); val period = c.getInt("period")
+            require(title.isNotBlank() && title.length <= 100 && period in 2..36525) { "Invalid cycle in archive" }
+            val origin = LocalDate.parse(c.getString("origin"))
+            targetCalendar.fromCivil(origin)
+            AnytimeCycle(0, title, origin, period)
+        }
+        return ImportData(importedEvents, importedEntries, importedCycles)
+    }
 }
 
 private class PrivateCipher {

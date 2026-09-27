@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -24,6 +25,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,7 +52,11 @@ import dev.anicloud.anytime.domain.Numerology
 import dev.anicloud.anytime.domain.OccurrenceResolver
 import dev.anicloud.anytime.domain.Recurrence
 import dev.anicloud.anytime.domain.SolarCalculator
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.time.*
 import java.time.format.DateTimeFormatter
 import kotlin.math.*
@@ -84,6 +90,9 @@ private fun AnytimeApp(store: AnytimeStore) {
     var selected by remember { mutableStateOf(LocalDate.now()) }
     var onboarding by remember { mutableStateOf(!store.flag("onboarded")) }
     var error by remember { mutableStateOf("") }
+    var pendingImport by remember { mutableStateOf<Pair<String, AnytimeStore.ImportPreview>?>(null) }
+    var importing by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     var notificationAllowed by remember { mutableStateOf(Build.VERSION.SDK_INT < 33 ||
         context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) }
     val requestNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
@@ -113,14 +122,40 @@ private fun AnytimeApp(store: AnytimeStore) {
     val entries = remember(revision) { store.entries() }
     val events = remember(revision) { store.events() }
     val cycles = remember(revision) { store.cycles() }
-    fun update(block: () -> Unit) {
-        try { block(); revision++; error = "" } catch (e: Exception) { error = e.message ?: "Could not save" }
+    fun update(block: () -> Unit): Boolean {
+        return try { block(); revision++; error = ""; true }
+        catch (e: Exception) { error = e.message ?: "Could not save"; false }
     }
     val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) try {
             context.contentResolver.openOutputStream(uri)?.use { it.write(store.exportJson().toByteArray()) }
                 ?: error("Unable to open export destination")
         } catch (e: Exception) { error = e.message ?: "Export failed" }
+    }
+    val importDocument = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) scope.launch {
+            importing = true
+            try {
+                val archive = withContext(Dispatchers.IO) {
+                    val stream = context.contentResolver.openInputStream(uri)
+                        ?: error("Unable to open archive")
+                    stream.use { input ->
+                        val buffer = ByteArray(8192)
+                        val output = ByteArrayOutputStream()
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count == -1) break
+                            require(output.size() + count <= 5_000_000) { "Archive is larger than 5 MB" }
+                            output.write(buffer, 0, count)
+                        }
+                        output.toString(Charsets.UTF_8.name())
+                    }
+                }
+                val preview = withContext(Dispatchers.IO) { store.previewImport(archive) }
+                pendingImport = archive to preview
+            } catch (e: Exception) { error = e.message ?: "Unable to read archive" }
+            finally { importing = false }
+        }
     }
 
     val background = if (store.flag("oled", true)) Ink else Color(0xFF0A0812)
@@ -138,7 +173,8 @@ private fun AnytimeApp(store: AnytimeStore) {
                     { update(it) })
                 "Cycles" -> CyclesPage(store, cycles, selected, { update(it) })
                 "Journal" -> JournalPage(store, calendar, entries, { update(it) })
-                else -> SettingsPage(store, { update(it) }, { export.launch("Anytime-export.json") })
+                else -> SettingsPage(store, { update(it) }, { export.launch("Anytime-export.json") },
+                    { importDocument.launch(arrayOf("application/json", "text/plain")) })
             }
         }
         if (medium) {
@@ -162,6 +198,33 @@ private fun AnytimeApp(store: AnytimeStore) {
             }
         }
         if (onboarding) Onboarding(store, { update(it) }, { onboarding = false })
+        pendingImport?.let { (archive, preview) ->
+            AlertDialog(onDismissRequest = { if (!importing) pendingImport = null },
+                title = { Text("Bring your time home") },
+                text = { Text("Archive contains ${preview.events} events, ${preview.reflections} reflections, " +
+                    "and ${preview.cycles} cycles. Merge new records? Existing records stay. " +
+                    "Calendar origin and private profile settings remain as configured here; " +
+                    "Anytime recurrences use this device's year boundary.") },
+                confirmButton = { TextButton(onClick = {
+                    scope.launch {
+                        importing = true
+                        try {
+                            withContext(Dispatchers.IO) {
+                                store.importJson(archive)
+                                ReminderScheduler.reschedule(context, store)
+                            }
+                            pendingImport = null
+                            revision++
+                            error = ""
+                        } catch (e: Exception) { error = e.message ?: "Import failed" }
+                        finally { importing = false }
+                    }
+                }, enabled = !importing) { Text("Merge records") } },
+                dismissButton = { TextButton(onClick = { pendingImport = null }, enabled = !importing) {
+                    Text("Cancel")
+                } })
+        }
+        if (importing && pendingImport == null) CircularProgressIndicator(Modifier.align(Alignment.Center))
         if (error.isNotBlank()) AlertDialog(onDismissRequest = { error = "" },
             title = { Text("Something needs attention") }, text = { Text(error) },
             confirmButton = { TextButton(onClick = { error = "" }) { Text("OK") } })
@@ -220,8 +283,8 @@ private fun TodayPage(store: AnytimeStore, calendar: AnytimeCalendar, day: Anyti
         GlassPanel {
             Section("Coming into view", "EVENTS")
             val upcoming = events.mapNotNull { event ->
-                val next = OccurrenceResolver.nextAfter(event.instant, event.zone, event.recurrence,
-                    calendar, moment.minusSeconds(1))
+                val next = try { OccurrenceResolver.nextAfter(event.instant, event.zone, event.recurrence,
+                    calendar, moment.minusSeconds(1)) } catch (_: IllegalArgumentException) { null }
                 if (next == null) null else next to event
             }.sortedBy { it.first }.take(3)
             if (upcoming.isEmpty()) Text("No upcoming events yet.", color = Muted)
@@ -352,6 +415,9 @@ private fun MoonDisc(angle: Double, modifier: Modifier) {
 private fun YearPage(calendar: AnytimeCalendar, date: LocalDate, select: (LocalDate) -> Unit) {
     val current = remember(calendar, date) { calendar.fromCivil(date) }
     val days = remember(calendar, date) { calendar.year(current.year()) }
+    val counted = days.takeWhile { !it.civilDate().isAfter(date) }.count(AnytimeCalendar.Day::counted)
+    val outside = days.takeWhile { it.kind() != AnytimeCalendar.Kind.THRESHOLD_DAY }
+        .count(AnytimeCalendar.Day::counted)
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -360,7 +426,8 @@ private fun YearPage(calendar: AnytimeCalendar, date: LocalDate, select: (LocalD
             TextButton(onClick = { select(calendar.start(current.year() + 1)) }) { Text("→") }
         }
         GlassPanel {
-            YearRing(current, { index -> select(days.filter(AnytimeCalendar.Day::counted)[index].civilDate()) })
+            YearRing(current.year(), counted / 364f, outside / 364f,
+                { index -> select(days.filter(AnytimeCalendar.Day::counted)[index].civilDate()) })
             Text("${dayLabel(current)} · ${date}", color = Cyan,
                 modifier = Modifier.padding(top = 10.dp))
         }
@@ -375,9 +442,12 @@ private fun YearPage(calendar: AnytimeCalendar, date: LocalDate, select: (LocalD
                             val n = week * 7 + weekday
                             val civil = calendar.toCivil(current.year(), chamber, n)
                             val chosen = civil == date
-                            Box(Modifier.sizeIn(minWidth = 39.dp, minHeight = 42.dp).clip(CircleShape)
+                            Box(Modifier.sizeIn(minWidth = 39.dp, minHeight = 48.dp).clip(CircleShape)
                                 .background(if (chosen) Violet.copy(alpha = .35f) else Color.Transparent)
-                                .clickable { select(civil) }, contentAlignment = Alignment.Center) {
+                                .clickable { select(civil) }.semantics {
+                                    contentDescription = "Chamber $chamber, day $n, $civil" +
+                                        if (chosen) ", selected" else ""
+                                }, contentAlignment = Alignment.Center) {
                                 Text(n.toString(), color = if (chosen) Lunar else Muted)
                             }
                         }
@@ -385,17 +455,19 @@ private fun YearPage(calendar: AnytimeCalendar, date: LocalDate, select: (LocalD
                 }
             }
         }
-        days.filter { !it.counted() }.forEach { outside -> GlassPanel {
-            Text("${dayLabel(outside)} · ${outside.civilDate()}", color = Magenta)
+        days.filter { !it.counted() }.forEach { outsideDay -> GlassPanel {
+            TextButton(onClick = { select(outsideDay.civilDate()) }) {
+                Text("${dayLabel(outsideDay)} · ${outsideDay.civilDate()}", color = Magenta)
+            }
         } }
     }
 }
 
 @Composable
-private fun YearRing(day: AnytimeCalendar.Day, selectIndex: (Int) -> Unit) {
+private fun YearRing(year: Int, progress: Float, outsideFraction: Float, selectIndex: (Int) -> Unit) {
     Canvas(Modifier.fillMaxWidth().height(280.dp)
-        .semantics { contentDescription = "13-chamber radial year; accessible day grid follows" }
-        .pointerInput(day.year()) {
+        .semantics { contentDescription = "13-chamber year $year, ${(progress * 100).toInt()} percent of counted days passed; accessible day grid follows" }
+        .pointerInput(year) {
             detectTapGestures { point ->
                 val dx = point.x - size.width / 2f
                 val dy = point.y - size.height / 2f
@@ -414,10 +486,11 @@ private fun YearRing(day: AnytimeCalendar.Day, selectIndex: (Int) -> Unit) {
             drawArc(Violet.copy(alpha = .35f), -90f + i * 360f / 13, 360f / 13 - 1.5f,
                 false, topLeft, diameter, style = Stroke(18.dp.toPx(), cap = StrokeCap.Round))
         }
-        val progress = if (day.counted()) ((day.chamber() - 1) * 28 + day.day()) / 364f else 1f
         drawArc(Cyan, -90f, progress * 360f, false, topLeft, diameter,
             style = Stroke(4.dp.toPx(), cap = StrokeCap.Round))
-        drawCircle(Magenta, 4.dp.toPx(), Offset(size.width / 2, size.height / 2 - radius))
+        val outsideAngle = outsideFraction * 2 * PI - PI / 2
+        drawCircle(Magenta, 4.dp.toPx(), Offset(size.width / 2 + radius * cos(outsideAngle).toFloat(),
+            size.height / 2 + radius * sin(outsideAngle).toFloat()))
         drawCircle(Color(0xFF191224), radius * .51f)
     }
 }
@@ -438,8 +511,11 @@ private fun Section(title: String, eyebrow: String) {
 
 @Composable
 private fun AmbientParticles(motion: String, resumed: Boolean, modifier: Modifier) {
+    val context = LocalContext.current
     var time by remember { mutableFloatStateOf(0f) }
-    val enabled = resumed && motion != "Reduced Motion" && motion != "Battery Saver"
+    val osReducedMotion = Settings.Global.getFloat(context.contentResolver,
+        Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
+    val enabled = resumed && !osReducedMotion && motion != "Reduced Motion" && motion != "Battery Saver"
     LaunchedEffect(enabled) {
         while (enabled) { time += 0.002f; delay(90) }
     }
@@ -458,7 +534,7 @@ private fun AmbientParticles(motion: String, resumed: Boolean, modifier: Modifie
 @Composable
 private fun EventsPage(store: AnytimeStore, calendar: AnytimeCalendar, events: List<AnytimeEvent>,
                        selected: LocalDate, notificationAllowed: Boolean, askPermission: () -> Unit,
-                       update: (() -> Unit) -> Unit) {
+                       update: (() -> Unit) -> Boolean) {
     val context = LocalContext.current
     var editing by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf<AnytimeEvent?>(null) }
@@ -476,6 +552,11 @@ private fun EventsPage(store: AnytimeStore, calendar: AnytimeCalendar, events: L
                 Text("${civil} · ${if (event.allDay) "all day" else event.instant.atZone(event.zone).toLocalTime()} · ${event.zone.id}",
                     color = Cyan, fontSize = 12.sp)
                 Text("${dayLabel(sacred)} · ${event.recurrence.name.replace('_', ' ')}", color = Muted, fontSize = 12.sp)
+                if (!sacred.counted() && event.recurrence in listOf(Recurrence.Rule.ANYTIME_MONTHLY,
+                        Recurrence.Rule.ANYTIME_YEARLY)) {
+                    Text("Recurrence needs review after your origin changed. Recreate it on a counted day.",
+                        color = Magenta, fontSize = 12.sp)
+                }
                 if (event.reminderMinutes > 0) Text("Reminder · ${event.reminderMinutes} minutes before (inexact)",
                     color = Muted, fontSize = 12.sp)
                 if (event.description.isNotBlank()) Text(event.description, color = Lunar)
@@ -488,7 +569,7 @@ private fun EventsPage(store: AnytimeStore, calendar: AnytimeCalendar, events: L
     removing?.let { target -> AlertDialog(onDismissRequest = { removing = null },
         title = { Text("Remove event?") }, text = { Text(target.title) },
         confirmButton = { TextButton(onClick = {
-            update { ReminderScheduler.cancel(context, target.id); store.removeEvent(target.id) }; removing = null
+            if (update { ReminderScheduler.cancel(context, target.id); store.removeEvent(target.id) }) removing = null
         }) { Text("Remove") } },
         dismissButton = { TextButton(onClick = { removing = null }) { Text("Keep") } }) }
 }
@@ -496,7 +577,7 @@ private fun EventsPage(store: AnytimeStore, calendar: AnytimeCalendar, events: L
 @Composable
 private fun EventDialog(store: AnytimeStore, selected: LocalDate, notificationAllowed: Boolean,
                         askPermission: () -> Unit, close: () -> Unit,
-                        update: (() -> Unit) -> Unit) {
+                        update: (() -> Unit) -> Boolean) {
     val context = LocalContext.current
     var title by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
@@ -539,11 +620,10 @@ private fun EventDialog(store: AnytimeStore, selected: LocalDate, notificationAl
                 val zone = ZoneId.systemDefault()
                 val day = LocalDate.parse(date)
                 val clock = if (allDay) LocalTime.NOON else LocalTime.parse(time)
-                update {
+                if (update {
                     store.addEvent(title, description, day.atTime(clock).atZone(zone), allDay, rule, reminder)
                     ReminderScheduler.reschedule(context, store)
-                }
-                close()
+                }) close()
             } catch (e: Exception) { problem = e.message ?: "Check the date and time" }
         }) { Text("Save event") } },
         dismissButton = { TextButton(onClick = close) { Text("Cancel") } })
@@ -551,7 +631,7 @@ private fun EventDialog(store: AnytimeStore, selected: LocalDate, notificationAl
 
 @Composable
 private fun JournalPage(store: AnytimeStore, calendar: AnytimeCalendar,
-                        entries: List<AnytimeEntry>, update: (() -> Unit) -> Unit) {
+                        entries: List<AnytimeEntry>, update: (() -> Unit) -> Boolean) {
     var writing by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf<AnytimeEntry?>(null) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp),
@@ -576,21 +656,21 @@ private fun JournalPage(store: AnytimeStore, calendar: AnytimeCalendar,
                 OutlinedTextField(text, { text = it }, label = { Text("Reflection") }, minLines = 5)
                 OutlinedTextField(tags, { tags = it }, label = { Text("Tags (optional)") })
             } }, confirmButton = { TextButton(onClick = {
-                update { store.addEntry(text, tags) }; writing = false
+                if (update { store.addEntry(text, tags) }) writing = false
             }, enabled = text.isNotBlank()) { Text("Keep this moment") } },
             dismissButton = { TextButton(onClick = { writing = false }) { Text("Cancel") } })
     }
     removing?.let { target -> AlertDialog(onDismissRequest = { removing = null },
         title = { Text("Remove reflection?") }, text = { Text("This cannot be undone.") },
         confirmButton = { TextButton(onClick = {
-            update { store.removeEntry(target.id) }; removing = null
+            if (update { store.removeEntry(target.id) }) removing = null
         }) { Text("Remove") } },
         dismissButton = { TextButton(onClick = { removing = null }) { Text("Keep") } }) }
 }
 
 @Composable
 private fun CyclesPage(store: AnytimeStore, cycles: List<AnytimeCycle>, day: LocalDate,
-                       update: (() -> Unit) -> Unit) {
+                       update: (() -> Unit) -> Boolean) {
     var editing by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf<AnytimeCycle?>(null) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp),
@@ -621,7 +701,7 @@ private fun CyclesPage(store: AnytimeStore, cycles: List<AnytimeCycle>, day: Loc
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
                 if (problem.isNotBlank()) Text(problem, color = Magenta)
             } }, confirmButton = { TextButton(onClick = {
-                try { update { store.addCycle(title, LocalDate.parse(origin), period.toInt()) }; editing = false }
+                try { if (update { store.addCycle(title, LocalDate.parse(origin), period.toInt()) }) editing = false }
                 catch (e: Exception) { problem = e.message ?: "Check cycle values" }
             }) { Text("Save cycle") } },
             dismissButton = { TextButton(onClick = { editing = false }) { Text("Cancel") } })
@@ -629,13 +709,15 @@ private fun CyclesPage(store: AnytimeStore, cycles: List<AnytimeCycle>, day: Loc
     removing?.let { target -> AlertDialog(onDismissRequest = { removing = null },
         title = { Text("Remove cycle?") }, text = { Text(target.title) },
         confirmButton = { TextButton(onClick = {
-            update { store.removeCycle(target.id) }; removing = null
+            if (update { store.removeCycle(target.id) }) removing = null
         }) { Text("Remove") } },
         dismissButton = { TextButton(onClick = { removing = null }) { Text("Keep") } }) }
 }
 
 @Composable
-private fun SettingsPage(store: AnytimeStore, update: (() -> Unit) -> Unit, export: () -> Unit) {
+private fun SettingsPage(store: AnytimeStore, update: (() -> Unit) -> Boolean,
+                         export: () -> Unit, importArchive: () -> Unit) {
+    val context = LocalContext.current
     var origin by remember { mutableStateOf(store.string("originZone", ZoneId.systemDefault().id)) }
     var birth by remember { mutableStateOf(store.birthMonthDay()?.let {
         "%02d-%02d".format(it.monthValue, it.dayOfMonth)
@@ -667,13 +749,15 @@ private fun SettingsPage(store: AnytimeStore, update: (() -> Unit) -> Unit, expo
                 supportingText = { Text("For example: Europe/Vienna") })
             Text("Year boundary", color = Muted)
             OptionRow(listOf("NORTHERN_SPRING_EQUINOX", "FIXED_DATE"),
-                store.string("boundary", "NORTHERN_SPRING_EQUINOX")) { update { store.set("boundary", it) } }
+                store.string("boundary", "NORTHERN_SPRING_EQUINOX")) {
+                update { store.set("boundary", it); ReminderScheduler.reschedule(context, store) }
+            }
             OutlinedTextField(fixed, { fixed = it }, label = { Text("Fixed boundary · MM-DD") })
             OutlinedTextField(birth, { birth = it }, label = { Text("Day Outside Time · MM-DD (optional)") },
                 supportingText = { Text("Your date is encrypted on this device; blank uses the last day of the year.") })
             Text("February 29 anniversary in ordinary years", color = Muted)
             OptionRow(listOf("FEBRUARY_28", "MARCH_1"), store.string("leapBirthday", "FEBRUARY_28")) {
-                update { store.set("leapBirthday", it) }
+                update { store.set("leapBirthday", it); ReminderScheduler.reschedule(context, store) }
             }
             Button(onClick = {
                 try {
@@ -685,6 +769,7 @@ private fun SettingsPage(store: AnytimeStore, update: (() -> Unit) -> Unit, expo
                         store.set("originZone", validZone.id)
                         store.set("fixedBoundary", validFixed.toString())
                         store.setBirthMonthDay(validBirthday)
+                        ReminderScheduler.reschedule(context, store)
                     }
                     issue = ""
                 } catch (e: Exception) { issue = e.message ?: "Check your date and time zone" }
@@ -720,6 +805,9 @@ private fun SettingsPage(store: AnytimeStore, update: (() -> Unit) -> Unit, expo
             Text("Export a readable JSON archive to a location you select. It contains plaintext events, reflections and any birth date you provided.",
                 color = Muted)
             Button(onClick = export) { Text("Export my data") }
+            Text("Import an Anytime JSON archive to merge events, reflections and cycles. " +
+                "Your current calendar settings and private profile stay as they are.", color = Muted)
+            Button(onClick = importArchive) { Text("Import archive") }
             Text("Local-only · No analytics · No AniCloud access", color = Cyan, fontSize = 12.sp)
         }
     }
@@ -746,7 +834,7 @@ private fun OptionRow(options: List<String>, current: String, change: (String) -
 }
 
 @Composable
-private fun Onboarding(store: AnytimeStore, update: (() -> Unit) -> Unit, finish: () -> Unit) {
+private fun Onboarding(store: AnytimeStore, update: (() -> Unit) -> Boolean, finish: () -> Unit) {
     var primary by remember { mutableStateOf(store.string("primary", "Anytime")) }
     var moon by remember { mutableStateOf(true) }
     var personal by remember { mutableStateOf(true) }
@@ -781,13 +869,12 @@ private fun Onboarding(store: AnytimeStore, update: (() -> Unit) -> Unit, finish
             try {
                 val zone = ZoneId.of(origin.trim())
                 val day = outside.trim().takeIf(String::isNotBlank)?.let { MonthDay.parse("--$it") }
-                update {
+                if (update {
                     store.set("originZone", zone.id); store.setBirthMonthDay(day)
                     store.set("primary", primary); store.set("moon", moon)
                     store.set("personal", personal); store.set("numerology", symbolic)
                     store.set("onboarded", true)
-                }
-                finish()
+                }) finish()
             } catch (e: Exception) {
                 issue = e.message ?: "Check the origin zone and date"
             }

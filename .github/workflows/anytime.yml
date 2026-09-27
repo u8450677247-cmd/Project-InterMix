@@ -40,7 +40,7 @@ jobs:
       - name: Public source audit
         run: python tools/public_release_audit.py .
       - name: Domain, Android unit tests and debug APK
-        run: gradle -p anytime :calendar-domain:test :app:testDebugUnitTest :app:assembleDebug :app:lintDebug --no-daemon --stacktrace
+        run: gradle -p anytime :calendar-domain:test :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug --no-daemon --stacktrace
       - name: Detect persistent dogfood signing key
         id: dogfood
         env:
