@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** Pure calendar conversion. The civil date is interpreted in the origin zone. */
 public final class AnytimeCalendar {
@@ -35,6 +36,7 @@ public final class AnytimeCalendar {
     }
 
     private final Rules rules;
+    private final ConcurrentHashMap<Integer, List<Day>> yearCache = new ConcurrentHashMap<>();
     public AnytimeCalendar(Rules rules) { this.rules = rules; }
     public Rules rules() { return rules; }
 
@@ -72,6 +74,10 @@ public final class AnytimeCalendar {
     }
 
     public List<Day> year(int year) {
+        return yearCache.computeIfAbsent(year, this::buildYear);
+    }
+
+    private List<Day> buildYear(int year) {
         LocalDate beginning = start(year);
         LocalDate end = start(year + 1);
         int span = Math.toIntExact(ChronoUnit.DAYS.between(beginning, end));
